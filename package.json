@@ -1,0 +1,24 @@
+{
+  "name": "stillblade",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Low-spec browser tactical FPS: invisible knife-wielding ghosts vs armed defenders.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "map:greybox": "\"C:/Program Files/Blender Foundation/Blender 5.3/blender.exe\" --background --python tools/blender/greybox.py"
+  },
+  "dependencies": {
+    "playcanvas": "^2.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^7.0.2",
+    "vite": "^6.4.6",
+    "vitest": "^3.2.7"
+  }
+}

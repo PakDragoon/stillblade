@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Stillblade</title>
+    <style>
+        html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d10; color: #e8eaed;
+            font: 13px/1.4 ui-monospace, Consolas, monospace; }
+        #game { display: block; width: 100%; height: 100%; outline: none; }
+        #hud { position: fixed; top: 8px; left: 10px; white-space: pre; pointer-events: none;
+            text-shadow: 0 1px 2px #000; }
+        #crosshair { position: fixed; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px;
+            background: #e8eaed; border-radius: 50%; pointer-events: none; mix-blend-mode: difference; }
+        #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+            justify-content: center; gap: 10px; background: rgba(11, 13, 16, .72); cursor: pointer;
+            text-align: center; }
+        #overlay h1 { margin: 0; font: 600 44px/1 system-ui, sans-serif; letter-spacing: .18em; }
+        #overlay p { margin: 0; opacity: .8; }
+        #overlay.hidden { display: none; }
+    </style>
+</head>
+<body>
+    <canvas id="game" tabindex="0"></canvas>
+    <div id="crosshair"></div>
+    <div id="hud"></div>
+    <div id="overlay">
+        <h1>STILLBLADE</h1>
+        <p id="status">Loading…</p>
+        <p>WASD move · Mouse look · Space jump · Shift quiet walk · C crouch · Esc release mouse</p>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
