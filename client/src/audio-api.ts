@@ -14,6 +14,19 @@ export interface ListenerView {
     alive: boolean;
 }
 
+/** A planted, ticking bomb. */
+export interface BombView {
+    pos: Vec3;
+    /** Seconds until it explodes. */
+    timeLeft: number;
+}
+
+/**
+ * roundStart: the freeze ended and the round is live. planted / defused / exploded: bomb events.
+ * win / lose: the local player's team won or lost the round.
+ */
+export type CueKind = 'roundStart' | 'planted' | 'defused' | 'exploded' | 'win' | 'lose';
+
 /**
  * All game sound. Positions are world space (Y up, metres). Position vectors passed in are only
  * valid during the call. Every method must be safe to call before `unlock()` (it just stays silent).
@@ -25,8 +38,11 @@ export interface AudioEngine {
      * Every rendered frame: moves the listener, and runs one looping breathing emitter for each
      * living ENEMY ghost in `remotes` (starting, moving and stopping them as ghosts come and go).
      * `remotes` is reused between frames: do not keep references to it.
+     * While `bomb` is set, the bomb beeps from its position, faster as `timeLeft` runs down.
      */
-    frame(dt: number, listener: ListenerView, remotes: readonly RemoteView[]): void;
+    frame(dt: number, listener: ListenerView, remotes: readonly RemoteView[], bomb: BombView | null): void;
+    /** A non-positional announcement for the local player. */
+    cue(kind: CueKind): void;
     /** A footstep. `loud` is 0..1 (1 running, about 0.3 walking, about 0.18 crouched). */
     step(pos: Vec3, loud: number, isLocal: boolean): void;
     /** A silenced gunshot at the shooter's position. */

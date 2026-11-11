@@ -18,6 +18,17 @@
         #overlay h1 { margin: 0; font: 600 44px/1 system-ui, sans-serif; letter-spacing: .18em; }
         #overlay p { margin: 0; opacity: .8; }
         #overlay.hidden { display: none; }
+        #menu { display: grid; grid-template-columns: auto 200px; gap: 8px 10px; align-items: center;
+            margin: 8px 0 14px; cursor: default; text-align: left; }
+        #menu[hidden] { display: none; }
+        #menu label { display: contents; }
+        #menu input { padding: 7px 9px; border: 1px solid #3a4250; border-radius: 4px; background: #12161c;
+            color: inherit; font: inherit; }
+        #menu input:focus { outline: 2px solid #7fb4ff; outline-offset: 1px; }
+        #menu button { grid-column: 1 / -1; padding: 9px; border: 0; border-radius: 4px; background: #e8eaed;
+            color: #0b0d10; font: 600 14px system-ui, sans-serif; letter-spacing: .08em; cursor: pointer; }
+        #menu button:hover { background: #fff; }
+        #menu small { grid-column: 1 / -1; max-width: 270px; opacity: .65; }
     </style>
 </head>
 <body>
@@ -27,7 +38,14 @@
     <div id="overlay">
         <h1>STILLBLADE</h1>
         <p id="status">Loading…</p>
-        <p>WASD move · Mouse look · Space jump · Shift quiet walk · C crouch · Esc release mouse</p>
+        <form id="menu" hidden autocomplete="off">
+            <label>Name <input id="name" maxlength="16" placeholder="Player" spellcheck="false"></label>
+            <label>Room <input id="room" maxlength="24" placeholder="public" spellcheck="false"></label>
+            <button type="submit">Play</button>
+            <small>Share a room code with friends to play together. Leave it empty for the public room.</small>
+        </form>
+        <p>WASD move · Mouse look · Left click attack · E plant / defuse · Tab scores</p>
+        <p>Space jump · Shift quiet walk · C crouch · Esc release mouse</p>
     </div>
     <script type="module" src="/src/main.ts"></script>
 </body>

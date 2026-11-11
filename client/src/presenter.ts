@@ -1,8 +1,9 @@
 import * as pc from 'playcanvas';
 import { HEAD_ZONE, HULL_HALF_WIDTH, HULL_HEIGHT, HULL_HEIGHT_CROUCHED } from '@shared/constants';
-import type { Team } from '@shared/protocol';
+import type { RosterEntry, Team } from '@shared/protocol';
+import { ROUNDS_TO_WIN, type Phase, type RoundReason } from '@shared/rules';
 import type { Vec3 } from '@shared/types';
-import type { CreatePresenter, KillKind, LocalView, RemoteView } from './presenter-api';
+import type { CreatePresenter, KillKind, LocalView, MatchView, RemoteView } from './presenter-api';
 
 const DEG = 180 / Math.PI;
 const HEAD_WIDTH = 0.4;
@@ -25,9 +26,47 @@ const ALLY_GHOST_VIS = 0.45;
 const SLASH_TIME = 0.12;
 const RECOVER_TIME = 0.2;
 
+/** Phase banners: visible time before the fade, and the fade itself (seconds). */
+const BANNER_TIME = 3;
+const GO_TIME = 1.5;
+const BANNER_FADE = 0.5;
+/** Bomb model: blink period (s) is BOMB_BLINK_MIN at zero, rising to BOMB_BLINK_MAX at >= BOMB_BLINK_FROM s left. */
+const BOMB_BLINK_MIN = 0.15;
+const BOMB_BLINK_MAX = 1.0;
+const BOMB_BLINK_FROM = 20;
+const BOMB_BLINK_DUTY = 0.35;
+
 const KILL_SUFFIX: Record<KillKind, string> = {
     shot: '', headshot: ' (HS)', knife: ' (knife)', backstab: ' (backstab)'
 };
+
+const TEAM_LABEL: Record<Team, string> = { ghosts: 'GHOSTS', defenders: 'DEFENDERS' };
+const TEAM_PLURAL: Record<Team, string> = { ghosts: 'Ghosts', defenders: 'Defenders' };
+const OBJECTIVE: Record<Team, string> = { ghosts: 'Plant the bomb', defenders: 'Defend the sites' };
+const PLANTED_SUB: Record<Team, string> = { ghosts: 'Protect the bomb', defenders: 'Find and defuse it' };
+const USE_VERB: Record<Team, string> = { ghosts: ' to plant', defenders: ' to defuse' };
+const ACT_LABEL: Record<Team, string> = { ghosts: 'PLANTING', defenders: 'DEFUSING' };
+
+function reasonText(reason: RoundReason | null, winner: Team): string {
+    switch (reason) {
+        case 'eliminated': return `${TEAM_PLURAL[winner === 'ghosts' ? 'defenders' : 'ghosts']} eliminated`;
+        case 'time': return 'Time ran out';
+        case 'exploded': return 'Bomb detonated';
+        case 'defused': return 'Bomb defused';
+        default: return '';
+    }
+}
+
+/** Bomb blink / beep period for `timeLeft` seconds on the clock. */
+function blinkPeriod(timeLeft: number): number {
+    const u = Math.min(1, Math.max(0, timeLeft / BOMB_BLINK_FROM));
+    return BOMB_BLINK_MIN + (BOMB_BLINK_MAX - BOMB_BLINK_MIN) * u * Math.sqrt(u);
+}
+
+function clock(secs: number): string {
+    const s = secs % 60;
+    return `${Math.floor(secs / 60)}:${s < 10 ? '0' : ''}${s}`;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Materials and primitive helpers
@@ -170,7 +209,7 @@ const HUD_CSS = `
 #sb-vis .fill { height: 100%; width: 0; background: #b9d4ff; }
 #sb-vis.hidden .state { color: #8fe3a8; }
 #sb-vis.exposed .state { color: #ff5a4a; } #sb-vis.exposed .fill { background: #ff5a4a; }
-#sb-disc { top: 12px; left: 50%; transform: translateX(-50%); padding: 6px 14px; display: none;
+#sb-disc { top: 100px; left: 50%; transform: translateX(-50%); padding: 6px 14px; display: none;
     background: rgba(160,20,20,.85); font: 700 15px/1.2 system-ui, sans-serif; letter-spacing: .15em; }
 #sb-hit { left: 50%; top: 50%; width: 0; height: 0; opacity: 0; transform: rotate(45deg); }
 #sb-hit i { position: absolute; width: 2px; height: 7px; margin-left: -1px; left: 0; background: #fff; }
@@ -182,8 +221,56 @@ const HUD_CSS = `
 #sb-feed { top: 10px; right: 12px; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
 #sb-feed div { padding: 2px 8px; background: rgba(0,0,0,.45); }
 #sb-feed div.me { background: rgba(255,255,255,.18); outline: 1px solid rgba(255,255,255,.5); }
-#sb-dead { left: 50%; top: 58%; transform: translateX(-50%); display: none;
+#sb-dead { left: 50%; top: 58%; transform: translateX(-50%); display: none; white-space: nowrap;
     font: 600 26px/1 system-ui, sans-serif; letter-spacing: .08em; }
+#sb-match { top: 8px; left: 50%; transform: translateX(-50%); text-align: center; white-space: nowrap;
+    font: 600 13px/1.2 system-ui, sans-serif; letter-spacing: .12em; }
+#sb-match .tag { display: none; color: #ff3b30; font-size: 10px; letter-spacing: .35em; }
+#sb-match.planted .tag { display: block; }
+#sb-match .timer { display: inline-block; font: 700 30px/1 system-ui, sans-serif; letter-spacing: .04em;
+    font-variant-numeric: tabular-nums; }
+#sb-match .timer.warm { font: 600 14px/1.8 system-ui, sans-serif; letter-spacing: .16em; opacity: .9; }
+#sb-match .timer.bomb { color: #ff3b30; }
+#sb-match .timer.pulse { animation: sb-pulse .5s ease-in-out infinite alternate; }
+@keyframes sb-pulse { from { opacity: 1; transform: scale(1); } to { opacity: .4; transform: scale(1.1); } }
+#sb-match .score { display: inline-block; margin-top: 4px; padding: 3px 10px; background: rgba(0,0,0,.4); }
+#sb-match .score span { opacity: .7; }
+#sb-match .score .ghosts { color: #9d8cff; } #sb-match .score .defenders { color: #ff9a3c; }
+#sb-match .score span.mine { opacity: 1; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; }
+#sb-match .round { margin-top: 3px; font-size: 11px; letter-spacing: .25em; opacity: .7; }
+#sb-banner { left: 50%; top: 22%; transform: translateX(-50%); text-align: center; display: none; white-space: nowrap; }
+#sb-banner div:empty { display: none; }
+#sb-banner .t { font: 800 56px/1 system-ui, sans-serif; letter-spacing: .1em; }
+#sb-banner .s { font: 600 20px/1.3 system-ui, sans-serif; letter-spacing: .08em; margin-top: 10px; opacity: .92; }
+#sb-banner .m { font: 800 18px/1 system-ui, sans-serif; letter-spacing: .35em; margin-top: 18px; color: #ffd36b; }
+#sb-banner .b { font: 800 40px/1 system-ui, sans-serif; letter-spacing: .06em; margin-top: 10px;
+    font-variant-numeric: tabular-nums; }
+#sb-banner.final .b { font-size: 64px; }
+#sb-banner.win .t { color: #5dff8f; } #sb-banner.lose .t { color: #ff4a3d; }
+#sb-banner.go .t { color: #8fe3a8; font-size: 72px; } #sb-banner.alert .t { color: #ff3b30; }
+#sb-use { left: 50%; top: 68%; transform: translateX(-50%); display: none; white-space: nowrap;
+    font: 600 17px/1 system-ui, sans-serif; letter-spacing: .05em; }
+#sb-use b { display: inline-block; padding: 3px 8px; margin: 0 5px; border: 1px solid rgba(255,255,255,.85);
+    border-radius: 3px; background: rgba(0,0,0,.4); font-weight: 800; }
+#sb-act { left: 50%; top: 68%; width: 240px; margin-left: -120px; display: none; text-align: center;
+    font: 800 12px/1 system-ui, sans-serif; letter-spacing: .3em; }
+#sb-act .bar { height: 7px; margin-top: 6px; background: rgba(255,255,255,.18); box-shadow: 0 0 3px #000; }
+#sb-act .fill { height: 100%; width: 0; background: #ffd36b; }
+#sb-scores { left: 50%; top: 50%; transform: translate(-50%, -50%); display: none; box-sizing: border-box; z-index: 2;
+    width: min(520px, calc(100vw - 32px)); padding: 14px 18px 16px; background: rgba(10,12,16,.84);
+    box-shadow: 0 6px 28px rgba(0,0,0,.6); font: 500 15px/1.2 system-ui, sans-serif; text-shadow: none; }
+#sb-scores .title { text-align: center; font: 700 11px/1 system-ui, sans-serif; letter-spacing: .3em; opacity: .65; }
+#sb-scores .hdr { display: flex; justify-content: space-between; margin-top: 12px; padding: 6px;
+    border-bottom: 2px solid currentColor; font: 800 16px/1 system-ui, sans-serif; letter-spacing: .15em; }
+#sb-scores .hdr.ghosts { color: #9d8cff; } #sb-scores .hdr.defenders { color: #ff9a3c; }
+#sb-scores .hdr.mine span:first-child::after { content: '  (YOU)'; white-space: pre; font-size: 10px; letter-spacing: .2em; opacity: .7; }
+#sb-scores .row { display: grid; grid-template-columns: 1fr 52px 52px; padding: 4px 6px; }
+#sb-scores .row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#sb-scores .row span + span { text-align: right; font-variant-numeric: tabular-nums; }
+#sb-scores .row.cols { opacity: .5; font-size: 10px; letter-spacing: .2em; padding-bottom: 2px; }
+#sb-scores .row.dead { opacity: .38; }
+#sb-scores .row.me { background: rgba(255,255,255,.14); outline: 1px solid rgba(255,255,255,.4); font-weight: 700; }
+#sb-scores .empty { padding: 4px 6px; opacity: .4; font-style: italic; }
 `;
 
 function div(id: string, parent: HTMLElement = document.body, cls = 'sb-ui'): HTMLDivElement {
@@ -194,7 +281,25 @@ function div(id: string, parent: HTMLElement = document.body, cls = 'sb-ui'): HT
     return d;
 }
 
-const playerName = (id: number): string => `Player ${id}`;
+function span(parent: HTMLElement, cls = '', text = ''): HTMLSpanElement {
+    const s = document.createElement('span');
+    if (cls) s.className = cls;
+    if (text) s.textContent = text;
+    parent.appendChild(s);
+    return s;
+}
+
+/** A text node that is only written when its value changes. */
+class Slot {
+    v: string | null = null;
+    el: HTMLElement;
+    constructor(el: HTMLElement) { this.el = el; }
+    set(s: string): void {
+        if (s === this.v) return;
+        this.v = s;
+        this.el.textContent = s;
+    }
+}
 
 // ---------------------------------------------------------------------------------------------
 // Pooled scene objects
@@ -473,6 +578,46 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         }
     };
 
+    // --- Bomb ------------------------------------------------------------------------------------
+    // Built once; origin on the floor. World layer, so both teams see it.
+    const bombCaseMat = makeMaterial(0.07, 0.075, 0.08, false);
+    const bombStrapMat = makeMaterial(0.32, 0.27, 0.12, false);
+    const bombLightOn = makeMaterial(1, 0.08, 0.04, true);
+    const bombLightOff = makeMaterial(0.22, 0.03, 0.02, true);
+    const bomb = new pc.Entity('bomb');
+    box(bomb, bombCaseMat, 0.35, 0.12, 0.22, 0, 0.06, 0);
+    box(bomb, bombStrapMat, 0.04, 0.125, 0.225, -0.1, 0.06, 0);
+    box(bomb, bombStrapMat, 0.04, 0.125, 0.225, 0.1, 0.06, 0);
+    box(bomb, bombCaseMat, 0.12, 0.02, 0.08, 0.02, 0.13, 0.03);              // keypad block
+    const bombLight = box(bomb, bombLightOff, 0.045, 0.03, 0.045, -0.04, 0.135, -0.05);
+    bomb.enabled = false;
+    app.root.addChild(bomb);
+    let bombLit = false;
+    let blinkPhase = 0;
+    let bombX = NaN, bombY = NaN, bombZ = NaN;
+
+    const updateBomb = (dt: number, match: MatchView): void => {
+        const p = match.bombPos;
+        if (!p) {
+            if (bomb.enabled) bomb.enabled = false;
+            return;
+        }
+        if (!bomb.enabled) { bomb.enabled = true; blinkPhase = 0; }
+        if (p[0] !== bombX || p[1] !== bombY || p[2] !== bombZ) {
+            bombX = p[0]; bombY = p[1]; bombZ = p[2];
+            bomb.setPosition(bombX, bombY, bombZ);
+        }
+        let lit = false;
+        if (match.phase === 'planted') {
+            blinkPhase = (blinkPhase + dt / blinkPeriod(match.timeLeft)) % 1;
+            lit = blinkPhase < BOMB_BLINK_DUTY;
+        }
+        if (lit !== bombLit) {
+            bombLit = lit;
+            bombLight.render!.material = lit ? bombLightOn : bombLightOff;
+        }
+    };
+
     // --- HUD -------------------------------------------------------------------------------------
     const style = document.createElement('style');
     style.textContent = HUD_CSS;
@@ -498,6 +643,65 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     const deadEl = div('sb-dead');
     const feed: FeedLine[] = [];
 
+    // Match bar (top centre).
+    const matchEl = div('sb-match');
+    div('', matchEl, 'tag').textContent = 'BOMB';
+    const timerEl = div('', matchEl, 'timer');
+    const timerSlot = new Slot(timerEl);
+    const scoreRow = div('', div('', matchEl, ''), 'score');
+    const scoreG = span(scoreRow, 'ghosts');
+    span(scoreRow, '', ' — ').style.opacity = '.6';
+    const scoreD = span(scoreRow, 'defenders');
+    const roundSlot = new Slot(div('', matchEl, 'round'));
+
+    // Phase banner (centre upper).
+    const bannerEl = div('sb-banner');
+    const bannerT = new Slot(div('', bannerEl, 't'));
+    const bannerS = new Slot(div('', bannerEl, 's'));
+    const bannerM = new Slot(div('', bannerEl, 'm'));
+    const bannerB = new Slot(div('', bannerEl, 'b'));
+
+    // Use prompt and plant/defuse progress (lower centre).
+    const useEl = div('sb-use');
+    useEl.appendChild(document.createTextNode('Hold'));
+    useEl.appendChild(document.createElement('b')).textContent = 'E';
+    const useVerb = new Slot(span(useEl));
+    const actEl = div('sb-act');
+    const actLabel = new Slot(div('', actEl, ''));
+    const actFill = div('', div('', actEl, 'bar'), 'fill');
+
+    // Scoreboard.
+    const scoresEl = div('sb-scores');
+
+    // Roster, copied (the caller may reuse its array).
+    const roster: RosterEntry[] = [];
+    const names = new Map<number, string>();
+    let rosterVersion = 0;
+    const playerName = (id: number): string => names.get(id) ?? `Player ${id}`;
+
+    let shownName = '';
+    let shownScoreG = -1;
+    let shownScoreD = -1;
+    let shownMine: Team | null = null;
+    let shownRound = -1;
+    let shownTimerKey = NaN;
+    let shownTimerMode = -1;
+    let shownPlanted: boolean | null = null;
+    let prevPhase: Phase | null = null;
+    /** Seconds left before the banner starts fading; Infinity while held for the whole phase. */
+    let bannerLeft = 0;
+    let bannerKey = NaN;
+    let shownBannerOpacity = '';
+    let shownBannerCls = '';
+    let shownUse = false;
+    let shownAct = false;
+    let shownActPct = -1;
+    let shownScores = false;
+    let scoresRosterV = -1, scoresLocalId = -1, scoresTeam: Team | null = null;
+    let scoresG = -1, scoresD = -1, scoresRound = -1;
+    let shownDeadKey = NaN;
+    let shownDeadEl = false;
+
     let vignetteLevel = 0;
     let hitT = 0;
     let hitDur = 0.12;
@@ -508,11 +712,10 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     let shownPing = -1;
     let shownConnected: boolean | null = null;
     let shownAlive: boolean | null = null;
-    let shownRespawn = -1;
     let shownVisPct = -1;
     let shownVisState = -1;
 
-    const updateHud = (dt: number, local: LocalView): void => {
+    const updateHud = (dt: number, local: LocalView, phase: Phase): void => {
         const hp = Math.max(0, Math.round(local.health));
         if (hp !== shownHealth) {
             shownHealth = hp;
@@ -525,9 +728,10 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             shownId = local.id;
             teamEl.className = local.team;
             teamEl.textContent = local.team.toUpperCase();
-            idEl.textContent = ` · ${playerName(local.id)} · `;
             visEl.style.display = local.team === 'ghosts' ? 'block' : 'none';
         }
+        const name = playerName(local.id);
+        if (name !== shownName) { shownName = name; idEl.textContent = ` · ${name} · `; }
         if (local.team === 'ghosts') {
             const vis = Math.min(1, Math.max(0, local.vis));
             // Square root so a running ghost (0.35) already fills ~60% of the bar.
@@ -545,15 +749,21 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             shownConnected = local.connected;
             discEl.style.display = local.connected ? 'none' : 'block';
         }
+        // The death message would sit under the scoreboard: hide it while that is open.
+        const deadShown = !local.alive && !local.showScores;
+        if (deadShown !== shownDeadEl) { shownDeadEl = deadShown; deadEl.style.display = deadShown ? 'block' : 'none'; }
         if (local.alive !== shownAlive) {
             shownAlive = local.alive;
-            deadEl.style.display = local.alive ? 'none' : 'block';
             if (crosshair) crosshair.style.visibility = local.alive ? '' : 'hidden';
-            shownRespawn = -1;
+            shownDeadKey = NaN;
         }
         if (!local.alive) {
-            const n = Math.max(0, Math.ceil(local.respawnIn));
-            if (n !== shownRespawn) { shownRespawn = n; deadEl.textContent = `Respawning in ${n}`; }
+            // Respawns only exist in warmup; in a round the dead wait for the next one.
+            const key = phase === 'warmup' ? Math.max(0, Math.ceil(local.respawnIn)) : -1;
+            if (key !== shownDeadKey) {
+                shownDeadKey = key;
+                deadEl.textContent = key < 0 ? 'You are dead — waiting for next round' : `Respawning in ${key}`;
+            }
         }
         if (vignetteLevel > 0) {
             vignetteLevel = Math.max(0, vignetteLevel - dt / 0.4);
@@ -575,8 +785,152 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         }
     };
 
+    const updateMatchBar = (local: LocalView, match: MatchView): void => {
+        const warm = match.phase === 'warmup';
+        const planted = match.phase === 'planted';
+        const mode = warm ? 0 : planted ? (match.timeLeft <= 10 ? 3 : 2) : 1;
+        if (mode !== shownTimerMode) {
+            shownTimerMode = mode;
+            timerEl.className = mode === 0 ? 'timer warm' : mode === 1 ? 'timer' : mode === 2 ? 'timer bomb' : 'timer bomb pulse';
+        }
+        const secs = warm ? -1 : Math.max(0, Math.ceil(match.timeLeft));
+        if (secs !== shownTimerKey) {
+            shownTimerKey = secs;
+            timerSlot.set(warm ? 'WARMUP — waiting for players' : clock(secs));
+        }
+        if (planted !== shownPlanted) { shownPlanted = planted; matchEl.classList.toggle('planted', planted); }
+        if (match.scoreGhosts !== shownScoreG) { shownScoreG = match.scoreGhosts; scoreG.textContent = `GHOSTS ${shownScoreG}`; }
+        if (match.scoreDefenders !== shownScoreD) {
+            shownScoreD = match.scoreDefenders;
+            scoreD.textContent = `${shownScoreD} DEFENDERS`;
+        }
+        if (local.team !== shownMine) {
+            shownMine = local.team;
+            scoreG.className = local.team === 'ghosts' ? 'ghosts mine' : 'ghosts';
+            scoreD.className = local.team === 'defenders' ? 'defenders mine' : 'defenders';
+        }
+        if (match.round !== shownRound) { shownRound = match.round; roundSlot.set(`ROUND ${shownRound}`); }
+    };
+
+    const showBanner = (cls: string, seconds: number): void => {
+        bannerLeft = seconds + BANNER_FADE;
+        bannerKey = NaN;
+        if (cls !== shownBannerCls) { shownBannerCls = cls; bannerEl.className = `sb-ui ${cls}`; }
+        bannerEl.style.display = 'block';
+        shownBannerOpacity = '';
+    };
+
+    const hideBanner = (): void => {
+        bannerLeft = 0;
+        bannerEl.style.display = 'none';
+    };
+
+    const updateBanner = (dt: number, local: LocalView, match: MatchView): void => {
+        const phase = match.phase;
+        if (phase !== prevPhase) {
+            const from = prevPhase;
+            prevPhase = phase;
+            if (phase === 'freeze') {
+                showBanner('', Infinity);                       // held for the whole freeze, with a countdown
+            } else if (phase === 'live' && from === 'freeze') {
+                showBanner('go', GO_TIME);
+                bannerT.set('GO'); bannerS.set(''); bannerM.set(''); bannerB.set('');
+            } else if (phase === 'planted') {
+                showBanner('alert', BANNER_TIME);
+                bannerT.set('BOMB PLANTED'); bannerS.set(PLANTED_SUB[local.team]); bannerM.set(''); bannerB.set('');
+            } else if (phase === 'over') {
+                showBanner('', BANNER_TIME);
+                bannerT.set('ROUND OVER'); bannerS.set(''); bannerM.set(''); bannerB.set('');
+            } else {
+                hideBanner();
+            }
+        }
+        if (bannerLeft <= 0) return;
+
+        if (phase === 'freeze') {
+            const n = Math.max(0, Math.ceil(match.timeLeft));
+            const key = match.round * 1000 + n * 2 + (local.team === 'ghosts' ? 1 : 0);
+            if (key !== bannerKey) {
+                bannerKey = key;
+                bannerT.set(`ROUND ${match.round}`);
+                bannerS.set(OBJECTIVE[local.team]);
+                bannerM.set('');
+                bannerB.set(n > 0 ? String(n) : '');
+            }
+        } else if (phase === 'over' && match.winner) {
+            const R = match.reason === 'eliminated' ? 1 : match.reason === 'time' ? 2
+                : match.reason === 'exploded' ? 3 : match.reason === 'defused' ? 4 : 0;
+            const key = (match.winner === 'ghosts' ? 1 : 0) + (local.team === 'ghosts' ? 2 : 0) +
+                (match.matchOver ? 4 : 0) + R * 8 + match.scoreGhosts * 64 + match.scoreDefenders * 4096;
+            if (key !== bannerKey) {
+                bannerKey = key;
+                const cls = (match.winner === local.team ? 'win' : 'lose') + (match.matchOver ? ' final' : '');
+                if (cls !== shownBannerCls) { shownBannerCls = cls; bannerEl.className = `sb-ui ${cls}`; }
+                bannerT.set(`${TEAM_LABEL[match.winner]} WIN`);
+                bannerS.set(reasonText(match.reason, match.winner));
+                bannerM.set(match.matchOver ? 'MATCH OVER' : '');
+                bannerB.set(match.matchOver ? `${match.scoreGhosts} — ${match.scoreDefenders}` : '');
+                // The match result stays up for the whole post-match pause.
+                if (match.matchOver) bannerLeft = Infinity;
+            }
+        }
+
+        if (bannerLeft !== Infinity) bannerLeft -= dt;
+        if (bannerLeft <= 0) { hideBanner(); return; }
+        const op = bannerLeft >= BANNER_FADE ? '1' : (bannerLeft / BANNER_FADE).toFixed(2);
+        if (op !== shownBannerOpacity) { shownBannerOpacity = op; bannerEl.style.opacity = op; }
+    };
+
+    const updateUse = (local: LocalView): void => {
+        const acting = local.alive && local.action > 0;
+        const prompt = local.alive && local.canAct && !acting;
+        if (prompt !== shownUse) { shownUse = prompt; useEl.style.display = prompt ? 'block' : 'none'; }
+        if (prompt) useVerb.set(USE_VERB[local.team]);
+        if (acting !== shownAct) { shownAct = acting; actEl.style.display = acting ? 'block' : 'none'; }
+        if (acting) {
+            actLabel.set(ACT_LABEL[local.team]);
+            const pct = Math.round(Math.min(1, local.action) * 100);
+            if (pct !== shownActPct) { shownActPct = pct; actFill.style.width = `${pct}%`; }
+        }
+    };
+
+    const renderScores = (local: LocalView, match: MatchView): void => {
+        scoresEl.replaceChildren();
+        div('', scoresEl, 'title').textContent = `ROUND ${match.round} · FIRST TO ${ROUNDS_TO_WIN}`;
+        const teams: Team[] = local.team === 'ghosts' ? ['ghosts', 'defenders'] : ['defenders', 'ghosts'];
+        for (const team of teams) {
+            const hdr = div('', scoresEl, team === local.team ? `hdr ${team} mine` : `hdr ${team}`);
+            span(hdr, '', TEAM_LABEL[team]);
+            span(hdr, '', String(team === 'ghosts' ? match.scoreGhosts : match.scoreDefenders));
+            const cols = div('', scoresEl, 'row cols');
+            span(cols, '', 'NAME'); span(cols, '', 'K'); span(cols, '', 'D');
+            const members = roster.filter(p => p.team === team)
+                .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths || a.id - b.id);
+            if (members.length === 0) div('', scoresEl, 'empty').textContent = 'No players';
+            for (const p of members) {
+                const row = div('', scoresEl, `row${p.alive ? '' : ' dead'}${p.id === local.id ? ' me' : ''}`);
+                span(row, '', p.name || `Player ${p.id}`);
+                span(row, '', String(p.kills));
+                span(row, '', String(p.deaths));
+            }
+        }
+    };
+
+    const updateScores = (local: LocalView, match: MatchView): void => {
+        if (local.showScores !== shownScores) {
+            shownScores = local.showScores;
+            scoresEl.style.display = shownScores ? 'block' : 'none';
+        }
+        if (!shownScores) return;
+        if (rosterVersion === scoresRosterV && local.id === scoresLocalId && local.team === scoresTeam &&
+            match.scoreGhosts === scoresG && match.scoreDefenders === scoresD && match.round === scoresRound) return;
+        scoresRosterV = rosterVersion; scoresLocalId = local.id; scoresTeam = local.team;
+        scoresG = match.scoreGhosts; scoresD = match.scoreDefenders; scoresRound = match.round;
+        renderScores(local, match);
+    };
+
     return {
-        frame(dt: number, local: LocalView, remotes: readonly RemoteView[]): void {
+        frame(dt: number, local: LocalView, remotes: readonly RemoteView[], match: MatchView): void {
             localAlive = local.alive;
             localId = local.id;
             localTeam = local.team;
@@ -585,7 +939,23 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             updateRemotes(dt, remotes);
             updateViewmodel(dt, local.team);
             updateEffects(dt);
-            updateHud(dt, local);
+            updateBomb(dt, match);
+            updateHud(dt, local, match.phase);
+            updateMatchBar(local, match);
+            updateBanner(dt, local, match);
+            updateUse(local);
+            updateScores(local, match);
+        },
+
+        roster(players: readonly RosterEntry[]): void {
+            roster.length = 0;
+            names.clear();
+            for (let i = 0; i < players.length; i++) {
+                const p = players[i];
+                roster.push({ id: p.id, name: p.name, team: p.team, kills: p.kills, deaths: p.deaths, alive: p.alive });
+                if (p.name) names.set(p.id, p.name);
+            }
+            rosterVersion++;
         },
 
         shot(from: Vec3, to: Vec3, isLocal: boolean): void {

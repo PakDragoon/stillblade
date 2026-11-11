@@ -7,9 +7,13 @@ import {
 } from '../../shared/constants';
 import { createPlayerState, horizontalSpeed, stepPlayer } from '../../shared/movement';
 import {
-    PROTOCOL_VERSION, SNAPSHOT_RATE, type NetCmd, type PlayerSnap, type ServerMsg, type ShotEvent,
-    type SlashEvent, type SoundEvent, type Team
+    PROTOCOL_VERSION, SNAPSHOT_RATE, type NetCmd, type PlayerSnap, type RosterEntry, type RoundMsg,
+    type ServerMsg, type ShotEvent, type SlashEvent, type SoundEvent, type Team
 } from '../../shared/protocol';
+import {
+    BOMB_MS, DEFUSE_TICKS, FREEZE_MS, HALFTIME_ROUND, MATCH_OVER_MS, OVER_MS, PLANT_TICKS, ROUNDS_TO_WIN, ROUND_MS,
+    canAct, movementLocked, type Phase, type RoundReason
+} from '../../shared/rules';
 import { rayBox, rayWorld, viewDir } from '../../shared/raycast';
 import type { MapData, PlayerState, Vec3 } from '../../shared/types';
 import { ghostVisTarget, stepVis } from '../../shared/visibility';
@@ -43,6 +47,10 @@ export class Player {
     vis: number;
     /** Ground distance covered since the last footstep. */
     stepAccum = 0;
+    /** Consecutive commands spent planting or defusing. */
+    actionTicks = 0;
+    kills = 0;
+    deaths = 0;
 
     // Ring buffer of where this player was on recent ticks, for lag compensation.
     private readonly histTime = new Float64Array(HISTORY).fill(-Infinity);
@@ -50,7 +58,13 @@ export class Player {
     private readonly histCrouched = new Uint8Array(HISTORY);
     private histHead = 0;
 
-    constructor(readonly id: number, readonly team: Team, readonly conn: Connection) {
+    /**
+     * `group` is the fixed side a player joined (0 or 1); `team` is the role that side is playing,
+     * which flips at halftime.
+     */
+    constructor(
+        readonly id: number, readonly group: 0 | 1, public team: Team, readonly name: string, readonly conn: Connection
+    ) {
         this.vis = team === 'ghosts' ? 0 : 1;
     }
 
@@ -107,6 +121,20 @@ export class Game {
     private nextId = 1;
     private readonly spawnCursor: Record<Team, number> = { ghosts: 0, defenders: 0 };
 
+    phase: Phase = 'warmup';
+    /** Server time the current phase ends; 0 in warmup. */
+    phaseEndsAt = 0;
+    /** Rounds won by each group (side), indexed by Player.group. */
+    readonly score: [number, number] = [0, 0];
+    /** Which group is currently playing ghosts. */
+    ghostGroup: 0 | 1 = 0;
+    roundsPlayed = 0;
+    bomb: Vec3 | null = null;
+    private winner: Team | undefined;
+    private reason: RoundReason | undefined;
+    private matchOver = false;
+    private readonly rounds: boolean;
+
     // Scratch vectors: no allocation on the hot path.
     private readonly eye: Vec3 = [0, 0, 0];
     private readonly dir: Vec3 = [0, 0, 0];
@@ -115,21 +143,60 @@ export class Game {
     private readonly hmax: Vec3 = [0, 0, 0];
     private readonly target: Vec3 = [0, 0, 0];
 
-    constructor(readonly map: MapData) {}
+    /** `rounds: false` keeps the match in warmup (free roam with respawns), for tests of the core mechanics. */
+    constructor(readonly map: MapData, opts: { rounds?: boolean } = {}) {
+        this.rounds = opts.rounds ?? true;
+    }
 
-    join(conn: Connection): number {
+    private teamOf(group: 0 | 1): Team {
+        return group === this.ghostGroup ? 'ghosts' : 'defenders';
+    }
+
+    private broadcast(msg: ServerMsg): void {
+        for (const p of this.players.values()) p.conn.send(msg);
+    }
+
+    private roundMsg(): RoundMsg {
+        const msg: RoundMsg = {
+            type: 'round', phase: this.phase, endsAt: this.phaseEndsAt, round: this.roundsPlayed + (this.phase === 'over' ? 0 : 1),
+            score: { ghosts: this.score[this.ghostGroup], defenders: this.score[1 - this.ghostGroup] },
+            bomb: this.bomb
+        };
+        if (this.phase === 'over') {
+            msg.winner = this.winner;
+            msg.reason = this.reason;
+            if (this.matchOver) msg.matchOver = true;
+        }
+        return msg;
+    }
+
+    private sendRoster(): void {
+        const players: RosterEntry[] = [];
+        for (const p of this.players.values()) {
+            players.push({ id: p.id, name: p.name, team: p.team, kills: p.kills, deaths: p.deaths, alive: p.alive });
+        }
+        this.broadcast({ type: 'roster', players });
+    }
+
+    join(conn: Connection, name = ''): number {
         let ghosts = 0;
         for (const p of this.players.values()) if (p.team === 'ghosts') ghosts++;
         const team: Team = ghosts <= this.players.size - ghosts ? 'ghosts' : 'defenders';
-        const player = new Player(this.nextId++, team, conn);
-        this.players.set(player.id, player);
-        conn.send({ type: 'welcome', version: PROTOCOL_VERSION, id: player.id, team, map: this.map.name, time: this.now });
-        this.spawn(player);
-        return player.id;
+        const group = team === 'ghosts' ? this.ghostGroup : ((1 - this.ghostGroup) as 0 | 1);
+        const id = this.nextId++;
+        const clean = name.replace(/[^\p{L}\p{N} _.-]/gu, '').trim().slice(0, 16);
+        const player = new Player(id, group, team, clean || `Player ${id}`, conn);
+        this.players.set(id, player);
+        conn.send({ type: 'welcome', version: PROTOCOL_VERSION, id, team, map: this.map.name, time: this.now });
+        conn.send(this.roundMsg());
+        // Mid-round arrivals wait for the next round rather than appearing behind someone.
+        if (this.phase === 'warmup') this.spawn(player);
+        this.sendRoster();
+        return id;
     }
 
     leave(id: number): void {
-        this.players.delete(id);
+        if (this.players.delete(id)) this.sendRoster();
     }
 
     private spawn(p: Player): void {
@@ -142,6 +209,8 @@ export class Game {
         p.alive = true;
         p.slashAtSeq = -1;
         p.stepAccum = 0;
+        p.actionTicks = 0;
+        p.respawnAt = 0;
         p.vis = p.team === 'ghosts' ? 0 : 1;
         p.conn.send({ type: 'spawn', pos: spawn.pos, yaw: p.yaw });
     }
@@ -165,6 +234,15 @@ export class Game {
         cmd.jump = cmd.jump === true;
         cmd.walk = cmd.walk === true;
         cmd.crouch = cmd.crouch === true;
+        cmd.use = cmd.use === true;
+
+        // Rooted during the freeze and while planting or defusing. The client applies the same rule.
+        const acting = cmd.use && canAct(p.team, this.phase, p.state, this.map, this.bomb);
+        if (movementLocked(cmd.use, p.team, this.phase, p.state, this.map, this.bomb)) {
+            cmd.forward = 0;
+            cmd.right = 0;
+            cmd.jump = false;
+        }
 
         const px = p.state.pos[0], pz = p.state.pos[2];
         stepPlayer(p.state, cmd, TICK_DT, this.map.boxes);
@@ -179,6 +257,20 @@ export class Game {
                 this.emitSound(p, 'step', loud, STEP_RANGE * loud);
             }
         }
+
+        if (acting) {
+            p.actionTicks++;
+            if (p.team === 'ghosts') {
+                p.vis = Math.max(p.vis, VIS_SWING_SPIKE); // planting gives a ghost away
+                if (p.actionTicks >= PLANT_TICKS) this.plant(p);
+            } else if (p.actionTicks >= DEFUSE_TICKS) {
+                p.actionTicks = 0;
+                this.endRound('defenders', 'defused');
+            }
+            return; // hands are busy: no attacking
+        }
+        p.actionTicks = 0;
+        if (this.phase === 'freeze') return;
 
         if (p.team === 'defenders') {
             if (cmd.fire === true && cmd.seq >= p.nextFireSeq) {
@@ -210,13 +302,18 @@ export class Game {
         }
     }
 
-    private damage(victim: Player, amount: number): boolean {
+    private damage(victim: Player, amount: number, attacker: Player): boolean {
         victim.health = Math.max(0, victim.health - amount);
         if (victim.team === 'ghosts') victim.vis = Math.max(victim.vis, VIS_HURT_SPIKE);
         if (victim.health > 0) return false;
         victim.alive = false;
-        victim.respawnAt = this.now + RESPAWN_MS;
+        // Only warmup has respawns; in a round the dead wait for the next one.
+        victim.respawnAt = this.phase === 'warmup' ? this.now + RESPAWN_MS : 0;
         victim.slashAtSeq = -1;
+        victim.actionTicks = 0;
+        victim.deaths++;
+        attacker.kills++;
+        this.sendRoster();
         return true;
     }
 
@@ -265,9 +362,9 @@ export class Game {
             event.victim = victim.id;
             event.head = head;
             event.damage = amount;
-            if (this.damage(victim, amount)) event.killed = true;
+            if (this.damage(victim, amount, shooter)) event.killed = true;
         }
-        for (const p of this.players.values()) p.conn.send(event);
+        this.broadcast(event);
     }
 
     /** Resolves a knife swing: the nearest enemy inside the reach and cone, not behind a wall. */
@@ -302,7 +399,7 @@ export class Game {
             event.victim = victim.id;
             event.damage = amount;
             event.backstab = backstab;
-            if (this.damage(victim, amount)) event.killed = true;
+            if (this.damage(victim, amount, attacker)) event.killed = true;
         }
         for (const p of this.players.values()) {
             if (p === attacker || p === victim || dist(p.state.pos, attacker.state.pos) <= KNIFE_SOUND_RANGE) p.conn.send(event);
@@ -321,7 +418,96 @@ export class Game {
             }
             p.record(now);
         }
+        if (this.rounds) this.updateRound();
         if (this.tickCount % SNAPSHOT_EVERY === 0) this.sendSnapshots();
+    }
+
+    private setPhase(phase: Phase, duration: number): void {
+        this.phase = phase;
+        this.phaseEndsAt = duration > 0 ? this.now + duration : 0;
+        this.broadcast(this.roundMsg());
+    }
+
+    private startRound(): void {
+        this.bomb = null;
+        this.winner = this.reason = undefined;
+        this.spawnCursor.ghosts = this.spawnCursor.defenders = 0;
+        for (const p of this.players.values()) this.spawn(p);
+        this.setPhase('freeze', FREEZE_MS);
+        this.sendRoster();
+    }
+
+    private toWarmup(): void {
+        this.bomb = null;
+        for (const p of this.players.values()) if (!p.alive) this.spawn(p);
+        this.setPhase('warmup', 0);
+        this.sendRoster();
+    }
+
+    private plant(p: Player): void {
+        p.actionTicks = 0;
+        this.bomb = [...p.state.pos] as Vec3;
+        this.setPhase('planted', BOMB_MS);
+    }
+
+    private endRound(winner: Team, reason: RoundReason): void {
+        this.winner = winner;
+        this.reason = reason;
+        this.roundsPlayed++;
+        const group = winner === 'ghosts' ? this.ghostGroup : 1 - this.ghostGroup;
+        this.matchOver = ++this.score[group] >= ROUNDS_TO_WIN;
+        this.setPhase('over', this.matchOver ? MATCH_OVER_MS : OVER_MS);
+    }
+
+    /** Flips which side plays ghosts and tells every player its new role. */
+    private setGhostGroup(group: 0 | 1): void {
+        this.ghostGroup = group;
+        for (const p of this.players.values()) p.team = this.teamOf(p.group);
+    }
+
+    /** The round state machine: decides when rounds start, who has won, and when sides swap. */
+    private updateRound(): void {
+        let ghosts = 0, defenders = 0, ghostsAlive = 0, defendersAlive = 0;
+        for (const p of this.players.values()) {
+            if (p.team === 'ghosts') { ghosts++; if (p.alive) ghostsAlive++; }
+            else { defenders++; if (p.alive) defendersAlive++; }
+        }
+        const playable = ghosts > 0 && defenders > 0;
+        const expired = this.now >= this.phaseEndsAt;
+        switch (this.phase) {
+            case 'warmup':
+                if (playable) this.startRound();
+                break;
+            case 'freeze':
+                if (!playable) this.toWarmup();
+                else if (expired) this.setPhase('live', ROUND_MS);
+                break;
+            case 'live':
+                if (!playable) this.toWarmup();
+                else if (defendersAlive === 0) this.endRound('ghosts', 'eliminated');
+                else if (ghostsAlive === 0) this.endRound('defenders', 'eliminated');
+                else if (expired) this.endRound('defenders', 'time');
+                break;
+            case 'planted':
+                // Killing the ghosts no longer wins it: the bomb still has to be defused.
+                if (defendersAlive === 0) this.endRound('ghosts', 'eliminated');
+                else if (expired) this.endRound('ghosts', 'exploded');
+                break;
+            case 'over':
+                if (!expired) break;
+                if (this.matchOver) {
+                    this.matchOver = false;
+                    this.score[0] = this.score[1] = 0;
+                    this.roundsPlayed = 0;
+                    for (const p of this.players.values()) p.kills = p.deaths = 0;
+                    this.setGhostGroup(0);
+                } else if (this.roundsPlayed === HALFTIME_ROUND) {
+                    this.setGhostGroup((1 - this.ghostGroup) as 0 | 1);
+                }
+                if (playable) this.startRound();
+                else this.toWarmup();
+                break;
+        }
     }
 
     /** True if nothing solid lies between two points. */
@@ -362,6 +548,8 @@ export class Game {
             p.conn.send({
                 type: 'snap', time: this.now, ack: p.lastSeq,
                 me: {
+                    team: p.team,
+                    action: p.actionTicks / (p.team === 'ghosts' ? PLANT_TICKS : DEFUSE_TICKS),
                     pos: p.state.pos, vel: p.state.vel, onGround: p.state.onGround, crouched: p.state.crouched,
                     health: p.health, alive: p.alive, respawnAt: p.respawnAt, vis: p.vis
                 },

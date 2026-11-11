@@ -16,7 +16,7 @@
 import { BREATH_RANGE, EYE_HEIGHT, GHOST_MAX_VIS, KNIFE_SOUND_RANGE, STEP_RANGE } from '@shared/constants';
 import { rayWorld } from '@shared/raycast';
 import type { Box, Vec3 } from '@shared/types';
-import type { AudioEngine, CreateAudio, ListenerView } from './audio-api';
+import type { AudioEngine, BombView, CreateAudio, CueKind, ListenerView } from './audio-api';
 import type { RemoteView } from './presenter-api';
 
 // ---------------------------------------------------------------------------------------------
@@ -45,6 +45,17 @@ const HEAD_STAND = 1.5;
 const HEAD_CROUCH = 0.95;
 /** Small lead so scheduled envelopes never start in the past. */
 const LEAD = 0.005;
+/** Bomb beep: audible range, height of the emitter above the bomb's floor position, level. */
+const BOMB_RANGE = 35;
+const BOMB_LIFT = 0.15;
+const BEEP_GAIN = 0.7;
+/** Beep interval: BEEP_MAX seconds with >= BEEP_SLOW_FROM s left, shrinking to BEEP_MIN at zero. */
+const BEEP_MAX = 1.0;
+const BEEP_MIN = 0.15;
+const BEEP_SLOW_FROM = 20;
+/** Voice-stealing weight: the bomb and announcements outrank ordinary sounds of the same loudness. */
+const BEEP_PRIORITY = 2;
+const CUE_PRIORITY = 4;
 
 interface ShotCfg {
     /** Distance at which the sound reaches silence (Panner maxDistance, linear model). */
@@ -339,6 +350,145 @@ const synthHurt: Synth = (v, t) => {
     env(body.gain, t, 0.003, 0.7, 0.15);
 };
 
+/** A single enveloped oscillator layer; returns the oscillator for pitch automation. */
+function tone(v: Voice, type: OscillatorType, freq: number, t: number, attack: number, peak: number,
+    decay: number, dest: AudioNode = v.input): OscillatorNode {
+    const g = v.gain(dest);
+    const o = v.osc(type, freq, t, attack + decay + 0.02, g);
+    env(g.gain, t, attack, peak, decay);
+    return o;
+}
+
+/**
+ * Bomb beep: a clean ~60 ms blip, 1.1 kHz plus a quieter octave, with linear edges (no clicks).
+ * Pure tones sit apart from every other sound in the game, and the octave gives HRTF some highs.
+ */
+const synthBeep: Synth = (v, t) => {
+    const D = 0.06;
+    const partials = [1100, 2200];
+    const levels = [0.55, 0.18];
+    for (let i = 0; i < 2; i++) {
+        const g = v.gain(v.input);
+        v.osc('sine', partials[i], t, D + 0.01, g);
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(levels[i], t + 0.004);
+        g.gain.setValueAtTime(levels[i], t + D - 0.015);
+        g.gain.linearRampToValueAtTime(0, t + D);
+    }
+};
+
+// Cues: non-positional announcements. Peaks are kept modest so the compressor only glues them.
+
+/** Round start: a short rising two-note chime (E5 -> B5), triangle plus a soft octave shimmer. */
+const synthRoundStart: Synth = (v, t) => {
+    const notes = [659, 988];
+    for (let i = 0; i < 2; i++) {
+        const tn = t + i * 0.13;
+        tone(v, 'triangle', notes[i], tn, 0.005, 0.5, i === 1 ? 0.55 : 0.3);
+        tone(v, 'sine', notes[i] * 2, tn, 0.005, 0.12, i === 1 ? 0.4 : 0.2);
+    }
+};
+
+/** Bomb planted: an alarming low-high warble (siren steps), square tamed by a low-pass. */
+const synthPlanted: Synth = (v, t) => {
+    const STEP = 0.085, N = 8;
+    const D = STEP * N;
+    const g = v.gain(v.input);
+    const lp = v.filter('lowpass', 2400, 0.9, g);
+    const o = v.osc('square', 440, t, D + 0.05, lp);
+    const o2 = v.osc('sawtooth', 441, t, D + 0.05, lp);
+    for (let i = 0; i < N; i++) {
+        const f = i % 2 === 0 ? 440 : 740;
+        o.frequency.setValueAtTime(f, t + i * STEP);
+        o2.frequency.setValueAtTime(f * 1.004, t + i * STEP);
+    }
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.16, t + 0.01);
+    g.gain.setValueAtTime(0.16, t + D - 0.06);
+    g.gain.linearRampToValueAtTime(0, t + D);
+};
+
+/** Bomb defused: the click of a cut wire, then a relieved, gently descending tone. */
+const synthDefused: Synth = (v, t) => {
+    const click = v.gain(v.input);
+    v.noise(v.bank.white, t, 0.03, v.filter('bandpass', 3200, 3, click));
+    env(click.gain, t, 0.0005, 0.9, 0.018);
+    const tc = t + 0.006;
+    const knock = v.gain(v.input);
+    v.osc('sine', 1800, tc, 0.03, knock);
+    env(knock.gain, tc, 0.0005, 0.2, 0.02);
+
+    const td = t + 0.09;
+    const o = tone(v, 'sine', 880, td, 0.03, 0.42, 0.75);
+    o.frequency.setValueAtTime(880, td);
+    o.frequency.exponentialRampToValueAtTime(523, td + 0.6);
+    const o2 = tone(v, 'triangle', 440, td, 0.03, 0.2, 0.7);
+    o2.frequency.setValueAtTime(440, td);
+    o2.frequency.exponentialRampToValueAtTime(262, td + 0.6);
+};
+
+/** Bomb exploded: a white-noise blast with a falling low-pass, a low sine boom and a brown rumble tail (~1.2 s). */
+const synthExploded: Synth = (v, t) => {
+    const blast = v.gain(v.input);
+    const lp = v.filter('lowpass', 7000, 0.7, blast);
+    lp.frequency.setValueAtTime(7000, t);
+    lp.frequency.exponentialRampToValueAtTime(350, t + 1.1);
+    v.noise(v.bank.white, t, 1.75, lp);
+    env(blast.gain, t, 0.004, 0.5, 1.7);
+
+    const boom = v.gain(v.input);
+    const o = v.osc('sine', 70, t, 1.2, boom);
+    o.frequency.setValueAtTime(70, t);
+    o.frequency.exponentialRampToValueAtTime(28, t + 0.9);
+    env(boom.gain, t, 0.006, 0.9, 1.15);
+
+    const rumble = v.gain(v.input);
+    v.noise(v.bank.brown, t, 1.9, v.filter('lowpass', 220, 0.8, rumble));
+    env(rumble.gain, t, 0.02, 0.9, 1.85);
+};
+
+/** Round won: a bright three-note rise (C5 E5 G5), the last held. */
+const synthWin: Synth = (v, t) => {
+    const notes = [523, 659, 784];
+    for (let i = 0; i < 3; i++) {
+        const tn = t + i * 0.12;
+        const last = i === 2;
+        tone(v, 'triangle', notes[i], tn, 0.005, 0.42, last ? 0.7 : 0.22);
+        tone(v, 'sine', notes[i] * 2, tn, 0.005, 0.13, last ? 0.5 : 0.15);
+    }
+};
+
+/** Round lost: a low falling two-note (A3 -> E3), the second sagging further. */
+const synthLose: Synth = (v, t) => {
+    const g = v.gain(v.input);
+    g.gain.value = 1;
+    const lp = v.filter('lowpass', 1400, 0.7, g);
+    tone(v, 'triangle', 220, t, 0.01, 0.5, 0.35, lp);
+    tone(v, 'sawtooth', 110, t, 0.01, 0.1, 0.3, lp);
+    const t2 = t + 0.28;
+    const o = tone(v, 'triangle', 165, t2, 0.01, 0.55, 0.85, lp);
+    o.frequency.setValueAtTime(165, t2);
+    o.frequency.linearRampToValueAtTime(150, t2 + 0.8);
+    const o2 = tone(v, 'sawtooth', 82.5, t2, 0.01, 0.12, 0.7, lp);
+    o2.frequency.setValueAtTime(82.5, t2);
+    o2.frequency.linearRampToValueAtTime(75, t2 + 0.8);
+};
+
+const CUES: Record<CueKind, { synth: Synth; gain: number }> = {
+    roundStart: { synth: synthRoundStart, gain: 0.8 },
+    planted: { synth: synthPlanted, gain: 0.9 },
+    defused: { synth: synthDefused, gain: 0.85 },
+    exploded: { synth: synthExploded, gain: 0.85 },
+    win: { synth: synthWin, gain: 0.8 },
+    lose: { synth: synthLose, gain: 0.8 },
+};
+
+/** Seconds between bomb beeps: ~1 s above 20 s left, shrinking smoothly to ~0.15 s at zero. */
+function beepInterval(timeLeft: number): number {
+    const u = Math.min(1, Math.max(0, timeLeft / BEEP_SLOW_FROM));
+    return BEEP_MIN + (BEEP_MAX - BEEP_MIN) * u * Math.sqrt(u);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------------------------
@@ -416,6 +566,9 @@ const STEP_CFG: ShotCfg = { range: STEP_RANGE, ref: 1, hrtf: true, occLift: 0.4 
 const GUN_CFG: ShotCfg = { range: GUN_RANGE, ref: 2, hrtf: false, occLift: 0 };
 const IMPACT_CFG: ShotCfg = { range: IMPACT_RANGE, ref: 1, hrtf: false, occLift: 0 };
 const KNIFE_CFG: ShotCfg = { range: KNIFE_SOUND_RANGE, ref: 1, hrtf: true, occLift: 0 };
+const BOMB_CFG: ShotCfg = { range: BOMB_RANGE, ref: 2, hrtf: true, occLift: 0 };
+/** Unused by non-positional one-shots except as a placeholder. */
+const CUE_CFG: ShotCfg = { range: 1, ref: 1, hrtf: false, occLift: 0 };
 /** Scratch config for footsteps, whose range depends on loudness. */
 const stepCfg: ShotCfg = { ...STEP_CFG };
 
@@ -434,6 +587,10 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
     let haveListener = false;
     let frameNo = 0;
     const rayDir: Vec3 = [0, 0, 0];
+    // Bomb beeper: seconds since the last beep, and whether a bomb was ticking last frame.
+    let beepAcc = 0;
+    let beeping = false;
+    const beepPos: Vec3 = [0, 0, 0];
 
     // ---- occlusion --------------------------------------------------------------------------
 
@@ -463,7 +620,8 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
         return v.priority * left;
     }
 
-    function oneShot(pos: Vec3 | null, cfg: ShotCfg, gain: number, synth: Synth, x: number, flag: boolean): void {
+    function oneShot(pos: Vec3 | null, cfg: ShotCfg, gain: number, synth: Synth, x: number, flag: boolean,
+        weight = 1): void {
         if (!ctx || !master || !bank) return;
         const now = ctx.currentTime;
 
@@ -475,7 +633,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
             if (att <= 0) return; // beyond audible range: do not even build it
             occ = occluded(pos[0], pos[1] + cfg.occLift, pos[2]);
         }
-        const priority = gain * att * (occ ? OCC_GAIN : 1);
+        const priority = gain * att * (occ ? OCC_GAIN : 1) * weight;
 
         if (voices.length >= MAX_VOICES) {
             let worst: Voice | null = null, worstP = Infinity;
@@ -680,11 +838,27 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
             }
         },
 
-        frame(dt: number, listener: ListenerView, remotes: readonly RemoteView[]): void {
+        frame(dt: number, listener: ListenerView, remotes: readonly RemoteView[], bomb: BombView | null): void {
             if (!ctx || !master || !bank) return;
             const now = ctx.currentTime;
             frameNo++;
             setListener(ctx, listener);
+
+            // Bomb beeper: first beep at once, then on an accumulator whose period shrinks with the clock.
+            if (bomb) {
+                const iv = beepInterval(bomb.timeLeft);
+                if (!beeping) { beeping = true; beepAcc = iv; } else beepAcc += dt;
+                if (beepAcc >= iv) {
+                    // Keep the remainder (steady rhythm) but never let a stall cause a burst of beeps.
+                    beepAcc = Math.min(beepAcc - iv, iv);
+                    beepPos[0] = bomb.pos[0];
+                    beepPos[1] = bomb.pos[1] + BOMB_LIFT;
+                    beepPos[2] = bomb.pos[2];
+                    oneShot(beepPos, BOMB_CFG, BEEP_GAIN, synthBeep, 0, false, BEEP_PRIORITY);
+                }
+            } else {
+                beeping = false;
+            }
 
             // Mark (and create) emitters for every living enemy ghost.
             if (listener.alive) {
@@ -773,6 +947,11 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
 
         hurt(): void {
             oneShot(null, STEP_CFG, 0.9, synthHurt, 0, false);
+        },
+
+        cue(kind: CueKind): void {
+            const c = CUES[kind];
+            if (c) oneShot(null, CUE_CFG, c.gain, c.synth, 0, false, CUE_PRIORITY);
         },
     };
 };

@@ -22,6 +22,8 @@ export interface MapData {
     boxes: Box[];
     spawns: { ghosts: Spawn[]; defenders: Spawn[] };
     bombSites: { name: string; min: Vec3; max: Vec3 }[];
+    /** File name (next to the map) of the baked lighting atlas, if the map has one. */
+    baked?: string;
 }
 
 /** One tick of player intent. This is what the client will send to the server. */

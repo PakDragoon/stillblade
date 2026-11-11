@@ -18,7 +18,9 @@ export class Input {
 
     constructor(private readonly canvas: HTMLCanvasElement) {
         window.addEventListener('keydown', e => {
+            if (e.target instanceof HTMLInputElement) return; // typing in the menu
             if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) this.jumpQueued = true; }
+            if (e.code === 'Tab') e.preventDefault(); // scoreboard, not focus change
             this.keys.add(e.code);
         });
         window.addEventListener('keyup', e => this.keys.delete(e.code));
@@ -39,6 +41,16 @@ export class Input {
     lock(): void {
         // Rejects if the user presses Esc mid-request; nothing to do about it.
         Promise.resolve(this.canvas.requestPointerLock()).catch(() => {});
+    }
+
+    /** E: plant or defuse. */
+    get use(): boolean {
+        return this.keys.has('KeyE');
+    }
+
+    /** Tab: scoreboard. */
+    get scores(): boolean {
+        return this.keys.has('Tab');
     }
 
     private axis(neg: string, pos: string): number {

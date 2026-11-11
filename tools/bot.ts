@@ -4,7 +4,7 @@ import WebSocket from 'ws';
 import { TICK_RATE } from '../shared/constants';
 import { DEFAULT_PORT, decodeServer, encodeClient, type NetCmd } from '../shared/protocol';
 
-const url = process.env.SB_SERVER_URL ?? `ws://localhost:${DEFAULT_PORT}`;
+const url = process.env.SB_SERVER_URL ?? `ws://localhost:${DEFAULT_PORT}/?name=Bot`;
 const shoot = process.argv.includes('--shoot');
 const WALK_IN_TICKS = 4 * TICK_RATE;
 const STRAFE_TICKS = 1.5 * TICK_RATE;
@@ -34,7 +34,7 @@ setInterval(() => {
         forward: strafing ? 0 : 1,
         right: strafing ? (Math.floor((t - WALK_IN_TICKS) / STRAFE_TICKS) % 2 === 0 ? 1 : -1) : 0,
         yaw, pitch: 0, jump: false, walk: false, crouch: false,
-        fire: shoot, viewTime: serverTime
+        fire: shoot, use: false, viewTime: serverTime
     };
     ws.send(encodeClient({ type: 'cmd', cmd }));
 }, 1000 / TICK_RATE);

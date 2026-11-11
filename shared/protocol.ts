@@ -1,6 +1,7 @@
+import type { Phase, RoundReason } from './rules';
 import type { InputCmd, Vec3 } from './types';
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 export const DEFAULT_PORT = 8080;
 /** Snapshots per second sent to each client. */
 export const SNAPSHOT_RATE = 30;
@@ -14,6 +15,8 @@ export interface NetCmd extends InputCmd {
     /** View pitch in radians, positive looks up. */
     pitch: number;
     fire: boolean;
+    /** Use key held: plant (ghosts) or defuse (defenders). */
+    use: boolean;
     /** Server time (ms) at which this client was drawing other players: the lag-compensation target. */
     viewTime: number;
 }
@@ -31,6 +34,10 @@ export interface PlayerSnap {
 }
 
 export interface SelfSnap {
+    /** Sides swap at halftime, so the team can change during a match. */
+    team: Team;
+    /** Plant or defuse progress, 0..1; 0 when not doing either. */
+    action: number;
     /** The local player's own visibility (see PlayerSnap.vis). */
     vis: number;
     pos: Vec3;
@@ -76,13 +83,42 @@ export interface SoundEvent {
     loud: number;
 }
 
+/** The state of the round. Sent whenever it changes and to every player who joins. */
+export interface RoundMsg {
+    type: 'round';
+    phase: Phase;
+    /** Server time (ms) when this phase ends; 0 for warmup. */
+    endsAt: number;
+    /** 1-based number of the current round. */
+    round: number;
+    score: Record<Team, number>;
+    /** Where the bomb sits once planted. */
+    bomb: Vec3 | null;
+    /** Set during `over`. */
+    winner?: Team;
+    reason?: RoundReason;
+    /** The round just won also decided the match. */
+    matchOver?: boolean;
+}
+
+export interface RosterEntry {
+    id: number;
+    name: string;
+    team: Team;
+    kills: number;
+    deaths: number;
+    alive: boolean;
+}
+
 export type ServerMsg =
     | { type: 'welcome'; version: number; id: number; team: Team; map: string; time: number }
     | { type: 'snap'; time: number; ack: number; me: SelfSnap; players: PlayerSnap[] }
     | { type: 'spawn'; pos: Vec3; yaw: number }
     | ShotEvent
     | SlashEvent
-    | SoundEvent;
+    | SoundEvent
+    | RoundMsg
+    | { type: 'roster'; players: RosterEntry[] };
 
 export type ClientMsg = { type: 'cmd'; cmd: NetCmd };
 

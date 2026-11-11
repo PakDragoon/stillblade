@@ -1,7 +1,7 @@
 import { INTERP_DELAY_MS } from '@shared/constants';
 import {
     PROTOCOL_VERSION, decodeServer, encodeClient, type NetCmd, type PlayerSnap, type SelfSnap,
-    type ServerMsg, type ShotEvent, type SlashEvent, type SoundEvent, type Team
+    type RosterEntry, type RoundMsg, type ServerMsg, type ShotEvent, type SlashEvent, type SoundEvent, type Team
 } from '@shared/protocol';
 import type { Vec3 } from '@shared/types';
 import type { RemoteView } from './presenter-api';
@@ -13,6 +13,8 @@ export interface NetHandlers {
     shot(ev: ShotEvent): void;
     slash(ev: SlashEvent): void;
     sound(ev: SoundEvent): void;
+    round(msg: RoundMsg): void;
+    roster(players: RosterEntry[]): void;
 }
 
 interface Sample {
@@ -80,6 +82,11 @@ export class Net {
         else this.ws.send(data);
     }
 
+    /** Best estimate of the server clock (ms) right now. */
+    serverTime(): number {
+        return performance.now() + this.clockOffset;
+    }
+
     /** Server time (ms) other players are drawn at this frame; also the lag-compensation target. */
     renderTime(): number {
         return performance.now() + this.clockOffset - INTERP_DELAY_MS;
@@ -101,6 +108,7 @@ export class Net {
                     const rtt = now - this.sentAt[msg.ack % PING_SLOTS];
                     this.ping += (rtt - this.ping) * (this.ping === 0 ? 1 : 0.1);
                 }
+                this.team = msg.me.team;
                 this.snapCount++;
                 for (const p of msg.players) this.addSample(p, msg.time);
                 for (const [id, r] of this.remotes) if (r.seen !== this.snapCount) this.remotes.delete(id);
@@ -119,6 +127,12 @@ export class Net {
             case 'sound':
                 this.handlers.sound(msg);
                 break;
+            case 'round':
+                this.handlers.round(msg);
+                break;
+            case 'roster':
+                this.handlers.roster(msg.players);
+                break;
         }
     }
 
@@ -132,6 +146,7 @@ export class Net {
             this.remotes.set(p.id, r);
         }
         r.seen = this.snapCount;
+        r.team = r.view.team = p.team; // sides swap at halftime
         // Recycle the oldest sample rather than allocating one per snapshot.
         const s = r.samples.length >= MAX_SAMPLES ? r.samples.shift()! : { time: 0, pos: [0, 0, 0] as Vec3, yaw: 0, pitch: 0, crouched: false, alive: false, vis: 0 };
         s.time = time;

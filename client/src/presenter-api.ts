@@ -1,5 +1,6 @@
 import type * as pc from 'playcanvas';
-import type { Team } from '@shared/protocol';
+import type { RosterEntry, Team } from '@shared/protocol';
+import type { Phase, RoundReason } from '@shared/rules';
 import type { Vec3 } from '@shared/types';
 
 /** Another player, already interpolated for this frame. `pos` is the feet position. */
@@ -34,6 +35,31 @@ export interface LocalView {
     firing: boolean;
     /** The local player's own visibility, same scale as RemoteView.vis. Only meaningful for ghosts. */
     vis: number;
+    /** True when holding the use key (E) would plant (ghosts) or defuse (defenders) right now. */
+    canAct: boolean;
+    /** Plant or defuse progress 0..1; 0 when not doing either. */
+    action: number;
+    /** True while the scoreboard key (Tab) is held. */
+    showScores: boolean;
+}
+
+/** The state of the match for this frame. */
+export interface MatchView {
+    /** See shared/rules.ts for what each phase means. */
+    phase: Phase;
+    /** Seconds left in the current phase (the bomb countdown during `planted`); 0 in warmup. */
+    timeLeft: number;
+    /** 1-based round number. */
+    round: number;
+    scoreGhosts: number;
+    scoreDefenders: number;
+    /** World position of the planted bomb (on the floor), or null. Stays set through `over` if it was planted. */
+    bombPos: Vec3 | null;
+    /** Who won the round; only during `over`. */
+    winner: Team | null;
+    reason: RoundReason | null;
+    /** The round just won also decided the match. */
+    matchOver: boolean;
 }
 
 export type KillKind = 'shot' | 'headshot' | 'knife' | 'backstab';
@@ -44,7 +70,9 @@ export type KillKind = 'shot' | 'headshot' | 'knife' | 'backstab';
  */
 export interface Presenter {
     /** Every rendered frame. `remotes` is reused between frames: do not keep references to it. */
-    frame(dt: number, local: LocalView, remotes: readonly RemoteView[]): void;
+    frame(dt: number, local: LocalView, remotes: readonly RemoteView[], match: MatchView): void;
+    /** The list of players changed (joins, leaves, kills, team swap). Used for the scoreboard and for names. */
+    roster(players: readonly RosterEntry[]): void;
     /** A gun was fired from `from` to its end point `to` (world space). Vectors are only valid during the call. */
     shot(from: Vec3, to: Vec3, isLocal: boolean): void;
     /** The local player (a ghost) started a knife swing; it lands `windupSeconds` later. */

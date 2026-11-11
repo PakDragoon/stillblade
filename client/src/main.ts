@@ -4,15 +4,20 @@ import {
     SHOT_RANGE, STEP_DISTANCE, STEP_LOUD_CROUCH, STEP_LOUD_RUN, STEP_LOUD_WALK, TICK_DT
 } from '@shared/constants';
 import { copyPlayerState, createPlayerState, horizontalSpeed, stepPlayer } from '@shared/movement';
-import { DEFAULT_PORT, type NetCmd, type SelfSnap, type ShotEvent, type SlashEvent, type SoundEvent } from '@shared/protocol';
+import {
+    DEFAULT_PORT, type NetCmd, type RosterEntry, type RoundMsg, type SelfSnap, type ShotEvent, type SlashEvent,
+    type SoundEvent
+} from '@shared/protocol';
+import { canAct, movementLocked } from '@shared/rules';
 import { rayWorld, viewDir } from '@shared/raycast';
 import type { MapData, Vec3 } from '@shared/types';
 import { createAudio } from './audio';
-import type { ListenerView } from './audio-api';
+import type { BombView, ListenerView } from './audio-api';
 import { Input } from './input';
+import { applyBakedLighting } from './maplook';
 import { Net } from './net';
 import { createPresenter } from './presenter';
-import type { LocalView } from './presenter-api';
+import type { LocalView, MatchView } from './presenter-api';
 
 const MAP = 'greybox';
 const RAD = Math.PI / 180;
@@ -20,7 +25,7 @@ const RAD = Math.PI / 180;
 const SNAP_DISTANCE = 2;
 
 const params = new URLSearchParams(location.search);
-const serverUrl = params.get('server') ?? `ws://${location.hostname}:${DEFAULT_PORT}`;
+const serverBase = params.get('server') ?? `ws://${location.hostname}:${DEFAULT_PORT}`;
 /** `?lag=150` adds 150 ms of artificial round-trip latency. */
 const lagMs = Math.max(0, Number(params.get('lag')) || 0);
 
@@ -28,6 +33,32 @@ const canvas = document.getElementById('game') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const overlay = document.getElementById('overlay')!;
 const status = document.getElementById('status')!;
+const menu = document.getElementById('menu') as HTMLFormElement;
+const nameInput = document.getElementById('name') as HTMLInputElement;
+const roomInput = document.getElementById('room') as HTMLInputElement;
+
+/** Shows the name and room form and resolves when the player presses Play. `?auto=1` skips it. */
+function askToJoin(onGesture: () => void): Promise<{ name: string; room: string }> {
+    let saved = '';
+    try { saved = localStorage.getItem('sb-name') ?? ''; } catch { /* storage unavailable: no remembered name */ }
+    nameInput.value = params.get('name') ?? saved;
+    roomInput.value = params.get('room') ?? '';
+    const read = () => ({ name: nameInput.value.trim(), room: roomInput.value.trim() });
+    if (params.has('auto')) return Promise.resolve(read());
+    menu.hidden = false;
+    status.textContent = '';
+    return new Promise(resolve => {
+        menu.addEventListener('submit', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            const choice = read();
+            try { localStorage.setItem('sb-name', choice.name); } catch { /* not remembered */ }
+            menu.hidden = true;
+            onGesture();
+            resolve(choice);
+        }, { once: true });
+    });
+}
 
 const app = new pc.Application(canvas, {
     graphicsDeviceOptions: { antialias: false, alpha: false, powerPreference: 'high-performance' }
@@ -69,12 +100,23 @@ async function start(): Promise<void> {
         }),
         loadContainer(`/maps/${MAP}.glb`)
     ]);
-    app.root.addChild((mapAsset.resource as pc.ContainerResource).instantiateRenderEntity());
+    const mapEntity = (mapAsset.resource as pc.ContainerResource).instantiateRenderEntity();
+    app.root.addChild(mapEntity);
+    // Baked maps draw unlit from one atlas: no realtime lighting cost on the world at all.
+    if (mapData.baked) await applyBakedLighting(app, mapEntity, `/maps/${mapData.baked}`);
 
     const boxes = mapData.boxes;
     const input = new Input(canvas);
     const presenter = createPresenter(app, camera);
     const audio = createAudio(boxes);
+
+    const camSpawn = mapData.spawns.ghosts[0];
+    camera.setPosition(camSpawn.pos[0], camSpawn.pos[1] + EYE_HEIGHT, camSpawn.pos[2]);
+    const { name, room } = await askToJoin(() => { audio.unlock(); input.lock(); });
+    const query = new URLSearchParams();
+    if (room) query.set('room', room);
+    if (name) query.set('name', name);
+    const serverUrl = `${serverBase}/?${query}`;
 
     // Predicted local player: `curr` is the latest simulated tick, `prev` the one before it.
     const curr = createPlayerState(mapData.spawns.ghosts[0].pos);
@@ -89,6 +131,14 @@ async function start(): Promise<void> {
     let slashAtSeq = -1;
     let stepAccum = 0;
     let vis = 0;
+    let action = 0;
+    /** Server time (ms) the current phase ends; 0 in warmup. */
+    let phaseEndsAt = 0;
+    const match: MatchView = {
+        phase: 'warmup', timeLeft: 0, round: 1, scoreGhosts: 0, scoreDefenders: 0, bombPos: null,
+        winner: null, reason: null, matchOver: false
+    };
+    const bombView: BombView = { pos: [0, 0, 0], timeLeft: 0 };
     let alive = false;
     let health = MAX_HEALTH;
     let respawnAt = 0;
@@ -102,6 +152,7 @@ async function start(): Promise<void> {
             alive = me.alive;
             respawnAt = me.respawnAt;
             vis = me.vis;
+            action = me.action;
             let drop = 0;
             while (drop < pending.length && pending[drop].seq <= ack) drop++;
             if (drop > 0) pending.splice(0, drop);
@@ -156,18 +207,45 @@ async function start(): Promise<void> {
         sound(ev: SoundEvent): void {
             if (ev.kind === 'step') audio.step(ev.pos, ev.loud, false);
             else audio.knifeWindup(ev.pos, false);
+        },
+        round(msg: RoundMsg): void {
+            const was = match.phase;
+            match.phase = msg.phase;
+            match.round = msg.round;
+            match.scoreGhosts = msg.score.ghosts;
+            match.scoreDefenders = msg.score.defenders;
+            match.bombPos = msg.bomb;
+            match.winner = msg.winner ?? null;
+            match.reason = msg.reason ?? null;
+            match.matchOver = msg.matchOver === true;
+            phaseEndsAt = msg.endsAt;
+            if (msg.phase === was) return;
+            if (msg.phase === 'live' && was === 'freeze') audio.cue('roundStart');
+            else if (msg.phase === 'planted') audio.cue('planted');
+            else if (msg.phase === 'over') {
+                if (msg.reason === 'exploded') audio.cue('exploded');
+                else if (msg.reason === 'defused') audio.cue('defused');
+                // Let the bomb sound land before the verdict.
+                const won = msg.winner === net.team;
+                setTimeout(() => audio.cue(won ? 'win' : 'lose'), msg.reason === 'exploded' ? 1100 : 500);
+            }
+        },
+        roster(players: RosterEntry[]): void {
+            presenter.roster(players);
         }
     });
 
     // Browsers keep audio muted until the player interacts with the page.
     overlay.addEventListener('click', () => { audio.unlock(); input.lock(); });
+    overlay.classList.toggle('hidden', input.locked);
     canvas.addEventListener('click', () => { audio.unlock(); input.lock(); });
     window.addEventListener('keydown', () => audio.unlock(), { once: true });
     document.addEventListener('pointerlockchange', () => overlay.classList.toggle('hidden', input.locked));
-    status.textContent = 'Click to play';
+    status.textContent = 'Click to resume';
 
     const local: LocalView = {
-        id: 0, team: 'ghosts', health: MAX_HEALTH, alive: false, respawnIn: 0, connected: false, ping: 0, firing: false, vis: 0
+        id: 0, team: 'ghosts', health: MAX_HEALTH, alive: false, respawnIn: 0, connected: false, ping: 0, firing: false, vis: 0,
+        canAct: false, action: 0, showScores: false
     };
     const listener: ListenerView = { pos: [0, 0, 0], yaw: 0, pitch: 0, team: 'ghosts', alive: false };
     let accumulator = 0;
@@ -179,9 +257,17 @@ async function start(): Promise<void> {
         copyPlayerState(prev, curr);
         const cmd: NetCmd = {
             seq: seq++, forward: 0, right: 0, yaw: 0, jump: false, walk: false, crouch: false,
-            pitch: input.pitch, fire: input.fire, viewTime: net.renderTime()
+            pitch: input.pitch, fire: input.fire, use: input.use, viewTime: net.renderTime()
         };
         input.sample(cmd);
+        // Rooted during the freeze and while planting or defusing: the server applies the same rule,
+        // and zeroing the command here keeps replays of it consistent.
+        const acting = alive && cmd.use && canAct(net.team, match.phase, curr, mapData, match.bombPos);
+        if (alive && movementLocked(cmd.use, net.team, match.phase, curr, mapData, match.bombPos)) {
+            cmd.forward = 0;
+            cmd.right = 0;
+            cmd.jump = false;
+        }
         pending.push(cmd);
         if (pending.length > 120) pending.shift(); // server silent for 2 s: stop hoarding
         if (alive) {
@@ -196,7 +282,9 @@ async function start(): Promise<void> {
             }
             // Attack timing follows the same rules as the server, counted in our own commands,
             // so the two never disagree about when a shot or swing happens.
-            if (net.team === 'ghosts') {
+            if (acting || match.phase === 'freeze') {
+                // Hands are busy, or the round has not started: no attacking.
+            } else if (net.team === 'ghosts') {
                 if (slashAtSeq >= 0) {
                     if (cmd.seq >= slashAtSeq) { slashAtSeq = -1; audio.knifeSlash(curr.pos, false, true); }
                 } else if (cmd.fire && cmd.seq >= nextFireSeq) {
@@ -244,20 +332,30 @@ async function start(): Promise<void> {
         local.team = net.team;
         local.health = health;
         local.alive = alive;
-        local.respawnIn = alive ? 0 : Math.max(0, (respawnAt - (net.renderTime() + 100)) / 1000);
+        local.respawnIn = alive || match.phase !== 'warmup' ? 0 : Math.max(0, (respawnAt - net.serverTime()) / 1000);
+        local.canAct = alive && canAct(net.team, match.phase, curr, mapData, match.bombPos);
+        local.action = action;
+        local.showScores = input.scores;
+        match.timeLeft = phaseEndsAt > 0 ? Math.max(0, (phaseEndsAt - net.serverTime()) / 1000) : 0;
         local.connected = net.connected;
         local.ping = net.ping;
         local.firing = alive && input.fire;
         local.vis = vis;
         const remotes = net.interpolate();
-        presenter.frame(dt, local, remotes);
+        presenter.frame(dt, local, remotes, match);
         const eyeNow = camera.getPosition();
         listener.pos[0] = eyeNow.x; listener.pos[1] = eyeNow.y; listener.pos[2] = eyeNow.z;
         listener.yaw = input.yaw;
         listener.pitch = input.pitch;
         listener.team = net.team;
         listener.alive = alive;
-        audio.frame(dt, listener, remotes);
+        let bomb: BombView | null = null;
+        if (match.phase === 'planted' && match.bombPos) {
+            bombView.pos[0] = match.bombPos[0]; bombView.pos[1] = match.bombPos[1]; bombView.pos[2] = match.bombPos[2];
+            bombView.timeLeft = match.timeLeft;
+            bomb = bombView;
+        }
+        audio.frame(dt, listener, remotes, bomb);
 
         if (dt > 0) fps += (1 / dt - fps) * 0.05;
         hudTimer += dt;
@@ -274,7 +372,7 @@ async function start(): Promise<void> {
     // Handle for automated checks and console debugging.
     Object.assign(window, {
         __sb: {
-            app, state: curr, input, net, mapData, audio, presenter,
+            app, state: curr, input, net, mapData, audio, presenter, match,
             stats: () => ({ fps, alive, health, vis, pending: pending.length, error: Math.hypot(...errorOffset) })
         }
     });

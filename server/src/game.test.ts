@@ -4,6 +4,9 @@ import {
     RESPAWN_MS, RUN_SPEED, TICK_RATE, VIS_SWING_SPIKE
 } from '../../shared/constants';
 import type { NetCmd, ServerMsg, ShotEvent, SlashEvent, SoundEvent } from '../../shared/protocol';
+import {
+    BOMB_MS, DEFUSE_TICKS, FREEZE_MS, HALFTIME_ROUND, MATCH_OVER_MS, OVER_MS, PLANT_TICKS, ROUNDS_TO_WIN, ROUND_MS
+} from '../../shared/rules';
 import type { Box, MapData } from '../../shared/types';
 import { Game } from './game';
 
@@ -25,18 +28,18 @@ class Client {
     readonly id: number;
     yaw = 0;
     private seq = 0;
-    constructor(private readonly game: Game) {
+    constructor(private readonly game: Game, name = '') {
         this.id = game.join({
             send: m => {
                 if (m.type === 'spawn') this.yaw = m.yaw;
                 this.inbox.push(structuredClone(m));
             }
-        });
+        }, name);
     }
     cmd(over: Partial<NetCmd> = {}): void {
         this.game.handleCmd(this.id, {
             seq: this.seq++, forward: 0, right: 0, yaw: this.yaw, pitch: 0, jump: false, walk: false, crouch: false,
-            fire: false, viewTime: this.game.now, ...over
+            fire: false, use: false, viewTime: this.game.now, ...over
         });
     }
     last<T extends ServerMsg['type']>(type: T): Extract<ServerMsg, { type: T }> {
@@ -52,8 +55,9 @@ class Client {
     sounds(kind: SoundEvent['kind']): SoundEvent[] { return this.all('sound').filter(s => s.kind === kind); }
 }
 
-function setup(map: MapData = makeMap()) {
-    const game = new Game(map);
+/** `rounds` off keeps the match in warmup, so the core mechanics can be tested without round flow. */
+function setup(map: MapData = makeMap(), rounds = false) {
+    const game = new Game(map, { rounds });
     const ghost = new Client(game);
     const defender = new Client(game);
     let ticks = 0;
@@ -68,7 +72,7 @@ function setup(map: MapData = makeMap()) {
         }
     };
     run(30); // settle onto the floor
-    return { game, ghost, defender, run, G: game.players.get(ghost.id)!, D: game.players.get(defender.id)! };
+    return { game, ghost, defender, run, G: game.players.get(ghost.id)!, D: game.players.get(defender.id)!, clients: [ghost, defender] };
 }
 
 // Eye is at 1.62 m; aiming slightly down lands in the body, below the head zone.
@@ -325,5 +329,145 @@ describe('ghost knife', () => {
         const { ghost, run } = setup();
         run(30, c => (c === ghost ? { fire: true } : {}));
         expect(ghost.shots()).toHaveLength(0);
+    });
+});
+
+describe('rounds and the bomb', () => {
+    const ticks = (ms: number) => Math.ceil(ms / TICK_MS);
+    /** A bomb site around the ghost spawn, so a ghost can plant without travelling. */
+    const siteMap = (defenderZ = -10): MapData => ({
+        ...makeMap([], 10, defenderZ),
+        bombSites: [{ name: 'A', min: [-3, 0, 7], max: [3, 2.5, 13] }]
+    });
+    /** Two players, rounds on, advanced to the moment the first round goes live. */
+    const live = (map: MapData = siteMap()) => {
+        const s = setup(map, true); // setup() already runs 30 ticks of the freeze
+        s.run(ticks(FREEZE_MS) - 30 + 1);
+        expect(s.game.phase).toBe('live');
+        return s;
+    };
+
+    it('freezes players at the start of a round, then lets them go', () => {
+        const { game, ghost, run, G } = setup(siteMap(), true);
+        expect(game.phase).toBe('freeze');
+        expect(ghost.last('round')).toMatchObject({ phase: 'freeze', round: 1, score: { ghosts: 0, defenders: 0 } });
+        run(30, c => (c === ghost ? { forward: 1, fire: true } : {}));
+        expect(G.state.pos[2]).toBeCloseTo(10, 5);
+        expect(ghost.sounds('windup')).toHaveLength(0); // no attacking during the freeze either
+        run(ticks(FREEZE_MS));
+        expect(game.phase).toBe('live');
+        run(30, c => (c === ghost ? { forward: 1 } : {}));
+        expect(G.state.pos[2]).toBeLessThan(9);
+    });
+
+    it('plants after an uninterrupted hold inside a site, rooting and exposing the ghost', () => {
+        const { game, ghost, run, G } = live();
+        run(PLANT_TICKS - 20, c => (c === ghost ? { use: true, forward: 1 } : {}));
+        expect(G.state.pos[2]).toBeCloseTo(10, 5); // cannot walk while planting
+        expect(G.vis).toBeGreaterThan(0.5);
+        expect(ghost.last('snap').me.action).toBeGreaterThan(0.8);
+        run(5); // let go: progress is lost
+        run(PLANT_TICKS - 20, c => (c === ghost ? { use: true } : {}));
+        expect(game.phase).toBe('live');
+        run(20, c => (c === ghost ? { use: true } : {}));
+        expect(game.phase).toBe('planted');
+        expect(ghost.last('round')).toMatchObject({ phase: 'planted', bomb: [0, 0, 10] });
+    });
+
+    it('cannot plant outside a site', () => {
+        const { game, ghost, run } = live({ ...siteMap(), bombSites: [{ name: 'A', min: [20, 0, 20], max: [26, 2.5, 26] }] });
+        run(PLANT_TICKS + 10, c => (c === ghost ? { use: true } : {}));
+        expect(game.phase).toBe('live');
+    });
+
+    it('gives ghosts the round when the bomb explodes, even if they have all died', () => {
+        const { game, ghost, defender, run, G } = live();
+        run(PLANT_TICKS, c => (c === ghost ? { use: true } : {}));
+        run(1, c => (c === defender ? { fire: true } : {})); // headshot the planter
+        expect(G.alive).toBe(false);
+        expect(game.phase).toBe('planted');
+        run(ticks(BOMB_MS) + 1);
+        expect(ghost.last('round')).toMatchObject({ phase: 'over', winner: 'ghosts', reason: 'exploded', score: { ghosts: 1, defenders: 0 } });
+    });
+
+    it('lets a defender defuse only from next to the bomb', () => {
+        const far = live();
+        far.run(PLANT_TICKS, c => (c === far.ghost ? { use: true } : {}));
+        far.run(DEFUSE_TICKS + 10, c => (c === far.defender ? { use: true } : {}));
+        expect(far.game.phase).toBe('planted');
+
+        const near = live(siteMap(9)); // defender spawns 1 m from the ghost
+        near.run(PLANT_TICKS, c => (c === near.ghost ? { use: true } : {}));
+        near.run(DEFUSE_TICKS - 1, c => (c === near.defender ? { use: true } : {}));
+        expect(near.game.phase).toBe('planted');
+        near.run(1, c => (c === near.defender ? { use: true } : {}));
+        expect(near.defender.last('round')).toMatchObject({ phase: 'over', winner: 'defenders', reason: 'defused' });
+    });
+
+    it('ends the round on elimination with no respawn, then starts the next one', () => {
+        const { game, ghost, defender, run, G } = live();
+        run(1, c => (c === defender ? { fire: true } : {}));
+        run(1);
+        expect(defender.last('round')).toMatchObject({ phase: 'over', winner: 'defenders', reason: 'eliminated' });
+        run(ticks(OVER_MS) - 5);
+        expect(G.alive).toBe(false);
+        run(10);
+        expect(G.alive).toBe(true);
+        expect(ghost.last('round')).toMatchObject({ phase: 'freeze', round: 2, score: { ghosts: 0, defenders: 1 } });
+        expect(game.bomb).toBeNull();
+    });
+
+    it('gives defenders the round when time runs out', () => {
+        const { defender, run } = live();
+        run(ticks(ROUND_MS) + 1, () => null);
+        expect(defender.last('round')).toMatchObject({ phase: 'over', winner: 'defenders', reason: 'time' });
+    });
+
+    it('swaps sides at halftime and ends the match at the win target', () => {
+        const s = live();
+        const ghostGroupClient = s.ghost, defenderGroupClient = s.defender;
+        /** Plays one round: whoever is currently a defender headshots the other as soon as it is live. */
+        const playRound = (): void => {
+            while (s.game.phase !== 'live') s.run(1);
+            s.run(2, c => (s.game.players.get(c.id)!.team === 'defenders' ? { fire: true } : {}));
+            expect(s.game.phase).toBe('over');
+        };
+        for (let i = 0; i < HALFTIME_ROUND; i++) playRound();
+        expect(defenderGroupClient.last('round').score).toEqual({ ghosts: 0, defenders: HALFTIME_ROUND });
+
+        s.run(ticks(OVER_MS) + 2);
+        // Roles have traded; the score follows the players, not the role.
+        expect(ghostGroupClient.last('snap').me.team).toBe('defenders');
+        expect(defenderGroupClient.last('snap').me.team).toBe('ghosts');
+        expect(ghostGroupClient.last('round').score).toEqual({ ghosts: HALFTIME_ROUND, defenders: 0 });
+        expect(ghostGroupClient.last('spawn').pos).toEqual([0, 0, -10]); // now at the defender spawn
+
+        for (let i = 0; i < ROUNDS_TO_WIN; i++) playRound();
+        expect(ghostGroupClient.last('round')).toMatchObject({ winner: 'defenders', matchOver: true, score: { ghosts: HALFTIME_ROUND, defenders: ROUNDS_TO_WIN } });
+
+        s.run(ticks(MATCH_OVER_MS) + 2);
+        expect(ghostGroupClient.last('round')).toMatchObject({ phase: 'freeze', round: 1, score: { ghosts: 0, defenders: 0 } });
+        expect(ghostGroupClient.last('snap').me.team).toBe('ghosts'); // a new match starts on the original sides
+    });
+
+    it('holds a mid-round joiner until the next round and tracks the roster', () => {
+        const { game, ghost, defender, run } = live();
+        const late = new Client(game, '  <b>Zoë_99</b> the very long named one ');
+        const L = game.players.get(late.id)!;
+        expect(L.alive).toBe(false);
+        expect(L.name).toBe('bZoë_99b the ver');
+        expect(late.last('round').phase).toBe('live');
+        run(1, c => (c === defender ? { fire: true } : {}));
+        const roster = ghost.last('roster').players;
+        expect(roster.find(p => p.id === defender.id)).toMatchObject({ kills: 1, deaths: 0, alive: true });
+        expect(roster.find(p => p.id === ghost.id)).toMatchObject({ kills: 0, deaths: 1, alive: false });
+        expect(roster.find(p => p.id === late.id)!.name).toBe('bZoë_99b the ver');
+    });
+
+    it('returns to warmup when a team empties', () => {
+        const { game, ghost, defender, run } = live();
+        game.leave(defender.id);
+        run(2, c => (c === ghost ? {} : null));
+        expect(ghost.last('round').phase).toBe('warmup');
     });
 });
