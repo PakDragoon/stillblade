@@ -1,6 +1,6 @@
 import type { InputCmd, Vec3 } from './types';
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 export const DEFAULT_PORT = 8080;
 /** Snapshots per second sent to each client. */
 export const SNAPSHOT_RATE = 30;
@@ -26,9 +26,13 @@ export interface PlayerSnap {
     pitch: number;
     crouched: boolean;
     alive: boolean;
+    /** Opacity 0..1: 1 for defenders, velocity-driven for ghosts. */
+    vis: number;
 }
 
 export interface SelfSnap {
+    /** The local player's own visibility (see PlayerSnap.vis). */
+    vis: number;
     pos: Vec3;
     vel: Vec3;
     onGround: boolean;
@@ -51,11 +55,34 @@ export interface ShotEvent {
     killed?: boolean;
 }
 
+/** A knife swing landing (or missing) after its windup. */
+export interface SlashEvent {
+    type: 'slash';
+    attacker: number;
+    pos: Vec3;
+    victim?: number;
+    damage?: number;
+    backstab?: boolean;
+    killed?: boolean;
+}
+
+/** A sound the recipient is close enough to hear. Never sent to players out of range. */
+export interface SoundEvent {
+    type: 'sound';
+    kind: 'step' | 'windup';
+    id: number;
+    pos: Vec3;
+    /** 0..1 loudness at the source. */
+    loud: number;
+}
+
 export type ServerMsg =
     | { type: 'welcome'; version: number; id: number; team: Team; map: string; time: number }
     | { type: 'snap'; time: number; ack: number; me: SelfSnap; players: PlayerSnap[] }
     | { type: 'spawn'; pos: Vec3; yaw: number }
-    | ShotEvent;
+    | ShotEvent
+    | SlashEvent
+    | SoundEvent;
 
 export type ClientMsg = { type: 'cmd'; cmd: NetCmd };
 

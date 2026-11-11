@@ -1,11 +1,14 @@
 import * as pc from 'playcanvas';
 import {
-    EYE_HEIGHT, EYE_HEIGHT_CROUCHED, FIRE_INTERVAL_TICKS, MAX_HEALTH, SHOT_RANGE, TICK_DT
+    EYE_HEIGHT, EYE_HEIGHT_CROUCHED, FIRE_INTERVAL_TICKS, KNIFE_COOLDOWN_TICKS, KNIFE_WINDUP_TICKS, MAX_HEALTH,
+    SHOT_RANGE, STEP_DISTANCE, STEP_LOUD_CROUCH, STEP_LOUD_RUN, STEP_LOUD_WALK, TICK_DT
 } from '@shared/constants';
 import { copyPlayerState, createPlayerState, horizontalSpeed, stepPlayer } from '@shared/movement';
-import { DEFAULT_PORT, type NetCmd, type SelfSnap, type ShotEvent } from '@shared/protocol';
+import { DEFAULT_PORT, type NetCmd, type SelfSnap, type ShotEvent, type SlashEvent, type SoundEvent } from '@shared/protocol';
 import { rayWorld, viewDir } from '@shared/raycast';
 import type { MapData, Vec3 } from '@shared/types';
+import { createAudio } from './audio';
+import type { ListenerView } from './audio-api';
 import { Input } from './input';
 import { Net } from './net';
 import { createPresenter } from './presenter';
@@ -71,6 +74,7 @@ async function start(): Promise<void> {
     const boxes = mapData.boxes;
     const input = new Input(canvas);
     const presenter = createPresenter(app, camera);
+    const audio = createAudio(boxes);
 
     // Predicted local player: `curr` is the latest simulated tick, `prev` the one before it.
     const curr = createPlayerState(mapData.spawns.ghosts[0].pos);
@@ -81,6 +85,10 @@ async function start(): Promise<void> {
     const errorOffset: Vec3 = [0, 0, 0];
     let seq = 0;
     let nextFireSeq = 0;
+    /** Command at which a knife swing in progress lands; -1 when none. Mirrors the server. */
+    let slashAtSeq = -1;
+    let stepAccum = 0;
+    let vis = 0;
     let alive = false;
     let health = MAX_HEALTH;
     let respawnAt = 0;
@@ -93,6 +101,7 @@ async function start(): Promise<void> {
             health = me.health;
             alive = me.alive;
             respawnAt = me.respawnAt;
+            vis = me.vis;
             let drop = 0;
             while (drop < pending.length && pending[drop].seq <= ack) drop++;
             if (drop > 0) pending.splice(0, drop);
@@ -123,24 +132,44 @@ async function start(): Promise<void> {
             input.pitch = 0;
             alive = true;
             health = MAX_HEALTH;
+            slashAtSeq = -1;
+            stepAccum = 0;
         },
         shot(ev: ShotEvent): void {
             // Our own tracer was drawn the moment we fired; the server only tells us what it hit.
-            if (ev.shooter !== net.id) presenter.shot(ev.from, ev.to, false);
-            else if (ev.victim !== undefined) presenter.hitConfirm(ev.head === true, ev.killed === true);
-            if (ev.victim === net.id) presenter.damaged(ev.damage ?? 0);
-            if (ev.killed && ev.victim !== undefined) presenter.killFeed(ev.shooter, ev.victim, ev.head === true);
+            if (ev.shooter !== net.id) {
+                presenter.shot(ev.from, ev.to, false);
+                audio.gunshot(ev.from, false);
+                audio.impact(ev.to);
+            } else if (ev.victim !== undefined) presenter.hitConfirm(ev.head === true, ev.killed === true);
+            if (ev.victim === net.id) { presenter.damaged(ev.damage ?? 0); audio.hurt(); }
+            if (ev.killed && ev.victim !== undefined) presenter.killFeed(ev.shooter, ev.victim, ev.head ? 'headshot' : 'shot');
+        },
+        slash(ev: SlashEvent): void {
+            const hit = ev.victim !== undefined;
+            // Our own swing already made its whoosh when it was predicted; only a confirmed hit adds to it.
+            if (ev.attacker !== net.id) audio.knifeSlash(ev.pos, hit, false);
+            else if (hit) { presenter.hitConfirm(ev.backstab === true, ev.killed === true); audio.knifeSlash(ev.pos, true, true); }
+            if (ev.victim === net.id) { presenter.damaged(ev.damage ?? 0); audio.hurt(); }
+            if (ev.killed && ev.victim !== undefined) presenter.killFeed(ev.attacker, ev.victim, ev.backstab ? 'backstab' : 'knife');
+        },
+        sound(ev: SoundEvent): void {
+            if (ev.kind === 'step') audio.step(ev.pos, ev.loud, false);
+            else audio.knifeWindup(ev.pos, false);
         }
     });
 
-    overlay.addEventListener('click', () => input.lock());
-    canvas.addEventListener('click', () => input.lock());
+    // Browsers keep audio muted until the player interacts with the page.
+    overlay.addEventListener('click', () => { audio.unlock(); input.lock(); });
+    canvas.addEventListener('click', () => { audio.unlock(); input.lock(); });
+    window.addEventListener('keydown', () => audio.unlock(), { once: true });
     document.addEventListener('pointerlockchange', () => overlay.classList.toggle('hidden', input.locked));
     status.textContent = 'Click to play';
 
     const local: LocalView = {
-        id: 0, team: 'ghosts', health: MAX_HEALTH, alive: false, respawnIn: 0, connected: false, ping: 0, firing: false
+        id: 0, team: 'ghosts', health: MAX_HEALTH, alive: false, respawnIn: 0, connected: false, ping: 0, firing: false, vis: 0
     };
+    const listener: ListenerView = { pos: [0, 0, 0], yaw: 0, pitch: 0, team: 'ghosts', alive: false };
     let accumulator = 0;
     let eye = EYE_HEIGHT;
     let fps = 60;
@@ -156,16 +185,37 @@ async function start(): Promise<void> {
         pending.push(cmd);
         if (pending.length > 120) pending.shift(); // server silent for 2 s: stop hoarding
         if (alive) {
+            const px = curr.pos[0], pz = curr.pos[2];
             stepPlayer(curr, cmd, TICK_DT, boxes);
-            // Same rule as the server, counted in our own commands, so the two never disagree.
-            if (cmd.fire && cmd.seq >= nextFireSeq) {
+            if (curr.onGround) {
+                stepAccum += Math.hypot(curr.pos[0] - px, curr.pos[2] - pz);
+                if (stepAccum >= STEP_DISTANCE) {
+                    stepAccum -= STEP_DISTANCE;
+                    audio.step(curr.pos, curr.crouched ? STEP_LOUD_CROUCH : cmd.walk ? STEP_LOUD_WALK : STEP_LOUD_RUN, true);
+                }
+            }
+            // Attack timing follows the same rules as the server, counted in our own commands,
+            // so the two never disagree about when a shot or swing happens.
+            if (net.team === 'ghosts') {
+                if (slashAtSeq >= 0) {
+                    if (cmd.seq >= slashAtSeq) { slashAtSeq = -1; audio.knifeSlash(curr.pos, false, true); }
+                } else if (cmd.fire && cmd.seq >= nextFireSeq) {
+                    nextFireSeq = cmd.seq + KNIFE_COOLDOWN_TICKS;
+                    slashAtSeq = cmd.seq + KNIFE_WINDUP_TICKS;
+                    presenter.knifeSwing(KNIFE_WINDUP_TICKS * TICK_DT);
+                    audio.knifeWindup(curr.pos, true);
+                }
+            } else if (cmd.fire && cmd.seq >= nextFireSeq) {
                 nextFireSeq = cmd.seq + FIRE_INTERVAL_TICKS;
                 eyePos[0] = curr.pos[0];
                 eyePos[1] = curr.pos[1] + (curr.crouched ? EYE_HEIGHT_CROUCHED : EYE_HEIGHT);
                 eyePos[2] = curr.pos[2];
                 viewDir(cmd.yaw, cmd.pitch, aim);
                 const dist = rayWorld(boxes, eyePos, aim, SHOT_RANGE);
-                presenter.shot(eyePos, [eyePos[0] + aim[0] * dist, eyePos[1] + aim[1] * dist, eyePos[2] + aim[2] * dist], true);
+                const end: Vec3 = [eyePos[0] + aim[0] * dist, eyePos[1] + aim[1] * dist, eyePos[2] + aim[2] * dist];
+                presenter.shot(eyePos, end, true);
+                audio.gunshot(eyePos, true);
+                audio.impact(end);
             }
         }
         net.send(cmd);
@@ -198,7 +248,16 @@ async function start(): Promise<void> {
         local.connected = net.connected;
         local.ping = net.ping;
         local.firing = alive && input.fire;
-        presenter.frame(dt, local, net.interpolate());
+        local.vis = vis;
+        const remotes = net.interpolate();
+        presenter.frame(dt, local, remotes);
+        const eyeNow = camera.getPosition();
+        listener.pos[0] = eyeNow.x; listener.pos[1] = eyeNow.y; listener.pos[2] = eyeNow.z;
+        listener.yaw = input.yaw;
+        listener.pitch = input.pitch;
+        listener.team = net.team;
+        listener.alive = alive;
+        audio.frame(dt, listener, remotes);
 
         if (dt > 0) fps += (1 / dt - fps) * 0.05;
         hudTimer += dt;
@@ -215,8 +274,8 @@ async function start(): Promise<void> {
     // Handle for automated checks and console debugging.
     Object.assign(window, {
         __sb: {
-            app, state: curr, input, net, mapData,
-            stats: () => ({ fps, alive, health, pending: pending.length, error: Math.hypot(...errorOffset) })
+            app, state: curr, input, net, mapData, audio, presenter,
+            stats: () => ({ fps, alive, health, vis, pending: pending.length, error: Math.hypot(...errorOffset) })
         }
     });
 }

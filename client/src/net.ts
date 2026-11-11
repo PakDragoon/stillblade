@@ -1,7 +1,7 @@
 import { INTERP_DELAY_MS } from '@shared/constants';
 import {
     PROTOCOL_VERSION, decodeServer, encodeClient, type NetCmd, type PlayerSnap, type SelfSnap,
-    type ServerMsg, type ShotEvent, type Team
+    type ServerMsg, type ShotEvent, type SlashEvent, type SoundEvent, type Team
 } from '@shared/protocol';
 import type { Vec3 } from '@shared/types';
 import type { RemoteView } from './presenter-api';
@@ -11,6 +11,8 @@ export interface NetHandlers {
     snapshot(me: SelfSnap, ack: number): void;
     spawn(pos: Vec3, yaw: number): void;
     shot(ev: ShotEvent): void;
+    slash(ev: SlashEvent): void;
+    sound(ev: SoundEvent): void;
 }
 
 interface Sample {
@@ -20,6 +22,7 @@ interface Sample {
     pitch: number;
     crouched: boolean;
     alive: boolean;
+    vis: number;
 }
 
 interface Remote {
@@ -110,6 +113,12 @@ export class Net {
             case 'shot':
                 this.handlers.shot(msg);
                 break;
+            case 'slash':
+                this.handlers.slash(msg);
+                break;
+            case 'sound':
+                this.handlers.sound(msg);
+                break;
         }
     }
 
@@ -118,16 +127,16 @@ export class Net {
         if (!r) {
             r = {
                 team: p.team, samples: [], seen: 0,
-                view: { id: p.id, team: p.team, pos: [0, 0, 0], yaw: 0, pitch: 0, crouched: false, alive: false }
+                view: { id: p.id, team: p.team, pos: [0, 0, 0], yaw: 0, pitch: 0, crouched: false, alive: false, vis: 0 }
             };
             this.remotes.set(p.id, r);
         }
         r.seen = this.snapCount;
         // Recycle the oldest sample rather than allocating one per snapshot.
-        const s = r.samples.length >= MAX_SAMPLES ? r.samples.shift()! : { time: 0, pos: [0, 0, 0] as Vec3, yaw: 0, pitch: 0, crouched: false, alive: false };
+        const s = r.samples.length >= MAX_SAMPLES ? r.samples.shift()! : { time: 0, pos: [0, 0, 0] as Vec3, yaw: 0, pitch: 0, crouched: false, alive: false, vis: 0 };
         s.time = time;
         s.pos[0] = p.pos[0]; s.pos[1] = p.pos[1]; s.pos[2] = p.pos[2];
-        s.yaw = p.yaw; s.pitch = p.pitch; s.crouched = p.crouched; s.alive = p.alive;
+        s.yaw = p.yaw; s.pitch = p.pitch; s.crouched = p.crouched; s.alive = p.alive; s.vis = p.vis;
         r.samples.push(s);
     }
 
@@ -151,6 +160,7 @@ export class Net {
             v.pos[2] = a.pos[2] + (b.pos[2] - a.pos[2]) * k;
             v.yaw = lerpAngle(a.yaw, b.yaw, k);
             v.pitch = a.pitch + (b.pitch - a.pitch) * k;
+            v.vis = a.vis + (b.vis - a.vis) * k;
             const near = k < 0.5 ? a : b;
             v.crouched = near.crouched;
             v.alive = near.alive;

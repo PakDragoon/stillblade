@@ -2,7 +2,7 @@ import * as pc from 'playcanvas';
 import { HEAD_ZONE, HULL_HALF_WIDTH, HULL_HEIGHT, HULL_HEIGHT_CROUCHED } from '@shared/constants';
 import type { Team } from '@shared/protocol';
 import type { Vec3 } from '@shared/types';
-import type { CreatePresenter, LocalView, RemoteView } from './presenter-api';
+import type { CreatePresenter, KillKind, LocalView, RemoteView } from './presenter-api';
 
 const DEG = 180 / Math.PI;
 const HEAD_WIDTH = 0.4;
@@ -18,6 +18,16 @@ const KILLFEED_MAX = 5;
 const KILLFEED_LIFE = 5;
 const KILLFEED_FADE = 0.5;
 const GUN_POS = new pc.Vec3(0.15, -0.15, -0.46);
+/** Below this an enemy ghost is not drawn at all (entity disabled: zero cost, truly invisible). */
+const VIS_CULL = 0.01;
+/** Fixed opacity for ghosts seen by their own teammates. */
+const ALLY_GHOST_VIS = 0.45;
+const SLASH_TIME = 0.12;
+const RECOVER_TIME = 0.2;
+
+const KILL_SUFFIX: Record<KillKind, string> = {
+    shot: '', headshot: ' (HS)', knife: ' (knife)', backstab: ' (backstab)'
+};
 
 // ---------------------------------------------------------------------------------------------
 // Materials and primitive helpers
@@ -43,13 +53,102 @@ function makeMaterial(r: number, g: number, b: number, unlit: boolean, opacity =
 }
 
 function box(parent: pc.Entity, material: pc.Material, sx: number, sy: number, sz: number,
-    x = 0, y = 0, z = 0): pc.Entity {
+    x = 0, y = 0, z = 0, layers?: number[]): pc.Entity {
     const e = new pc.Entity();
-    e.addComponent('render', { type: 'box', material, castShadows: false, receiveShadows: false });
+    e.addComponent('render', {
+        type: 'box', material, castShadows: false, receiveShadows: false, ...(layers ? { layers } : {})
+    });
     e.setLocalScale(sx, sy, sz);
     e.setLocalPosition(x, y, z);
     parent.addChild(e);
     return e;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Ghost shimmer shader (GLSL; the engine prepends version, precision and `gl_FragColor` defines).
+// No scene-colour sampling: a fresnel/edge rim plus animated value noise fakes a heat-haze outline.
+
+const GHOST_VS = /* glsl */ `
+attribute vec3 vertex_position;
+attribute vec3 vertex_normal;
+uniform mat4 matrix_model;
+uniform mat4 matrix_viewProjection;
+uniform mat3 matrix_normal;
+varying vec3 vWorldPos;
+varying vec3 vNormal;
+varying vec3 vLocal;
+void main(void) {
+    vec4 wp = matrix_model * vec4(vertex_position, 1.0);
+    vWorldPos = wp.xyz;
+    vNormal = matrix_normal * vertex_normal;
+    vLocal = vertex_position;
+    gl_Position = matrix_viewProjection * wp;
+}
+`;
+
+const GHOST_FS = /* glsl */ `
+uniform vec3 view_position;
+uniform float uVis;
+uniform float uTime;
+uniform vec3 uTint;
+varying vec3 vWorldPos;
+varying vec3 vNormal;
+varying vec3 vLocal;
+
+float hash(vec3 p) {
+    p = fract(p * 0.3183099 + 0.1);
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+float vnoise(vec3 x) {
+    vec3 i = floor(x);
+    vec3 f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(hash(i), hash(i + vec3(1.0, 0.0, 0.0)), f.x),
+                   mix(hash(i + vec3(0.0, 1.0, 0.0)), hash(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+               mix(mix(hash(i + vec3(0.0, 0.0, 1.0)), hash(i + vec3(1.0, 0.0, 1.0)), f.x),
+                   mix(hash(i + vec3(0.0, 1.0, 1.0)), hash(i + vec3(1.0, 1.0, 1.0)), f.x), f.y), f.z);
+}
+void main(void) {
+    vec3 n = normalize(vNormal);
+    vec3 v = normalize(view_position - vWorldPos);
+    float fres = 1.0 - clamp(abs(dot(n, v)), 0.0, 1.0);
+    fres *= fres;
+    // Boxes are flat-faced, so also brighten near their edges (unit box: |local| reaches 0.5).
+    vec3 a = abs(vLocal) * 2.0;
+    float mx = max(a.x, max(a.y, a.z));
+    float mn = min(a.x, min(a.y, a.z));
+    float mid = a.x + a.y + a.z - mx - mn;
+    float rim = clamp(max(fres, smoothstep(0.8, 1.0, mid) * 0.85), 0.0, 1.0);
+    vec3 p = vWorldPos * 5.0 + vec3(0.0, -uTime * 1.7, uTime * 0.6);
+    float nz = vnoise(p) * 0.65 + vnoise(p * 2.3 + 7.1) * 0.35;
+    float alpha = uVis * mix(0.55, 1.0, rim) * mix(0.75, 1.0, nz);
+    // Dim interior and bright rim keep a moving ghost a haze outline; spikes (>= 0.6) flare up.
+    float flare = smoothstep(0.4, 0.75, uVis);
+    vec3 col = uTint * (0.3 + 0.9 * rim + 0.3 * nz) * (0.85 + 0.75 * flare);
+    gl_FragColor = vec4(col, clamp(alpha, 0.0, 1.0));
+}
+`;
+
+const ENEMY_TINT = new Float32Array([0.78, 0.88, 1.0]);
+const ALLY_TINT = new Float32Array([0.66, 0.6, 1.0]);
+
+function makeGhostMaterial(): pc.ShaderMaterial {
+    const m = new pc.ShaderMaterial({
+        uniqueName: 'sbGhostShimmer',
+        vertexGLSL: GHOST_VS,
+        fragmentGLSL: GHOST_FS,
+        attributes: { vertex_position: pc.SEMANTIC_POSITION, vertex_normal: pc.SEMANTIC_NORMAL }
+    });
+    m.blendType = pc.BLEND_NORMAL;
+    m.depthWrite = false;
+    m.depthTest = true;
+    m.cull = pc.CULLFACE_BACK;
+    m.setParameter('uVis', 1);
+    m.setParameter('uTime', 0);
+    m.setParameter('uTint', ENEMY_TINT);
+    m.update();
+    return m;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -64,6 +163,13 @@ const HUD_CSS = `
 #sb-health.low { color: #ff3b3b; }
 #sb-info { opacity: .8; margin-top: 4px; }
 #sb-info .ghosts { color: #9d8cff; } #sb-info .defenders { color: #ff9a3c; }
+#sb-vis { margin: 0 0 6px; width: 150px; display: none; font: 600 11px/1 system-ui, sans-serif;
+    letter-spacing: .14em; }
+#sb-vis .row { display: flex; justify-content: space-between; margin-bottom: 3px; opacity: .85; }
+#sb-vis .bar { height: 4px; background: rgba(255,255,255,.15); box-shadow: 0 0 2px #000; }
+#sb-vis .fill { height: 100%; width: 0; background: #b9d4ff; }
+#sb-vis.hidden .state { color: #8fe3a8; }
+#sb-vis.exposed .state { color: #ff5a4a; } #sb-vis.exposed .fill { background: #ff5a4a; }
 #sb-disc { top: 12px; left: 50%; transform: translateX(-50%); padding: 6px 14px; display: none;
     background: rgba(160,20,20,.85); font: 700 15px/1.2 system-ui, sans-serif; letter-spacing: .15em; }
 #sb-hit { left: 50%; top: 50%; width: 0; height: 0; opacity: 0; transform: rotate(45deg); }
@@ -93,14 +199,21 @@ const playerName = (id: number): string => `Player ${id}`;
 // ---------------------------------------------------------------------------------------------
 // Pooled scene objects
 
+/** How a remote player is drawn. Plain constants (not an enum) to stay erasable-syntax friendly. */
+const Look = { None: 0, Defender: 1, EnemyGhost: 2, AllyGhost: 3 } as const;
+type Look = typeof Look[keyof typeof Look];
+
 interface Remote {
     id: number;
     team: Team | null;
+    look: Look;
     root: pc.Entity;
     body: pc.Entity;
     neck: pc.Entity;
     head: pc.Entity;
     visor: pc.Entity;
+    bodyMi: pc.MeshInstance;
+    headMi: pc.MeshInstance;
     height: number;
     seen: number;
 }
@@ -109,45 +222,91 @@ interface Tracer { e: pc.Entity; mi: pc.MeshInstance; t: number; }
 interface Impact { e: pc.Entity; t: number; }
 interface FeedLine { el: HTMLDivElement; age: number; }
 
+// Knife key poses: position (m, camera space) then Euler angles (degrees).
+const KNIFE_REST = [0.16, -0.17, -0.36, 14, 8, -14];
+const KNIFE_BACK = [0.2, -0.1, -0.32, 65, -12, -35];
+const KNIFE_SLASH = [-0.08, -0.25, -0.48, -15, 45, 35];
+
 export const createPresenter: CreatePresenter = (app, camera) => {
-    // Materials (shared; per-instance tracer opacity goes through a mesh-instance parameter).
-    const teamMats: Record<Team, { body: pc.Material; head: pc.Material }> = {
-        ghosts: { body: makeMaterial(0.42, 0.36, 0.85, false), head: makeMaterial(0.3, 0.75, 0.78, false) },
-        defenders: { body: makeMaterial(0.95, 0.5, 0.15, false), head: makeMaterial(0.85, 0.32, 0.12, false) }
-    };
+    // Materials (shared; per-instance opacity goes through mesh-instance parameters).
+    const defenderMats = { body: makeMaterial(0.95, 0.5, 0.15, false), head: makeMaterial(0.85, 0.32, 0.12, false) };
+    const ghostMat = makeGhostMaterial();
     const visorMat = makeMaterial(0.95, 0.95, 0.85, true);
     const gunMat = makeMaterial(0.13, 0.14, 0.16, false);
     const gunAccentMat = makeMaterial(0.28, 0.3, 0.33, false);
-    const flashMat = makeMaterial(1, 0.9, 0.55, true, 0.9);
+    // Opaque: the viewmodel layer only renders its opaque sub-layer (see below).
+    const flashMat = makeMaterial(1, 0.9, 0.55, true);
     const tracerMat = makeMaterial(1, 0.95, 0.6, true, 0.9);
     const impactMat = makeMaterial(0.05, 0.05, 0.05, true);
+    const bladeMat = makeMaterial(0.78, 0.8, 0.84, false);
+    bladeMat.gloss = 0.7;
+    bladeMat.metalness = 0.3;
+    bladeMat.useMetalness = true;
+    bladeMat.update();
+    const knifeGuardMat = makeMaterial(0.35, 0.36, 0.38, false);
+    const knifeHandleMat = makeMaterial(0.1, 0.09, 0.08, false);
 
     const tmpA = new pc.Vec3();
     const tmpB = new pc.Vec3();
     const UP = pc.Vec3.UP;
     const RIGHT = pc.Vec3.RIGHT;
+    let time = 0;
+
+    // --- Viewmodel layer ---------------------------------------------------------------------
+    // Drawn by the same camera after all world layers (opaque + transparent), clearing depth
+    // first, so the viewmodel never clips into walls while its own parts still depth-test
+    // against each other. Only the opaque sub-layer is added: a transparent one would be a
+    // second render step and clear depth again.
+    const layers = app.scene.layers;
+    const worldLayer = layers.getLayerById(pc.LAYERID_WORLD)!;
+    const vmLayer = new pc.Layer({ name: 'Viewmodel', clearDepthBuffer: true });
+    layers.insertOpaque(vmLayer, layers.getTransparentIndex(worldLayer) + 1);
+    const cam = camera.camera!;
+    cam.layers = cam.layers.concat(vmLayer.id);
+    // Let existing directional lights light the viewmodel too (lights only affect listed layers).
+    for (const c of app.root.findComponents('light') as pc.LightComponent[]) {
+        if (c.type === 'directional' && c.layers.indexOf(vmLayer.id) < 0) c.layers = c.layers.concat(vmLayer.id);
+    }
+    const VM = [vmLayer.id];
 
     // --- Remote players --------------------------------------------------------------------
     const active: Remote[] = [];
     const free: Remote[] = [];
     let stamp = 0;
+    let localTeam: Team | null = null;
 
     const makeRemote = (): Remote => {
         const root = new pc.Entity('remote');
         const hw = HULL_HALF_WIDTH * 2;
-        const body = box(root, teamMats.ghosts.body, hw, 1, hw);
+        const body = box(root, defenderMats.body, hw, 1, hw);
         const neck = new pc.Entity('neck');
         root.addChild(neck);
-        const head = box(neck, teamMats.ghosts.head, HEAD_WIDTH, HEAD_ZONE, HEAD_WIDTH, 0, HEAD_ZONE / 2, 0);
+        const head = box(neck, defenderMats.head, HEAD_WIDTH, HEAD_ZONE, HEAD_WIDTH, 0, HEAD_ZONE / 2, 0);
         const visor = box(neck, visorMat, 0.3, 0.07, 0.06, 0, HEAD_ZONE * 0.62, -HEAD_WIDTH / 2 - 0.025);
         app.root.addChild(root);
-        return { id: -1, team: null, root, body, neck, head, visor, height: HULL_HEIGHT, seen: 0 };
+        return {
+            id: -1, team: null, look: Look.None, root, body, neck, head, visor,
+            bodyMi: body.render!.meshInstances[0], headMi: head.render!.meshInstances[0],
+            height: HULL_HEIGHT, seen: 0
+        };
     };
 
-    const setTeam = (r: Remote, team: Team): void => {
-        r.team = team;
-        r.body.render!.material = teamMats[team].body;
-        r.head.render!.material = teamMats[team].head;
+    const setLook = (r: Remote, look: Look): void => {
+        r.look = look;
+        const ghost = look !== Look.Defender;
+        r.body.render!.material = ghost ? ghostMat : defenderMats.body;
+        r.head.render!.material = ghost ? ghostMat : defenderMats.head;
+        // The visor is opaque and would give a ghost away: ghosts have none.
+        r.visor.enabled = !ghost;
+        if (ghost) {
+            const tint = look === Look.AllyGhost ? ALLY_TINT : ENEMY_TINT;
+            r.bodyMi.setParameter('uTint', tint);
+            r.headMi.setParameter('uTint', tint);
+            if (look === Look.AllyGhost) {
+                r.bodyMi.setParameter('uVis', ALLY_GHOST_VIS);
+                r.headMi.setParameter('uVis', ALLY_GHOST_VIS);
+            }
+        }
     };
 
     const layoutRemote = (r: Remote): void => {
@@ -176,9 +335,21 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                 r.height += (target - r.height) * k;
             }
             r.seen = stamp;
-            if (r.team !== v.team) setTeam(r, v.team);
-            r.root.enabled = v.alive;
-            if (!v.alive) continue;
+            r.team = v.team;
+            const look = v.team === 'defenders' ? Look.Defender
+                : localTeam === 'ghosts' ? Look.AllyGhost : Look.EnemyGhost;
+            if (r.look !== look) setLook(r, look);
+            let visible = v.alive;
+            if (look === Look.EnemyGhost) {
+                const vis = v.vis > 1 ? 1 : v.vis;
+                visible = visible && vis >= VIS_CULL;
+                if (visible) {
+                    r.bodyMi.setParameter('uVis', vis);
+                    r.headMi.setParameter('uVis', vis);
+                }
+            }
+            r.root.enabled = visible;
+            if (!visible) continue;
             r.root.setPosition(v.pos[0], v.pos[1], v.pos[2]);
             r.root.setEulerAngles(0, v.yaw * DEG, 0);
             r.neck.setLocalEulerAngles(v.pitch * DEG, 0, 0);
@@ -194,33 +365,80 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         active.length = w;
     };
 
-    // --- Viewmodel ---------------------------------------------------------------------------
+    // --- Viewmodels ------------------------------------------------------------------------------
     // All geometry sits at least ~0.2 m in front of the eye, well clear of the 0.05 m near plane.
-    const gun = new pc.Entity('viewmodel');
+    const gun = new pc.Entity('viewmodel-gun');
     camera.addChild(gun);
-    box(gun, gunMat, 0.05, 0.07, 0.26);                                 // receiver
-    box(gun, gunAccentMat, 0.026, 0.026, 0.22, 0, 0.012, -0.24);        // barrel
-    box(gun, gunMat, 0.036, 0.085, 0.05, 0, -0.065, -0.05);             // magazine
-    const grip = box(gun, gunAccentMat, 0.04, 0.08, 0.045, 0, -0.06, 0.08);
+    box(gun, gunMat, 0.05, 0.07, 0.26, 0, 0, 0, VM);                       // receiver
+    box(gun, gunAccentMat, 0.026, 0.026, 0.22, 0, 0.012, -0.24, VM);       // barrel
+    box(gun, gunMat, 0.036, 0.085, 0.05, 0, -0.065, -0.05, VM);            // magazine
+    const grip = box(gun, gunAccentMat, 0.04, 0.08, 0.045, 0, -0.06, 0.08, VM);
     grip.setLocalEulerAngles(-15, 0, 0);
     const muzzle = new pc.Entity('muzzle');
     muzzle.setLocalPosition(0, 0.012, -0.36);
     gun.addChild(muzzle);
-    const flash = box(muzzle, flashMat, 0.045, 0.045, 0.07, 0, 0, -0.03);
+    const flash = box(muzzle, flashMat, 0.045, 0.045, 0.07, 0, 0, -0.03, VM);
     flash.enabled = false;
+
+    // Knife: origin at the guard, blade along -Z.
+    const knife = new pc.Entity('viewmodel-knife');
+    camera.addChild(knife);
+    box(knife, bladeMat, 0.007, 0.03, 0.16, 0, 0.003, -0.08, VM);          // blade
+    box(knife, bladeMat, 0.005, 0.016, 0.03, 0, 0.01, -0.172, VM);         // tip (narrower)
+    box(knife, knifeGuardMat, 0.02, 0.055, 0.012, 0, 0, 0, VM);            // guard
+    box(knife, knifeHandleMat, 0.022, 0.028, 0.09, 0, -0.002, 0.051, VM);  // handle
+    knife.enabled = false;
+
     let recoilT = 0;
     let flashT = 0;
     let localAlive = false;
+    /** Seconds since the current knife swing started; < 0 when idle. */
+    let swingT = -1;
+    let windup = 0.2;
+    let vmTeam: Team | null = null;
 
-    const updateViewmodel = (dt: number): void => {
-        gun.enabled = localAlive;
-        recoilT = Math.max(0, recoilT - dt);
-        flashT = Math.max(0, flashT - dt);
-        flash.enabled = flashT > 0;
-        const k = recoilT / RECOIL_TIME;
-        const e = k * k;
-        gun.setLocalPosition(GUN_POS.x, GUN_POS.y + 0.012 * e, GUN_POS.z + 0.035 * e);
-        gun.setLocalEulerAngles(4 * e, 0, 0);
+    const setKnifePose = (a: number[], b: number[], t: number): void => {
+        const u = 1 - t;
+        knife.setLocalPosition(a[0] * u + b[0] * t, a[1] * u + b[1] * t, a[2] * u + b[2] * t);
+        knife.setLocalEulerAngles(a[3] * u + b[3] * t, a[4] * u + b[4] * t, a[5] * u + b[5] * t);
+    };
+
+    const updateViewmodel = (dt: number, team: Team): void => {
+        if (team !== vmTeam) {
+            vmTeam = team;
+            recoilT = 0;
+            flashT = 0;
+            swingT = -1;
+        }
+        const defender = team === 'defenders';
+        gun.enabled = localAlive && defender;
+        knife.enabled = localAlive && !defender;
+        if (defender) {
+            recoilT = Math.max(0, recoilT - dt);
+            flashT = Math.max(0, flashT - dt);
+            flash.enabled = flashT > 0;
+            const k = recoilT / RECOIL_TIME;
+            const e = k * k;
+            gun.setLocalPosition(GUN_POS.x, GUN_POS.y + 0.012 * e, GUN_POS.z + 0.035 * e);
+            gun.setLocalEulerAngles(4 * e, 0, 0);
+            return;
+        }
+        if (swingT < 0) { setKnifePose(KNIFE_REST, KNIFE_REST, 0); return; }
+        swingT += dt;
+        let t = swingT;
+        if (t < windup) {
+            const x = t / windup;
+            setKnifePose(KNIFE_REST, KNIFE_BACK, 1 - (1 - x) * (1 - x));         // ease out
+        } else if ((t -= windup) < SLASH_TIME) {
+            const x = t / SLASH_TIME;
+            setKnifePose(KNIFE_BACK, KNIFE_SLASH, x * x);                         // ease in: fast
+        } else if ((t -= SLASH_TIME) < RECOVER_TIME) {
+            const x = t / RECOVER_TIME;
+            setKnifePose(KNIFE_SLASH, KNIFE_REST, x * x * (3 - 2 * x));
+        } else {
+            swingT = -1;
+            setKnifePose(KNIFE_REST, KNIFE_REST, 0);
+        }
     };
 
     // --- Tracers and impacts --------------------------------------------------------------------
@@ -262,6 +480,11 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     const crosshair = document.getElementById('crosshair');
     const vignette = div('sb-vignette');
     const stats = div('sb-stats');
+    const visEl = div('sb-vis', stats, '');
+    const visRow = div('', visEl, 'row');
+    div('', visRow, '').textContent = 'VISIBILITY';
+    const visStateEl = div('', visRow, 'state');
+    const visFill = div('', div('', visEl, 'bar'), 'fill');
     const healthEl = div('sb-health', stats, '');
     const infoEl = div('sb-info', stats, '');
     const teamEl = infoEl.appendChild(document.createElement('span'));
@@ -286,6 +509,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     let shownConnected: boolean | null = null;
     let shownAlive: boolean | null = null;
     let shownRespawn = -1;
+    let shownVisPct = -1;
+    let shownVisState = -1;
 
     const updateHud = (dt: number, local: LocalView): void => {
         const hp = Math.max(0, Math.round(local.health));
@@ -301,6 +526,19 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             teamEl.className = local.team;
             teamEl.textContent = local.team.toUpperCase();
             idEl.textContent = ` · ${playerName(local.id)} · `;
+            visEl.style.display = local.team === 'ghosts' ? 'block' : 'none';
+        }
+        if (local.team === 'ghosts') {
+            const vis = Math.min(1, Math.max(0, local.vis));
+            // Square root so a running ghost (0.35) already fills ~60% of the bar.
+            const pct = Math.round(Math.sqrt(vis) * 100);
+            if (pct !== shownVisPct) { shownVisPct = pct; visFill.style.width = `${pct}%`; }
+            const state = vis < 0.02 ? 0 : vis >= 0.5 ? 2 : 1;
+            if (state !== shownVisState) {
+                shownVisState = state;
+                visStateEl.textContent = state === 0 ? 'HIDDEN' : state === 2 ? 'EXPOSED' : 'SEEN';
+                visEl.className = state === 0 ? 'hidden' : state === 2 ? 'exposed' : '';
+            }
         }
         if (ping !== shownPing) { shownPing = ping; pingEl.textContent = `${ping} ms`; }
         if (local.connected !== shownConnected) {
@@ -341,14 +579,17 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         frame(dt: number, local: LocalView, remotes: readonly RemoteView[]): void {
             localAlive = local.alive;
             localId = local.id;
+            localTeam = local.team;
+            time = (time + dt) % 1000;
+            ghostMat.setParameter('uTime', time);
             updateRemotes(dt, remotes);
-            updateViewmodel(dt);
+            updateViewmodel(dt, local.team);
             updateEffects(dt);
             updateHud(dt, local);
         },
 
         shot(from: Vec3, to: Vec3, isLocal: boolean): void {
-            if (isLocal && localAlive) {
+            if (isLocal && localAlive && vmTeam === 'defenders') {
                 recoilT = RECOIL_TIME;
                 flashT = FLASH_TIME;
                 flash.setLocalEulerAngles(0, 0, Math.random() * 90);
@@ -377,6 +618,11 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             tr.t = TRACER_LIFE;
         },
 
+        knifeSwing(windupSeconds: number): void {
+            windup = Math.max(0.01, windupSeconds);
+            swingT = 0;
+        },
+
         hitConfirm(head: boolean, killed: boolean): void {
             hitDur = killed ? 0.25 : 0.12;
             hitT = hitDur;
@@ -390,10 +636,10 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             vignette.style.opacity = vignetteLevel.toFixed(3);
         },
 
-        killFeed(killerId: number, victimId: number, head: boolean): void {
+        killFeed(killerId: number, victimId: number, kind: KillKind): void {
             const reuse = feed.length >= KILLFEED_MAX ? feed.pop()! : null;
             const el = reuse ? reuse.el : document.createElement('div');
-            el.textContent = `${playerName(killerId)} ▸ ${playerName(victimId)}${head ? ' (HS)' : ''}`;
+            el.textContent = `${playerName(killerId)} ▸ ${playerName(victimId)}${KILL_SUFFIX[kind]}`;
             el.className = killerId === localId || victimId === localId ? 'me' : '';
             el.style.opacity = '';
             feedEl.insertBefore(el, feedEl.firstChild);

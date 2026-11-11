@@ -12,6 +12,7 @@ npm run dev
 This starts the game server (ws://localhost:8080) and the web client. Open http://localhost:5173; every browser tab that opens it is another player.
 
 - `npm run bot` adds a headless player that walks in and strafes, for testing alone (`npm run bot -- --shoot` makes it fire).
+- The first player to join is a ghost, the second a defender, and so on alternately. To play a defender alone, start the bot before opening the page.
 - Add `?lag=150` to the URL to simulate 150 ms of round-trip latency.
 - Add `?server=ws://host:port` to connect to a server elsewhere.
 
