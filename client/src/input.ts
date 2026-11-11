@@ -9,6 +9,12 @@ export class Input {
     pitch = 0;
     private readonly keys = new Set<string>();
     private jumpQueued = false;
+    private mouseFire = false;
+
+    /** Left mouse while the pointer is captured; F also fires so it can be driven without pointer lock. */
+    get fire(): boolean {
+        return this.mouseFire || this.keys.has('KeyF');
+    }
 
     constructor(private readonly canvas: HTMLCanvasElement) {
         window.addEventListener('keydown', e => {
@@ -16,7 +22,9 @@ export class Input {
             this.keys.add(e.code);
         });
         window.addEventListener('keyup', e => this.keys.delete(e.code));
-        window.addEventListener('blur', () => this.keys.clear());
+        window.addEventListener('blur', () => { this.keys.clear(); this.mouseFire = false; });
+        document.addEventListener('mousedown', e => { if (e.button === 0 && this.locked) this.mouseFire = true; });
+        document.addEventListener('mouseup', e => { if (e.button === 0) this.mouseFire = false; });
         document.addEventListener('mousemove', e => {
             if (!this.locked) return;
             this.yaw -= e.movementX * SENSITIVITY;

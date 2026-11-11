@@ -27,3 +27,21 @@ export const GRAVITY = 20;
 export const JUMP_SPEED = 7.0;
 /** Tallest ledge walked up without jumping. */
 export const STEP_HEIGHT = 0.35;
+
+// Combat (placeholder rifle for everyone until ghost mechanics arrive in Milestone 3).
+export const MAX_HEALTH = 100;
+export const BODY_DAMAGE = 34;
+export const HEAD_DAMAGE = 100;
+/** Top slice of the hull that counts as the head. */
+export const HEAD_ZONE = 0.28;
+export const FIRE_INTERVAL_MS = 100;
+/** Fire rate is counted in the shooter's own commands so client and server always agree on it. */
+export const FIRE_INTERVAL_TICKS = Math.round((FIRE_INTERVAL_MS / 1000) * TICK_RATE);
+export const SHOT_RANGE = 120;
+export const RESPAWN_MS = 3000;
+
+// Netcode.
+/** Clients draw other players this far in the past so there are always two snapshots to blend. */
+export const INTERP_DELAY_MS = 100;
+/** Furthest back the server will rewind players when resolving a shot. */
+export const MAX_REWIND_MS = 300;

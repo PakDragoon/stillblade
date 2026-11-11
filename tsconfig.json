@@ -3,7 +3,7 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -16,5 +16,5 @@
       "@shared/*": ["./shared/*"]
     }
   },
-  "include": ["client/src", "shared", "vite.config.ts"]
+  "include": ["client/src", "shared", "server/src", "tools", "vite.config.ts"]
 }

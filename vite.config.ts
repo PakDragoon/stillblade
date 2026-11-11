@@ -16,6 +16,6 @@ export default defineConfig({
     },
     test: {
         root: '.',
-        include: ['shared/**/*.test.ts']
+        include: ['shared/**/*.test.ts', 'server/**/*.test.ts']
     }
 });
