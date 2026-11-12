@@ -27,6 +27,6 @@ To put the game online, see [DEPLOY.md](DEPLOY.md).
 - `shared/` — deterministic movement and collision, run by both the client and (later) the authoritative server. Tests: `npm test`.
 - `server/` — authoritative match server (Node + WebSockets). `game.ts` has no socket code, so the rules, hit detection and lag compensation are unit-tested directly.
 - `client/` — PlayCanvas client (Vite root). Maps live in `client/public/maps/` as a `.glb` (visuals) plus a `.json` (collision boxes, spawns, bomb sites).
-- `tools/blender/` — headless Blender scripts that generate maps. Rebuild the greybox with `npm run map:greybox` (about 3 minutes: it bakes the lighting; add `-- -- --no-bake` to skip the bake).
+- `tools/blender/` — headless Blender scripts that generate maps. Rebuild the greybox with `npm run map:greybox` (about 7 minutes: it bakes the lighting; add `-- -- --no-bake` to skip the bake).
 
 Maps are built only from axis-aligned boxes; the collision system supports nothing else.

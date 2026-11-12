@@ -744,5 +744,41 @@
       ]
     }
   ],
-  "baked": "greybox_baked.webp"
+  "baked": "greybox_baked.webp",
+  "look": {
+    "lightmap": "greybox_baked.webp",
+    "lightScale": 2.0,
+    "materials": {
+      "map_floor": {
+        "albedo": "tex_floor.webp",
+        "tile": 2.5
+      },
+      "map_wall_outer": {
+        "albedo": "tex_wall_outer.webp",
+        "tile": 1.5
+      },
+      "map_wall_inner": {
+        "albedo": "tex_wall_inner.webp",
+        "tile": 2.0
+      },
+      "map_crate": {
+        "albedo": "tex_crate.webp",
+        "tile": 1.87
+      },
+      "map_metal": {
+        "albedo": "tex_metal.webp",
+        "tile": 2.5
+      },
+      "map_paint": {
+        "albedo": "tex_floor.webp",
+        "tile": 2.5,
+        "tint": 2.0,
+        "decal": true
+      }
+    },
+    "sky": {
+      "texture": "sky.jpg",
+      "elevMin": -6.0
+    }
+  }
 }

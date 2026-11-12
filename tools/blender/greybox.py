@@ -1,29 +1,48 @@
 """
 Stillblade greybox test map generator.
 
-Run headless:
+ONE command regenerates everything shipped for this map:
   blender --background --python tools/blender/greybox.py
   blender --background --python tools/blender/greybox.py -- --no-bake
       (skip the Cycles bake and reuse the existing baked texture; the lightmap
        UV layout is deterministic, so the old texture still lines up)
   Optional overrides for quick look-dev: -- --samples 64 --size 1024
 
-Outputs (relative to this file):
-  ../../client/public/maps/greybox.glb        visual mesh: ONE mesh, ONE material
-  ../../client/public/maps/greybox.json       collision boxes + gameplay data (engine coords)
-  ../../client/public/maps/greybox_baked.webp baked lighting atlas (sRGB)
+Outputs (relative to this file, all in ../../client/public/maps/):
+  greybox.glb          visual meshes: world (one primitive per surface material) + paint decals
+  greybox.json         collision boxes + gameplay data (engine coords) + "look" (render setup)
+  greybox_baked.webp   baked LIGHT atlas (lighting only, no surface colour; encoding below)
+  tex_*.webp           tiling albedo textures, one per surface material
+  sky.jpg              tonemapped LDR sky (upper hemisphere equirect strip)
+
+Source art (CC0, see client/public/maps/CREDITS.md) lives in tools/blender/source-art/,
+which is NOT committed (raw downloads are large). When it is missing, the texture and sky
+processing steps are skipped and the already shipped tex_*.webp / sky.jpg are reused
+(the bake then reads the mean albedo of each material from the shipped texture).
 
 Baked lighting:
-  The world is lit once in Cycles (warm sun + cool sky + diffuse bounce) and the
-  COMBINED result (albedo x direct + indirect) is baked into a single atlas.
-  The game draws the world unlit from that atlas (client/src/maplook.ts).
+  The world is lit once in Cycles by the Poly Haven HDRI sky (sun disc removed and
+  replaced by an explicit sun lamp at the HDRI's sun direction, so shadows are crisp
+  and noise-free) with realistic surface albedos for correct coloured bounce. The bake
+  stores DIFFUSE DIRECT+INDIRECT WITHOUT the colour pass, i.e. pure incoming light.
+  The game multiplies it with the tiling albedo textures (client/src/maplook.ts):
+      colour = albedo(TEXCOORD_0 / tile) * COLOR_0 * light(TEXCOORD_1)
+  Light encoding (8-bit sRGB atlas): stored = srgb_encode(light / LIGHT_SCALE),
+  decoded on the GPU as  light = srgb_decode(texel) * LIGHT_SCALE  (LIGHT_SCALE = 2,
+  written to greybox.json as look.lightScale). Light above 2.0 clips.
   GLB vertex layout:
-    TEXCOORD_0  world-space planar UVs, 1 unit = 1 m (for future detail textures)
+    TEXCOORD_0  world-space planar UVs, 1 unit = 1 m (tiling albedo textures)
     TEXCOORD_1  lightmap UVs into greybox_baked.* (non-overlapping, texel aligned)
-    COLOR_0     flat category colour (fallback look when the atlas is not applied)
+    COLOR_0     linear albedo multiplier: skirting band / grime gradient / large-scale
+                variation / per-box tint (walls, floor, crates) and paint colour (decals)
   Faces that can never be seen (box bottoms resting on the floor, faces pressed
   against or buried inside another box, the outside of the outer walls, the
   floor's underside/edges) are dropped before UV packing so no texels are wasted.
+  After packing, wall and floor faces are cut into sub-quads (same plane, UVs
+  interpolated inside the face's lightmap island) purely to carry vertex colour.
+  Paint decals (bomb-site markings, wall letters) are flat quads a few mm off their
+  surface; they are NOT in the bake and reuse the lightmap island of the surface
+  underneath, so they get exactly its lighting.
 
 Single source of truth: BOXES below. Every solid in the map is an axis-aligned
 box; the same list drives both the Blender meshes and the collision JSON.
@@ -48,6 +67,10 @@ GLB_PATH = os.path.join(OUT_DIR, "greybox.glb")
 JSON_PATH = os.path.join(OUT_DIR, "greybox.json")
 BAKED_NAME = "greybox_baked.webp"
 BAKED_PATH = os.path.join(OUT_DIR, BAKED_NAME)
+SOURCE_DIR = os.path.join(HERE, "source-art")
+SKY_NAME = "sky.jpg"
+SKY_PATH = os.path.join(OUT_DIR, SKY_NAME)
+HDRI_PATH = os.path.join(SOURCE_DIR, "hdri", "kloofendal_48d_partly_cloudy_puresky_2k.hdr")
 
 
 def parse_args():
@@ -189,24 +212,78 @@ SPAWNS = {
     "defenders": [((x, 20.0), 180.0) for x in (-4.0, -2.0, 0.0, 2.0, 4.0)],
 }
 
-# Surface colours: category -> (bake material name, linear RGB). These are the
-# albedos the bake multiplies with light; the exported GLB has ONE material.
-MATERIALS = {
-    "floor": ("mat_floor", (0.24, 0.24, 0.25)),
-    "wall": ("mat_wall", (0.46, 0.46, 0.475)),
-    "crate": ("mat_crate", (0.68, 0.45, 0.21)),
-    "platform": ("mat_platform", (0.38, 0.45, 0.55)),
-    "site_A": ("mat_site_a", (0.66, 0.15, 0.12)),
-    "site_B": ("mat_site_b", (0.12, 0.27, 0.65)),
+# ---------------------------------------------------------------------------
+# Surface materials (art pass)
+# ---------------------------------------------------------------------------
+# key -> albedo texture processing + tiling. `src` is a CC0 Poly Haven diffuse map in
+# source-art/textures/ (see CREDITS.md); it is resized, low-frequency "detiled" (large
+# blotches that would repeat visibly are flattened), reduced in contrast (log space),
+# desaturated, and scaled to the target mean linear albedo `albedo` (x `tint`).
+# `tile` = metres covered by one texture repeat (the source's real-world size).
+TEXTURE_SIZE = 1024
+TEXTURE_WEBP_QUALITY = 82
+TEXTURES = {
+    "floor": dict(src="concrete_floor_02_diff_1k.jpg", out="tex_floor.webp", tile=2.5,
+                  albedo=0.23, contrast=0.75, sat=0.45, detile=0.55, tint=(1.0, 0.99, 0.96)),
+    "wall_outer": dict(src="factory_brick_diff_1k.jpg", out="tex_wall_outer.webp", tile=1.5,
+                       albedo=0.2, contrast=0.75, sat=0.85, detile=0.6, tint=(1.0, 1.0, 1.0)),
+    "wall_inner": dict(src="concrete_wall_004_diff_1k.jpg", out="tex_wall_inner.webp", tile=2.0,
+                       albedo=0.27, contrast=0.9, sat=0.8, detile=0.5, tint=(1.0, 1.0, 1.0)),
+    "crate": dict(src="raw_plank_wall_diff_1k.jpg", out="tex_crate.webp", tile=1.87,
+                  albedo=0.30, contrast=0.7, sat=0.85, detile=0.5, tint=(1.0, 1.0, 1.0)),
+    "metal": dict(src="blue_metal_plate_diff_1k.jpg", out="tex_metal.webp", tile=2.5,
+                  albedo=0.19, contrast=0.8, sat=0.35, detile=0.5, tint=(1.0, 1.0, 1.0)),
 }
+# Export material name per surface key (maplook.ts matches meshes by these names).
+EXPORT_NAMES = {k: "map_" + k for k in list(TEXTURES) + ["paint"]}
+PAINT_TINT = 2.0             # paint decals: floor texture x COLOR_0 x 2 (COLOR_0 is <= 1)
 CATEGORY_TO_MAT = {
     "floor": "floor",
-    "outer_wall": "wall",
-    "inner_wall": "wall",
+    "outer_wall": "wall_outer",
+    "inner_wall": "wall_inner",
     "crate": "crate",
-    "platform": "platform",
-    "stairs": "platform",
+    "platform": "metal",
+    "stairs": "metal",
 }
+
+# Vertex-colour shaping (multipliers on the albedo; 1 = texture as is)
+SKIRT_H = 0.3                # dark painted base band on every wall
+SKIRT_MUL = 0.55
+GRIME_TOP = 1.4              # grime gradient from the skirting up to this height
+GRIME_MUL = 0.84
+CAP_H = 0.15                 # darker coping band at the top of the walls
+CAP_MUL = 0.8
+WALL_TOP_MUL = 0.8           # top faces of walls
+SUBDIV = 3.0                 # metres between vertex-colour sub-quad cuts on walls/floor
+NOISE_SCALE = 4.0            # metres per value-noise lattice cell
+NOISE_AMP = {"floor": 0.16, "wall_outer": 0.10, "wall_inner": 0.08}
+PAINT_Z = (0.006, 0.012)     # paint decal offsets above the floor: fill, lines/letters
+WALL_PAINT_OFF = 0.008       # wall letters off the wall surface
+
+# Paint colours (COLOR_0, linear; the paint material multiplies by PAINT_TINT).
+PAINT = {
+    "A": dict(line=(0.95, 0.10, 0.07), fill=(0.62, 0.44, 0.42)),
+    "B": dict(line=(0.09, 0.27, 1.0), fill=(0.42, 0.48, 0.66)),
+}
+SITE_LINE_W = 0.25           # painted border width
+# 8x10 bold stencil glyphs (2-cell strokes), top row first.
+GLYPHS = {
+    "A": ["..####..", ".######.", "###..###", "##....##", "##....##",
+          "########", "########", "##....##", "##....##", "##....##"],
+    "B": ["#######.", "########", "##....##", "##....##", "#######.",
+          "#######.", "##....##", "##....##", "########", "#######."],
+}
+GLYPH_W, GLYPH_H = 8, 10
+# Floor letters: (site, centre (x, y), cell size) - placed clear of the site crates.
+FLOOR_LETTERS = [("A", (-10.2, 12.25), 0.25), ("B", (7.9, 10.25), 0.25)]
+# Wall letters: (site, face point on the wall plane (x, y, z centre), outward normal axis
+# and sign, cell size). Upright, readable from in front of the wall.
+WALL_LETTERS = [
+    ("A", (-6.9, 6.0, 1.75), (1, -1), 0.17),     # site A entry wall, facing the A lane
+    ("A", (-4.75, 12.5, 1.75), (0, 1), 0.17),    # mid connector wall, facing mid
+    ("B", (6.9, 6.0, 1.75), (1, -1), 0.17),      # site B entry wall, facing the B lane
+    ("B", (4.75, 12.5, 1.75), (0, -1), 0.17),    # mid connector wall, facing mid
+]
 
 
 # ---------------------------------------------------------------------------
@@ -334,17 +411,35 @@ def verify():
 # ---------------------------------------------------------------------------
 # Lighting / bake settings
 # ---------------------------------------------------------------------------
-# Direction TOWARD the sun. Same azimuth as the realtime sun in client/src/main.ts
-# (which still lights players and the viewmodel), at a 50 degree elevation so
-# shadows are readable but lanes are not drowned in shade.
-SUN_HORIZONTAL = (0.573, -0.820)    # (x, y), normalised: sun over the ghost/east side
-SUN_ELEVATION = math.radians(50.0)
-SUN_COLOR = (1.0, 0.93, 0.82)       # slightly warm
-SUN_STRENGTH = 2.2                  # W/m^2 (calibrated: shade ~45-70 % of sunlit)
-SUN_ANGLE = math.radians(3.0)       # angular diameter -> soft-ish penumbra
-SKY_COLOR = (0.72, 0.83, 1.0)       # slightly cool
-SKY_STRENGTH = 1.25
-DIFFUSE_BOUNCES = 3
+# The sky is the Poly Haven HDRI "Kloofendal 48d Partly Cloudy (Pure Sky)", used unrotated.
+# Its sun sits at 47.9 deg elevation; horizontally, toward the sun is (0.827, -0.562) in
+# Blender (x, y): over the east / ghost side, so lane walls throw shadows across the lanes.
+# The realtime sun in client/src/main.ts (players + viewmodel) uses the same direction
+# (engine euler (42, 55.8, 0)); the script checks the HDRI agrees with these constants.
+SUN_HORIZONTAL = (0.827, -0.562)    # (x, y), normalised
+SUN_ELEVATION = math.radians(47.9)
+HDRI_SUN_CLAMP = 3.0                # sky radiance above this (the sun disc + halo) moves into the lamp
+# Art direction: the real sun:sky ratio of the HDRI leaves shade at ~15-20 % of sunlit,
+# far too dark to read ghosts in. The sun is dimmed and the sky fill lifted so shade
+# lands at ~35-50 % of sunlit while the sunlit floor stays around 1.6 (light units).
+SUN_SCALE = 0.40                    # x the irradiance removed from the HDRI
+SUN_WARMTH = (1.0, 0.93, 0.80)      # a little warmer than the HDRI's sun
+SKY_SCALE = 2.6                     # x the (sun-less) HDRI radiance as fill light
+SKY_FILL_TINT = (1.1, 1.0, 0.82)    # tames the HDRI's strong blue so shade is cool, not navy
+SKY_DISPLAY_EXPOSURE = 1.25         # shipped sky image: x HDRI radiance before tonemapping
+SUN_ANGLE = math.radians(1.2)       # angular diameter -> soft-edged shadows
+DIFFUSE_BOUNCES = 4
+LIGHT_SCALE = 2.0                   # atlas stores light / LIGHT_SCALE (then sRGB); shader undoes it
+# Baked accent lights (point lamps, light only): (position, colour, power W, radius)
+ACCENT_LIGHTS = [
+    ((-9.0, 11.0, 3.2), (1.0, 0.35, 0.25), 120.0, 0.6),   # site A: red-ish
+    ((9.0, 11.0, 3.2), (0.3, 0.5, 1.0), 120.0, 0.6),      # site B: blue-ish
+    ((-5.0, -5.0, 3.0), (1.0, 0.7, 0.4), 45.0, 0.3),       # lane L door: warm
+    ((5.0, 1.0, 3.0), (1.0, 0.7, 0.4), 45.0, 0.3),         # lane R door: warm
+]
+SKY_W, SKY_H = 2048, 512            # shipped sky strip size
+SKY_ELEV_MIN = -6.0                 # degrees: bottom row of the strip (below: clamped)
+SKY_JPEG_QUALITY = 88
 LIGHTMAP_PAD = 4                    # texels of padding on each side of every island
 WEBP_QUALITY = 92
 DITHER = 0.6                        # breaks up 8-bit banding in soft gradients
@@ -413,12 +508,9 @@ def face_hidden(idx, mn, mx, axis, sign, solids, map_mn, map_mx):
 
 
 def collect_faces():
-    """All visible box faces: list of dicts {pts, axis, key}."""
+    """All visible box faces: list of dicts {pts, axis, sign, key, box, top}."""
     solids = [(cat, mn, mx) for _n, cat, mn, mx in BOXES]
     keys = [CATEGORY_TO_MAT[cat] for _n, cat, _mn, _mx in BOXES]
-    for name, (x0, y0), (x1, y1) in SITES:
-        solids.append(("site", (x0, y0, 0.0), (x1, y1, DECAL_T)))
-        keys.append("site_" + name)
     map_mn = [min(b[2][i] for b in BOXES) for i in range(3)]
     map_mx = [max(b[3][i] for b in BOXES) for i in range(3)]
     occluders = [(mn, mx) for _c, mn, mx in solids]
@@ -430,7 +522,8 @@ def collect_faces():
             if face_hidden(idx, mn, mx, axis, sign, occluders, map_mn, map_mx):
                 hidden += 1
                 continue
-            faces.append({"pts": [v[i] for i in f], "axis": axis, "key": keys[idx]})
+            faces.append({"pts": [v[i] for i in f], "axis": axis, "sign": sign, "key": keys[idx],
+                          "box": idx, "top": mx[2]})
     return faces, hidden
 
 
@@ -528,6 +621,151 @@ def world_uv(p, axis):
     return {2: (x, y), 1: (x, z), 0: (y, z)}[axis]
 
 
+def face_st(f, point, tol=1e-4):
+    """(s, t) of `point` on rectangle face f (p0 + s*e1 + t*e3), or None if off the face."""
+    p = f["pts"]
+    if abs(point[f["axis"]] - p[0][f["axis"]]) > tol:
+        return None
+    e1 = [p[1][i] - p[0][i] for i in range(3)]
+    e3 = [p[3][i] - p[0][i] for i in range(3)]
+    d = [point[i] - p[0][i] for i in range(3)]
+    s = sum(d[i] * e1[i] for i in range(3)) / sum(c * c for c in e1)
+    t = sum(d[i] * e3[i] for i in range(3)) / sum(c * c for c in e3)
+    if not (-1e-6 <= s <= 1 + 1e-6 and -1e-6 <= t <= 1 + 1e-6):
+        return None
+    return s, t
+
+
+def lerp_face(f, s, t, field):
+    q = f[field]
+    return tuple(q[0][i] + s * (q[1][i] - q[0][i]) + t * (q[3][i] - q[0][i]) for i in range(len(q[0])))
+
+
+def _hash_u32(*vals):
+    h = 2166136261
+    for v in vals:
+        h ^= v & 0xFFFFFFFF
+        h = (h * 16777619) & 0xFFFFFFFF
+    h ^= h >> 15
+    h = (h * 0x2C1B3C6D) & 0xFFFFFFFF
+    h ^= h >> 12
+    h = (h * 0x297A2D39) & 0xFFFFFFFF
+    h ^= h >> 15
+    return h
+
+
+def hash_signed(*vals):
+    return _hash_u32(*vals) / 2147483647.5 - 1.0          # [-1, 1]
+
+
+def name_rand(name, salt=0):
+    import zlib
+    return hash_signed(zlib.crc32(name.encode("utf-8")), salt)
+
+
+def value_noise(p):
+    """Smooth deterministic 3D value noise in [-1, 1], lattice NOISE_SCALE metres."""
+    q = [c / NOISE_SCALE for c in p]
+    i0 = [int(math.floor(c)) for c in q]
+    fr = [c - math.floor(c) for c in q]
+    w = [f * f * (3 - 2 * f) for f in fr]
+    acc = 0.0
+    for dx in (0, 1):
+        for dy in (0, 1):
+            for dz in (0, 1):
+                wt = (w[0] if dx else 1 - w[0]) * (w[1] if dy else 1 - w[1]) * (w[2] if dz else 1 - w[2])
+                acc += wt * hash_signed(i0[0] + dx, i0[1] + dy, i0[2] + dz, 7)
+    return acc
+
+
+def box_tint(f):
+    """Per-box albedo multiplier (RGB): crates vary in brightness/warmth, walls barely."""
+    name = BOXES[f["box"]][0]
+    if f["key"] == "crate":
+        b = 0.95 + 0.13 * name_rand(name)
+        h = 0.06 * name_rand(name, 1)
+        return (b * (1 + h), b, b * (1 - h))
+    if f["key"] in ("wall_outer", "wall_inner"):
+        b = 1.0 + 0.035 * name_rand(name)
+        return (b, b, b)
+    return (1.0, 1.0, 1.0)
+
+
+def grid_cuts(p0, e, axis_world, spacing):
+    """Parameter values in (0, 1) where p0 + s*e crosses world multiples of `spacing`."""
+    a, b = p0[axis_world], p0[axis_world] + e[axis_world]
+    lo, hi = min(a, b), max(a, b)
+    out = []
+    k = math.floor(lo / spacing) + 1
+    while k * spacing < hi - 0.25:
+        if k * spacing > lo + 0.25:
+            out.append((k * spacing - a) / (b - a))
+        k += 1
+    return out
+
+
+def subdivide(f):
+    """Cut a face into sub-quads that carry vertex colour. Returns [(pts, lm, cols)]."""
+    p = f["pts"]
+    e1 = [p[1][i] - p[0][i] for i in range(3)]
+    e3 = [p[3][i] - p[0][i] for i in range(3)]
+    key, axis = f["key"], f["axis"]
+    is_wall = key in ("wall_outer", "wall_inner")
+    s_cuts, t_cuts = [], []
+    vert_edge = None
+    if axis == 2:
+        if key == "floor":
+            s_cuts = grid_cuts(p[0], e1, 0 if abs(e1[0]) > EPS else 1, SUBDIV)
+            t_cuts = grid_cuts(p[0], e3, 0 if abs(e3[0]) > EPS else 1, SUBDIV)
+    elif is_wall:
+        vert_edge = 3 if abs(e3[2]) > EPS else 1
+        horiz = e1 if vert_edge == 3 else e3
+        hcuts = grid_cuts(p[0], horiz, 0 if abs(horiz[0]) > EPS else 1, SUBDIV)
+        ev = e3 if vert_edge == 3 else e1
+        z0 = p[0][2]
+        vcuts = []
+        for z in (SKIRT_H, GRIME_TOP, f["top"] - CAP_H):
+            s = (z - z0) / ev[2]
+            if 1e-4 < s < 1 - 1e-4:
+                vcuts.append(s)
+        vcuts.sort()
+        if vert_edge == 3:
+            s_cuts, t_cuts = hcuts, vcuts
+        else:
+            s_cuts, t_cuts = vcuts, hcuts
+    S = [0.0] + sorted(s_cuts) + [1.0]
+    T = [0.0] + sorted(t_cuts) + [1.0]
+    tint = box_tint(f)
+    amp = NOISE_AMP.get(key, 0.0)
+
+    def colour(pt, band):
+        m = 1.0 + amp * value_noise(pt) if amp else 1.0
+        if is_wall:
+            if axis == 2:
+                m *= WALL_TOP_MUL
+            elif band == "skirt":
+                m *= SKIRT_MUL
+            elif band == "cap":
+                m *= CAP_MUL
+            else:
+                g = min(1.0, max(0.0, (pt[2] - SKIRT_H) / (GRIME_TOP - SKIRT_H)))
+                m *= GRIME_MUL + (1.0 - GRIME_MUL) * g
+        return tuple(min(1.0, c * m) for c in tint)
+
+    out = []
+    for j in range(len(T) - 1):
+        for i in range(len(S) - 1):
+            corners = [(S[i], T[j]), (S[i + 1], T[j]), (S[i + 1], T[j + 1]), (S[i], T[j + 1])]
+            pts = [lerp_face(f, s, t, "pts") for s, t in corners]
+            lm = [lerp_face(f, s, t, "lm") for s, t in corners]
+            band = None
+            if is_wall and axis != 2:
+                mz = sum(q[2] for q in pts) / 4
+                band = "skirt" if mz < SKIRT_H else ("cap" if mz > f["top"] - CAP_H else "body")
+            out.append((pts, lm, [colour(q, band) for q in pts]))
+    return out
+
+
 def make_bake_material(name, rgb):
     """Pure diffuse albedo for the bake (no specular, so the bake is view independent)."""
     mat = bpy.data.materials.new(name)
@@ -543,17 +781,16 @@ def make_bake_material(name, rgb):
     return mat
 
 
-def make_export_material():
-    """The single material written to the GLB. White base colour multiplied by
-    COLOR_0 gives the old flat greybox look if the baked atlas is not applied;
-    maplook.ts replaces it with an unlit material sampling the atlas on UV1."""
-    mat = bpy.data.materials.new("mat_world")
+def make_export_material(name, rgb):
+    """A material written to the GLB. Only its NAME matters to the game: maplook.ts swaps
+    it for the unlit albedo x lightmap shader (the base colour is a plain fallback)."""
+    mat = bpy.data.materials.new(name)
     if mat.node_tree is None:
         mat.use_nodes = True
     bsdf = next((n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
     if bsdf is None:
         bsdf = mat.node_tree.nodes.new("ShaderNodeBsdfPrincipled")
-    bsdf.inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+    bsdf.inputs["Base Color"].default_value = (rgb[0], rgb[1], rgb[2], 1.0)
     bsdf.inputs["Roughness"].default_value = 0.9
     bsdf.inputs["Metallic"].default_value = 0.0
     return mat
@@ -567,52 +804,144 @@ def reset_scene():
             coll.remove(item)
 
 
-def build_scene(atlas_size):
-    """One mesh object for the whole world, one bake material per category."""
-    faces, hidden = collect_faces()
-    density, fill = pack_lightmap(faces, atlas_size)
+SURFACE_KEYS = ["floor", "wall_outer", "wall_inner", "crate", "metal"]
 
-    keys = list(MATERIALS.keys())
+
+def make_mesh_object(name, quads, mat_keys, materials):
+    """quads: [(pts, lm, cols, axis, key)] -> mesh object with UV0 world, UV1 lightmap, COLOR_0."""
     verts, polys = [], []
-    for f in faces:
+    for q in quads:
         base = len(verts)
-        verts.extend(f["pts"])
+        verts.extend(q[0])
         polys.append((base, base + 1, base + 2, base + 3))
-    mesh = bpy.data.meshes.new("greybox_world")
+    mesh = bpy.data.meshes.new(name)
     mesh.from_pydata(verts, [], polys)
     mesh.validate()
     mesh.update()
-    for key in keys:
-        mesh.materials.append(make_bake_material(*MATERIALS[key]))
-
+    for m in materials:
+        mesh.materials.append(m)
     uv_world = mesh.uv_layers.new(name="world")       # -> TEXCOORD_0
     uv_lm = mesh.uv_layers.new(name="lightmap")       # -> TEXCOORD_1
     col = mesh.color_attributes.new("Color", "BYTE_COLOR", "CORNER")
     mesh.color_attributes.active_color = col
-    if len(mesh.polygons) != len(faces):
-        raise RuntimeError("mesh validation changed the face count")
+    if len(mesh.polygons) != len(quads):
+        raise RuntimeError("mesh validation changed the face count of %s" % name)
     for pi, poly in enumerate(mesh.polygons):
-        f = faces[pi]
+        pts, lm, cols, axis, key = quads[pi]
         poly.use_smooth = False
-        poly.material_index = keys.index(f["key"])
-        rgb = MATERIALS[f["key"]][1]
+        poly.material_index = mat_keys.index(key)
         for li in poly.loop_indices:
             corner = mesh.loops[li].vertex_index - 4 * pi
             if not 0 <= corner < 4:
                 raise RuntimeError("unexpected loop order after validate()")
-            uv_world.data[li].uv = world_uv(f["pts"][corner], f["axis"])
-            uv_lm.data[li].uv = f["lm"][corner]
-            col.data[li].color = (rgb[0], rgb[1], rgb[2], 1.0)
+            uv_world.data[li].uv = world_uv(pts[corner], axis)
+            uv_lm.data[li].uv = lm[corner]
+            c = cols[corner]
+            col.data[li].color = (c[0], c[1], c[2], 1.0)
     uv_lm.active_render = True
     uv_lm.active = True
-
-    obj = bpy.data.objects.new("greybox_world", mesh)
+    obj = bpy.data.objects.new(name, mesh)
     bpy.context.scene.collection.objects.link(obj)
-    print("[greybox] world mesh: %d faces kept, %d hidden faces removed, %d verts"
-          % (len(faces), hidden, len(verts)))
+    return obj, len(verts)
+
+
+def build_scene(atlas_size, albedos):
+    """One mesh object for the whole world, one bake material per surface key."""
+    faces, hidden = collect_faces()
+    density, fill = pack_lightmap(faces, atlas_size)
+    quads = []
+    for f in faces:
+        for pts, lm, cols in subdivide(f):
+            quads.append((pts, lm, cols, f["axis"], f["key"]))
+    mats = [make_bake_material("bake_" + k, albedos[k]) for k in SURFACE_KEYS]
+    obj, nverts = make_mesh_object("greybox_world", quads, SURFACE_KEYS, mats)
+    print("[greybox] world mesh: %d faces kept, %d hidden faces removed, %d sub-quads, %d verts"
+          % (len(faces), hidden, len(quads), nverts))
     print("[greybox] lightmap: %d^2, %.1f texels/m (%.1f cm/texel), %.0f%% of atlas used by islands, pad %d"
           % (atlas_size, density, 100.0 / density, fill * 100, LIGHTMAP_PAD))
-    return obj, faces, len(keys)
+    return obj, faces
+
+
+# ---------------------------------------------------------------------------
+# Paint decals (visual only, not baked: they borrow the lightmap of the surface below)
+# ---------------------------------------------------------------------------
+def glyph_runs(letter):
+    """Horizontal runs of filled cells: [(row_from_top, col0, col1_exclusive)]."""
+    runs = []
+    for r, row in enumerate(GLYPHS[letter]):
+        c = 0
+        while c < len(row):
+            if row[c] == "#":
+                c0 = c
+                while c < len(row) and row[c] == "#":
+                    c += 1
+                runs.append((r, c0, c))
+            else:
+                c += 1
+    return runs
+
+
+def find_face(faces, point, axis, sign):
+    for f in faces:
+        if f["axis"] == axis and f["sign"] == sign and face_st(f, point) is not None:
+            return f
+    raise RuntimeError("no visible face under decal point %s" % (point,))
+
+
+def decal_quad(faces, corners, axis, sign, off, key, col):
+    """A flat quad lying `off` metres in front of the face it is painted on."""
+    f = None
+    lm = []
+    for c in corners:
+        f = find_face(faces, c, axis, sign) if f is None or face_st(f, c) is None else f
+        s, t = face_st(f, c)
+        lm.append(lerp_face(f, s, t, "lm"))
+    pts = []
+    for c in corners:
+        q = list(c)
+        q[axis] += sign * off
+        pts.append(tuple(q))
+    return (pts, lm, [col] * 4, axis, key)
+
+
+def build_paint(faces):
+    quads = []
+    zf, zl = PAINT_Z
+    for name, (x0, y0), (x1, y1) in SITES:
+        pc_ = PAINT[name]
+        w = SITE_LINE_W
+
+        def rect(ax0, ay0, ax1, ay1, z_off, colr):
+            corners = [(ax0, ay0, 0.0), (ax1, ay0, 0.0), (ax1, ay1, 0.0), (ax0, ay1, 0.0)]
+            quads.append(decal_quad(faces, corners, 2, 1, z_off, "paint", colr))
+        rect(x0, y0, x1, y1, zf, pc_["fill"])
+        rect(x0, y0, x1, y0 + w, zl, pc_["line"])
+        rect(x0, y1 - w, x1, y1, zl, pc_["line"])
+        rect(x0, y0 + w, x0 + w, y1 - w, zl, pc_["line"])
+        rect(x1 - w, y0 + w, x1, y1 - w, zl, pc_["line"])
+    for letter, (cx, cy), cell in FLOOR_LETTERS:
+        colr = PAINT[letter]["line"]
+        for r, c0, c1 in glyph_runs(letter):
+            ax0, ax1 = cx + (c0 - GLYPH_W / 2) * cell, cx + (c1 - GLYPH_W / 2) * cell
+            ay1 = cy + (GLYPH_H / 2 - r) * cell
+            ay0 = ay1 - cell
+            corners = [(ax0, ay0, 0.0), (ax1, ay0, 0.0), (ax1, ay1, 0.0), (ax0, ay1, 0.0)]
+            quads.append(decal_quad(faces, corners, 2, 1, zl, "paint", colr))
+    for letter, centre, (axis, sign), cell in WALL_LETTERS:
+        colr = PAINT[letter]["line"]
+        n = [0.0, 0.0, 0.0]
+        n[axis] = float(sign)
+        view = [-n[0], -n[1], -n[2]]
+        right = (view[1], -view[0], 0.0)              # cross(view, +Z)
+        for r, c0, c1 in glyph_runs(letter):
+            u0, u1 = (c0 - GLYPH_W / 2) * cell, (c1 - GLYPH_W / 2) * cell
+            v1 = (GLYPH_H / 2 - r) * cell
+            v0 = v1 - cell
+            corners = []
+            for u, v in ((u0, v0), (u1, v0), (u1, v1), (u0, v1)):
+                corners.append((centre[0] + right[0] * u, centre[1] + right[1] * u, centre[2] + v))
+            quads.append(decal_quad(faces, corners, axis, sign, WALL_PAINT_OFF, "paint", colr))
+    return quads
 
 
 # ---------------------------------------------------------------------------
@@ -635,28 +964,93 @@ def setup_lighting(samples):
     setattr_if(cy, "caustics_refractive", False)
     setattr_if(cy, "sample_clamp_indirect", 4.0)
 
+    sky_img, sun_rgb = load_hdri_split()
+
     world = bpy.data.worlds.new("sky")
     scene.world = world
     if world.node_tree is None:
         world.use_nodes = True
-    bg = next((n for n in world.node_tree.nodes if n.type == "BACKGROUND"), None)
-    if bg is None:
-        bg = world.node_tree.nodes.new("ShaderNodeBackground")
-        out = next((n for n in world.node_tree.nodes if n.type == "OUTPUT_WORLD"), None) \
-            or world.node_tree.nodes.new("ShaderNodeOutputWorld")
-        world.node_tree.links.new(bg.outputs["Background"], out.inputs["Surface"])
-    bg.inputs["Color"].default_value = (SKY_COLOR[0], SKY_COLOR[1], SKY_COLOR[2], 1.0)
-    bg.inputs["Strength"].default_value = SKY_STRENGTH
+    nt = world.node_tree
+    nt.nodes.clear()
+    out = nt.nodes.new("ShaderNodeOutputWorld")
+    bg = nt.nodes.new("ShaderNodeBackground")
+    env = nt.nodes.new("ShaderNodeTexEnvironment")
+    env.image = sky_img
+    env.interpolation = "Linear"
+    nt.links.new(env.outputs["Color"], bg.inputs["Color"])
+    nt.links.new(bg.outputs["Background"], out.inputs["Surface"])
+    bg.inputs["Strength"].default_value = 1.0          # SKY_SCALE is applied to the pixels
 
     light = bpy.data.lights.new("sun", "SUN")
-    light.energy = SUN_STRENGTH
-    light.color = SUN_COLOR
+    peak = max(sun_rgb)
+    light.energy = peak
+    light.color = tuple(c / peak for c in sun_rgb)
     light.angle = SUN_ANGLE
     sun = bpy.data.objects.new("sun", light)
     h = math.cos(SUN_ELEVATION)
     to_sun = Vector((SUN_HORIZONTAL[0] * h, SUN_HORIZONTAL[1] * h, math.sin(SUN_ELEVATION))).normalized()
     sun.rotation_euler = to_sun.to_track_quat("Z", "Y").to_euler()   # lamp shines along its -Z
     scene.collection.objects.link(sun)
+    print("[greybox] sun lamp: strength %.3f colour %s (from HDRI, x%.2f, warmth %s)"
+          % (peak, [round(c / peak, 3) for c in sun_rgb], SUN_SCALE, SUN_WARMTH))
+
+    for i, (pos, colr, power, radius) in enumerate(ACCENT_LIGHTS):
+        lamp = bpy.data.lights.new("accent_%d" % i, "POINT")
+        lamp.energy = power
+        lamp.color = colr
+        setattr_if(lamp, "shadow_soft_size", radius)
+        o = bpy.data.objects.new("accent_%d" % i, lamp)
+        o.location = pos
+        scene.collection.objects.link(o)
+
+
+def hdri_pixels():
+    """The source HDRI as a float32 (h, w, 3) linear array, row 0 = bottom (nadir)."""
+    import numpy as np
+    img = bpy.data.images.load(HDRI_PATH)
+    w, h = img.size
+    px = np.empty(w * h * 4, dtype=np.float32)
+    img.pixels.foreach_get(px)
+    bpy.data.images.remove(img)
+    return px.reshape(h, w, 4)[..., :3].copy()
+
+
+def hdri_solid_angles(h, w):
+    import numpy as np
+    elev = ((np.arange(h) + 0.5) / h - 0.5) * math.pi
+    return (np.cos(elev) * (2 * math.pi / w) * (math.pi / h)).astype(np.float32)[:, None]
+
+
+def load_hdri_split():
+    """Split the HDRI into a sun-less sky (float image for the world) and a sun lamp colour.
+    Radiance above HDRI_SUN_CLAMP is removed; its integrated irradiance E (W/m^2, the unit
+    of a Cycles sun's strength) becomes the lamp: S = E * SUN_SCALE * SUN_WARMTH."""
+    import numpy as np
+    if not os.path.exists(HDRI_PATH):
+        raise RuntimeError("bake needs the source HDRI %s (see CREDITS.md); run with --no-bake "
+                           "to reuse the shipped lightmap" % HDRI_PATH)
+    px = hdri_pixels()
+    h, w, _ = px.shape
+    lum = px @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+    y, x = np.unravel_index(int(np.argmax(lum)), lum.shape)
+    elev = ((y + 0.5) / h - 0.5) * 180.0
+    phi = (0.5 - (x + 0.5) / w) * 2 * math.pi        # Cycles equirect: u = 0.5 - atan2(y, x) / 2pi
+    hx, hy = math.cos(phi), math.sin(phi)
+    print("[greybox] HDRI sun: elevation %.1f deg, horizontal (%.3f, %.3f)" % (elev, hx, hy))
+    d_el = abs(elev - math.degrees(SUN_ELEVATION))
+    d_az = math.degrees(math.acos(max(-1.0, min(1.0, hx * SUN_HORIZONTAL[0] + hy * SUN_HORIZONTAL[1]))))
+    if d_el > 1.0 or d_az > 1.0:
+        raise RuntimeError("SUN_* constants disagree with the HDRI sun (%.1f / %.1f deg off)" % (d_el, d_az))
+    scale = np.maximum(1.0, lum / HDRI_SUN_CLAMP)[..., None]
+    sky = px / scale
+    removed = ((px - sky) * hdri_solid_angles(h, w)[..., None]).reshape(-1, 3).sum(axis=0)
+    sun_rgb = [float(removed[i]) * SUN_SCALE * SUN_WARMTH[i] for i in range(3)]
+    sky = sky * SKY_SCALE * np.array(SKY_FILL_TINT, dtype=np.float32)
+    img = bpy.data.images.new("hdri_sky", w, h, alpha=True, float_buffer=True)
+    rgba = np.concatenate([sky, np.ones((h, w, 1), dtype=np.float32)], axis=2)
+    img.pixels.foreach_set(rgba.ravel())
+    img.update()
+    return img, sun_rgb
 
 
 def sample_points(img, faces, size):
@@ -668,23 +1062,12 @@ def sample_points(img, faces, size):
 
     def at(point, axis, sign_dir):
         for f in faces:
-            p = f["pts"]
-            if f["axis"] != axis:
+            if f["axis"] != axis or f["sign"] != sign_dir:
                 continue
-            n = [0, 0, 0]
-            e1 = [p[1][i] - p[0][i] for i in range(3)]
-            e3 = [p[3][i] - p[0][i] for i in range(3)]
-            n = [e1[1] * e3[2] - e1[2] * e3[1], e1[2] * e3[0] - e1[0] * e3[2], e1[0] * e3[1] - e1[1] * e3[0]]
-            if n[axis] * sign_dir <= 0 or abs(point[axis] - p[0][axis]) > 1e-4:
+            st = face_st(f, point)
+            if st is None:
                 continue
-            d = [point[i] - p[0][i] for i in range(3)]
-            s = sum(d[i] * e1[i] for i in range(3)) / sum(c * c for c in e1)
-            t = sum(d[i] * e3[i] for i in range(3)) / sum(c * c for c in e3)
-            if not (0 <= s <= 1 and 0 <= t <= 1):
-                continue
-            lm = f["lm"]
-            u = lm[0][0] + s * (lm[1][0] - lm[0][0]) + t * (lm[3][0] - lm[0][0])
-            v = lm[0][1] + s * (lm[1][1] - lm[0][1]) + t * (lm[3][1] - lm[0][1])
+            u, v = lerp_face(f, st[0], st[1], "lm")
             x, y = int(u * size), int(v * size)
             win = px[max(0, y - 2):y + 3, max(0, x - 2):x + 3, :3]
             return [round(float(c), 3) for c in win.reshape(-1, 3).mean(axis=0)]
@@ -693,18 +1076,19 @@ def sample_points(img, faces, size):
     spots = [
         ("floor sunlit (mid)", (0.0, -3.0, 0.0), 2, 1),
         ("floor shade (W of lane wall L)", (-5.8, 2.5, 0.0), 2, 1),
-        ("floor shade (open, behind crate 05)", (-0.5, -8.2, 0.0), 2, 1),
+        ("floor shade (open, behind crate 05)", (-1.3, -8.6, 0.0), 2, 1),
+        ("floor corner (SW, shade)", (-14.8, -21.8, 0.0), 2, 1),
         ("wall sunlit (+X face lane L)", (-4.75, 0.0, 1.5), 0, 1),
         ("wall shade (-X face lane L)", (-5.25, 0.0, 1.5), 0, -1),
         ("wall sunlit (-Y face site B entry)", (7.0, 6.0, 1.5), 1, -1),
         ("crate top", (-12.0, -10.0, 1.0), 2, 1),
-        ("site A floor marker", (-11.0, 13.0, DECAL_T), 2, 1),
-        ("site B floor marker", (11.0, 13.0, DECAL_T), 2, 1),
+        ("site A floor", (-11.0, 13.0, 0.0), 2, 1),
+        ("site B floor", (11.0, 13.0, 0.0), 2, 1),
     ]
     vals = {}
     for label, p, axis, sgn in spots:
         vals[label] = at(p, axis, sgn)
-        print("[greybox]   %-36s linear %s" % (label, vals[label]))
+        print("[greybox]   %-36s light (linear) %s" % (label, vals[label]))
 
     def lum(c):
         return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] if c else float("nan")
@@ -713,6 +1097,7 @@ def sample_points(img, faces, size):
              lum(vals["floor shade (open, behind crate 05)"]) / lum(vals["floor sunlit (mid)"]),
              lum(vals["wall shade (-X face lane L)"]) / lum(vals["wall sunlit (+X face lane L)"]),
              float(px[:, :, :3].max())))
+    return vals
 
 
 def denoise_and_save(img, path, size):
@@ -774,27 +1159,80 @@ def bake_lighting(obj, faces, size, samples):
         nt.nodes.active = tex                 # bake target (not connected)
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
-    print("[greybox] baking %d^2 COMBINED (diffuse direct+indirect), %d samples, %d bounces ..."
+    print("[greybox] baking %d^2 DIFFUSE light only (direct+indirect, no colour), %d samples, %d bounces ..."
           % (size, samples, DIFFUSE_BOUNCES))
     res = bpy.ops.object.bake(
-        type="COMBINED", pass_filter={"DIRECT", "INDIRECT", "DIFFUSE"},
+        type="DIFFUSE", pass_filter={"DIRECT", "INDIRECT"},
         margin=LIGHTMAP_PAD, margin_type="EXTEND", uv_layer="lightmap",
         use_clear=True, target="IMAGE_TEXTURES", use_selected_to_active=False)
     if "FINISHED" not in res:
         raise RuntimeError("bake failed: %s" % (res,))
     t_bake = time.time() - t0
-    sample_points(img, faces, size)
+    vals = sample_points(img, faces, size)
+    # Encode: stored = light / LIGHT_SCALE (the sRGB transfer is applied when saving).
+    import numpy as np
+    px = np.empty(size * size * 4, dtype=np.float32)
+    img.pixels.foreach_get(px)
+    px = px.reshape(-1, 4)
+    clipped = float((px[:, :3] > LIGHT_SCALE).any(axis=1).mean())
+    px[:, :3] /= LIGHT_SCALE
+    img.pixels.foreach_set(px.ravel())
+    img.update()
+    print("[greybox] light encoding: stored = light / %.1f; %.3f%% of texels clip" % (LIGHT_SCALE, clipped * 100))
     denoise_and_save(img, BAKED_PATH, size)
     print("[greybox] bake %.1f s, denoise+save %.1f s -> %s (%d bytes)"
           % (t_bake, time.time() - t0 - t_bake, BAKED_PATH, os.path.getsize(BAKED_PATH)))
+    verify_encoding(faces, size, vals)
 
 
-def finalize_materials(obj):
+def srgb_to_linear(c):
+    import numpy as np
+    c = np.asarray(c, dtype=np.float64)
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def linear_to_srgb(c):
+    import numpy as np
+    c = np.clip(np.asarray(c, dtype=np.float64), 0.0, 1.0)
+    return np.where(c <= 0.0031308, c * 12.92, 1.055 * c ** (1 / 2.4) - 0.055)
+
+
+def verify_encoding(faces, size, raw_vals):
+    """Round trip: read the written 8-bit atlas back, decode exactly like the shader
+    (sRGB -> linear, x LIGHT_SCALE) and compare with the raw float bake at the spots."""
+    import numpy as np
+    img = bpy.data.images.load(BAKED_PATH)
+    img.colorspace_settings.name = "Non-Color"        # raw stored bytes / 255
+    w, h = img.size
+    px = np.empty(w * h * 4, dtype=np.float32)
+    img.pixels.foreach_get(px)
+    px = px.reshape(h, w, 4)
+    bpy.data.images.remove(img)
+    worst = 0.0
+    spots = {"floor sunlit (mid)": ((0.0, -3.0, 0.0), 2, 1),
+             "wall shade (-X face lane L)": ((-5.25, 0.0, 1.5), 0, -1),
+             "floor shade (W of lane wall L)": ((-5.8, 2.5, 0.0), 2, 1)}
+    for label, (p, axis, sgn) in spots.items():
+        f = find_face(faces, p, axis, sgn)
+        u, v = lerp_face(f, *face_st(f, p), "lm")
+        x, y = int(u * size), int(v * size)
+        stored = px[max(0, y - 2):y + 3, max(0, x - 2):x + 3, :3].reshape(-1, 3).mean(axis=0)
+        decoded = srgb_to_linear(stored) * LIGHT_SCALE
+        raw = np.array(raw_vals[label])
+        rel = float(np.max(np.abs(decoded - raw) / np.maximum(raw, 1e-3)))
+        worst = max(worst, rel)
+        print("[greybox]   round trip %-32s raw %s -> stored(sRGB) %s -> decoded %s (%.1f%%)"
+              % (label, np.round(raw, 3).tolist(), np.round(stored, 3).tolist(),
+                 np.round(decoded, 3).tolist(), rel * 100))
+    if worst > 0.12:
+        raise RuntimeError("lightmap encode/decode mismatch: %.1f%%" % (worst * 100))
+
+
+def finalize_materials(obj, albedos):
+    """Swap the bake materials for the named export materials (same slot order)."""
     mesh = obj.data
-    mesh.materials.clear()
-    mesh.materials.append(make_export_material())
-    for poly in mesh.polygons:
-        poly.material_index = 0
+    for i, key in enumerate(SURFACE_KEYS):
+        mesh.materials[i] = make_export_material(EXPORT_NAMES[key], albedos[key])
 
 
 def export_glb():
@@ -810,7 +1248,7 @@ def export_glb():
         export_animations=False,
         export_materials="EXPORT",
         export_image_format="NONE",
-        export_normals=True,
+        export_normals=False,          # the world is drawn unlit; normals would be dead weight
         export_texcoords=True,
         export_tangents=False,
         export_vertex_color="ACTIVE",
@@ -838,15 +1276,162 @@ def inspect_glb():
     gltf = json.loads(data[20:20 + length].decode("utf-8"))
     prims = [p for m in gltf.get("meshes", []) for p in m["primitives"]]
     attrs = sorted(prims[0]["attributes"].keys()) if prims else []
+    mat_names = sorted(m.get("name", "") for m in gltf.get("materials", []))
     info = {"meshes": len(gltf.get("meshes", [])), "primitives": len(prims),
             "materials": len(gltf.get("materials", [])), "images": len(gltf.get("images", [])),
-            "attributes": attrs}
-    if info["meshes"] != 1 or info["primitives"] != 1 or info["materials"] != 1:
-        raise RuntimeError("expected one mesh/primitive/material, got %s" % info)
-    for need in ("TEXCOORD_0", "TEXCOORD_1"):
-        if need not in attrs:
-            raise RuntimeError("GLB is missing %s: %s" % (need, attrs))
+            "attributes": attrs, "material_names": mat_names}
+    expected = sorted(EXPORT_NAMES.values())
+    if mat_names != expected or len(prims) != len(expected) or info["images"] != 0:
+        raise RuntimeError("expected one primitive per material %s and no images, got %s" % (expected, info))
+    for p in prims:
+        for need in ("TEXCOORD_0", "TEXCOORD_1", "COLOR_0"):
+            if need not in p["attributes"]:
+                raise RuntimeError("GLB primitive is missing %s: %s" % (need, sorted(p["attributes"])))
     return info
+
+
+def look_data():
+    """Render setup for client/src/maplook.ts (not gameplay data)."""
+    mats = {}
+    for key in SURFACE_KEYS:
+        t = TEXTURES[key]
+        mats[EXPORT_NAMES[key]] = {"albedo": t["out"], "tile": t["tile"]}
+    mats[EXPORT_NAMES["paint"]] = {"albedo": TEXTURES["floor"]["out"], "tile": TEXTURES["floor"]["tile"],
+                                   "tint": PAINT_TINT, "decal": True}
+    return {
+        "lightmap": BAKED_NAME,
+        "lightScale": LIGHT_SCALE,
+        "materials": mats,
+        "sky": {"texture": SKY_NAME, "elevMin": SKY_ELEV_MIN},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Source art processing (albedo textures, sky)
+# ---------------------------------------------------------------------------
+def _read_image(path, colorspace="Non-Color"):
+    import numpy as np
+    img = bpy.data.images.load(path)
+    img.colorspace_settings.name = colorspace
+    return img
+
+
+def _image_rgb(img):
+    import numpy as np
+    w, h = img.size
+    px = np.empty(w * h * 4, dtype=np.float32)
+    img.pixels.foreach_get(px)
+    return px.reshape(h, w, 4)[..., :3].astype(np.float64)
+
+
+def _save_image(rgb_srgb, path, fmt, quality):
+    import numpy as np
+    h, w, _ = rgb_srgb.shape
+    img = bpy.data.images.new(os.path.basename(path), w, h, alpha=False)
+    img.colorspace_settings.name = "Non-Color"         # write the given bytes unchanged
+    rgba = np.concatenate([np.clip(rgb_srgb, 0, 1), np.ones((h, w, 1))], axis=2).astype(np.float32)
+    img.pixels.foreach_set(rgba.ravel())
+    img.file_format = fmt
+    img.filepath_raw = path
+    img.save(filepath=path, quality=quality)
+    bpy.data.images.remove(img)
+    if not os.path.exists(path):
+        raise RuntimeError("could not write %s" % path)
+
+
+def _wrap_blur(a, sigma):
+    """Gaussian blur with wrap-around (keeps tileable textures tileable), per channel."""
+    import numpy as np
+    h, w = a.shape[:2]
+    fy = np.fft.fftfreq(h)[:, None]
+    fx = np.fft.fftfreq(w)[None, :]
+    g = np.exp(-2 * (math.pi ** 2) * (sigma ** 2) * (fx ** 2 + fy ** 2))
+    return np.stack([np.real(np.fft.ifft2(np.fft.fft2(a[..., c]) * g)) for c in range(a.shape[2])], axis=2)
+
+
+LUM = (0.2126, 0.7152, 0.0722)
+
+
+def process_textures():
+    """Source diffuse maps -> tex_*.webp. Returns {key: mean linear albedo RGB} for the bake."""
+    import numpy as np
+    albedos = {}
+    for key, t in TEXTURES.items():
+        src = os.path.join(SOURCE_DIR, "textures", t["src"])
+        dst = os.path.join(OUT_DIR, t["out"])
+        if os.path.exists(src):
+            img = _read_image(src)
+            if tuple(img.size) != (TEXTURE_SIZE, TEXTURE_SIZE):
+                img.scale(TEXTURE_SIZE, TEXTURE_SIZE)
+            lin = srgb_to_linear(_image_rgb(img))
+            bpy.data.images.remove(img)
+            lum_w = np.array(LUM)
+            mean = lin.reshape(-1, 3).mean(axis=0)
+            # 1) detile: flatten large blotches (they make the repeat obvious)
+            low = _wrap_blur(lin, TEXTURE_SIZE / 10.0)
+            lin = np.maximum(lin - t["detile"] * (low - mean), 1e-4)
+            # 2) contrast in log-luminance around the mean
+            lum = lin @ lum_w
+            gm = math.exp(float(np.log(lum).mean()))
+            new_lum = gm * (lum / gm) ** t["contrast"]
+            lin = lin * (new_lum / lum)[..., None]
+            # 3) saturation
+            lum = (lin @ lum_w)[..., None]
+            lin = lum + (lin - lum) * t["sat"]
+            # 4) target mean albedo and tint
+            lin = lin * (t["albedo"] / float((lin @ lum_w).mean())) * np.array(t["tint"])
+            lin = np.clip(lin, 0.0, 1.0)
+            _save_image(linear_to_srgb(lin), dst, "WEBP", TEXTURE_WEBP_QUALITY)
+            print("[greybox] texture %-10s %s -> %s (%d bytes)" % (key, t["src"], t["out"], os.path.getsize(dst)))
+        elif os.path.exists(dst):
+            print("[greybox] texture %-10s source missing, reusing shipped %s" % (key, t["out"]))
+        else:
+            raise RuntimeError("texture %s: neither source %s nor shipped %s exists" % (key, src, dst))
+        # Mean albedo of what actually ships (what the bake should bounce)
+        img = _read_image(dst)
+        albedos[key] = tuple(float(c) for c in srgb_to_linear(_image_rgb(img)).reshape(-1, 3).mean(axis=0))
+        bpy.data.images.remove(img)
+        print("[greybox]   mean linear albedo %s" % [round(c, 3) for c in albedos[key]])
+    return albedos
+
+
+def sky_tonemap(x):
+    """Linear HDR sky -> display linear: identity up to 0.75, smooth shoulder to 1."""
+    import numpy as np
+    k = 0.75
+    return np.where(x <= k, x, k + (1 - k) * (1 - np.exp(-(x - k) / (1 - k))))
+
+
+def process_sky():
+    """HDRI -> sky.jpg: equirect strip, full 360 deg wide, elevation SKY_ELEV_MIN..90 deg,
+    top row = zenith. Exposure 1: radiance in the same units as the baked light."""
+    import numpy as np
+    if not os.path.exists(HDRI_PATH):
+        if os.path.exists(SKY_PATH):
+            print("[greybox] sky: source HDRI missing, reusing shipped %s" % SKY_NAME)
+            return
+        raise RuntimeError("sky: neither %s nor %s exists" % (HDRI_PATH, SKY_PATH))
+    px = hdri_pixels().astype(np.float64)              # row 0 = nadir
+    h, w, _ = px.shape
+    # rows of the strip (j = 0 bottom) -> source rows, linear interpolation
+    elev = SKY_ELEV_MIN + (np.arange(SKY_H) + 0.5) / SKY_H * (90.0 - SKY_ELEV_MIN)
+    sy = (elev + 90.0) / 180.0 * h - 0.5
+    y0 = np.clip(np.floor(sy).astype(int), 0, h - 1)
+    y1 = np.clip(y0 + 1, 0, h - 1)
+    fy = (sy - np.floor(sy))[:, None, None]
+    strip = px[y0] * (1 - fy) + px[y1] * fy
+    if w != SKY_W:          # horizontal box resample
+        xs = (np.arange(SKY_W) + 0.5) / SKY_W * w - 0.5
+        x0 = np.clip(np.floor(xs).astype(int), 0, w - 1)
+        x1 = (x0 + 1) % w
+        fx = (xs - np.floor(xs))[None, :, None]
+        strip = strip[:, x0] * (1 - fx) + strip[:, x1] * fx
+    # per channel: highlights (sun, cloud cores) roll off to white instead of hue-shifting
+    strip = sky_tonemap(strip * SKY_DISPLAY_EXPOSURE)
+    strip = np.clip(strip, 0, 1)
+    _save_image(linear_to_srgb(strip), SKY_PATH, "JPEG", SKY_JPEG_QUALITY)
+    print("[greybox] sky: %dx%d, elevation %.0f..90 deg -> %s (%d bytes)"
+          % (SKY_W, SKY_H, SKY_ELEV_MIN, SKY_PATH, os.path.getsize(SKY_PATH)))
 
 
 def write_json(baked=None):
@@ -877,6 +1462,7 @@ def write_json(baked=None):
     }
     if baked:
         data["baked"] = baked     # lighting atlas, sampled with TEXCOORD_1 of the GLB
+        data["look"] = look_data()
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(JSON_PATH, "w", encoding="utf-8", newline="\n") as f:
         json.dump(data, f, indent=2)
@@ -902,10 +1488,17 @@ def main():
             print("[greybox] --no-bake: reusing %s (%d^2)" % (BAKED_PATH, size))
         else:
             print("[greybox] WARNING --no-bake but %s does not exist; map will be unlit-fallback" % BAKED_PATH)
-    obj, faces, n_bake_mats = build_scene(size)
+    albedos = process_textures()
+    process_sky()
+    obj, faces = build_scene(size, albedos)
+    n_bake_mats = len(SURFACE_KEYS)
     if opts["bake"]:
         bake_lighting(obj, faces, size, opts["samples"])
-    finalize_materials(obj)
+    finalize_materials(obj, albedos)
+    paint = build_paint(faces)
+    make_mesh_object("greybox_paint", paint, ["paint"],
+                     [make_export_material(EXPORT_NAMES["paint"], (0.6, 0.2, 0.2))])
+    print("[greybox] paint decals: %d quads" % len(paint))
     export_glb()
     glb = inspect_glb()
     data = write_json(BAKED_NAME if os.path.exists(BAKED_PATH) else None)

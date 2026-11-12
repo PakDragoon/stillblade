@@ -9,3 +9,6 @@ dist/
 .env
 .env.*
 !.env.example
+
+# Raw CC0 source art for the map generator (large; only processed textures in client/public/maps are shipped)
+tools/blender/source-art/

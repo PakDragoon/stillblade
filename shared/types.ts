@@ -24,6 +24,29 @@ export interface MapData {
     bombSites: { name: string; min: Vec3; max: Vec3 }[];
     /** File name (next to the map) of the baked lighting atlas, if the map has one. */
     baked?: string;
+    /** Render setup for the client (textures, lightmap encoding, sky). Visual only. */
+    look?: MapLook;
+}
+
+/** Written by tools/blender/greybox.py; consumed by client/src/maplook.ts. File names are next to the map. */
+export interface MapLook {
+    /** Baked light atlas (light only, no surface colour), sampled with TEXCOORD_1. */
+    lightmap: string;
+    /** The atlas stores light / lightScale (then sRGB); the shader multiplies it back. */
+    lightScale: number;
+    /** Keyed by GLB material name. */
+    materials: Record<string, {
+        /** Tiling albedo texture, sampled with the world-metre TEXCOORD_0. */
+        albedo: string;
+        /** Metres covered by one repeat of the texture. */
+        tile: number;
+        /** Extra albedo multiplier (paint decals use COLOR_0 x tint). Default 1. */
+        tint?: number;
+        /** Coplanar overlay that needs a depth bias. */
+        decal?: boolean;
+    }>;
+    /** Equirect strip of the sky, full 360 degrees wide, from elevMin (bottom row) to the zenith (top row). */
+    sky: { texture: string; elevMin: number };
 }
 
 /** One tick of player intent. This is what the client will send to the server. */

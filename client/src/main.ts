@@ -14,7 +14,7 @@ import type { MapData, Vec3 } from '@shared/types';
 import { createAudio } from './audio';
 import type { BombView, ListenerView } from './audio-api';
 import { Input } from './input';
-import { applyBakedLighting } from './maplook';
+import { applyMapLook } from './maplook';
 import { Net } from './net';
 import { createPresenter } from './presenter';
 import type { LocalView, MatchView } from './presenter-api';
@@ -78,11 +78,16 @@ app.setCanvasResolution(pc.RESOLUTION_AUTO);
 app.graphicsDevice.maxPixelRatio = 1;
 window.addEventListener('resize', () => app.resizeCanvas());
 
-// Greybox lighting only; real maps will be lightmapped with no realtime lights.
-app.scene.ambientLight = new pc.Color(0.5, 0.52, 0.58);
+// The world is drawn unlit from its baked lightmap; these realtime lights only light the players and
+// the first-person weapon, matched to the bake (tools/blender/greybox.py): the sun at 47.9 deg elevation
+// toward engine (0.554, 0.742, 0.377) (the light shines along its -Y: pitch 90 - 47.9, yaw 55.8), warm,
+// and an ambient close to the baked sky fill on vertical surfaces.
+const SUN_ELEVATION_DEG = 47.9;
+const SUN_YAW_DEG = 55.8;
+app.scene.ambientLight = new pc.Color(0.4, 0.42, 0.47);
 const sun = new pc.Entity('sun');
-sun.addComponent('light', { type: 'directional', color: new pc.Color(1, 0.97, 0.9), intensity: 1.1, castShadows: false });
-sun.setEulerAngles(50, 35, 0);
+sun.addComponent('light', { type: 'directional', color: new pc.Color(1, 0.93, 0.78), intensity: 0.95, castShadows: false });
+sun.setEulerAngles(90 - SUN_ELEVATION_DEG, SUN_YAW_DEG, 0);
 app.root.addChild(sun);
 
 const camera = new pc.Entity('camera');
@@ -111,8 +116,8 @@ async function start(): Promise<void> {
     ]);
     const mapEntity = (mapAsset.resource as pc.ContainerResource).instantiateRenderEntity();
     app.root.addChild(mapEntity);
-    // Baked maps draw unlit from one atlas: no realtime lighting cost on the world at all.
-    if (mapData.baked) await applyBakedLighting(app, mapEntity, `${ASSETS}maps/${mapData.baked}`);
+    // Baked maps draw unlit (albedo x baked light): no realtime lighting cost on the world at all.
+    if (mapData.look) await applyMapLook(app, mapEntity, camera, mapData, `${ASSETS}maps/`);
 
     const boxes = mapData.boxes;
     const input = new Input(canvas);
