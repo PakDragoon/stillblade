@@ -65,10 +65,11 @@ export class Net {
 
     constructor(url: string, private readonly lagMs: number, private readonly handlers: NetHandlers) {
         this.ws = new WebSocket(url);
+        this.ws.binaryType = 'arraybuffer';
         this.ws.onopen = () => { this.connected = true; };
         this.ws.onclose = () => { this.connected = false; };
         this.ws.onmessage = e => {
-            const msg = decodeServer(e.data as string);
+            const msg = decodeServer(e.data as string | ArrayBuffer);
             if (this.lagMs > 0) setTimeout(() => this.receive(msg), this.lagMs / 2);
             else this.receive(msg);
         };

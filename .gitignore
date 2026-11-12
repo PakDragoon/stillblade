@@ -4,3 +4,8 @@ dist/
 .DS_Store
 *.blend1
 .vite/
+
+# Deployment secrets and per-machine settings
+.env
+.env.*
+!.env.example

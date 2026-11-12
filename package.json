@@ -1,32 +1,36 @@
 {
-    "name":  "stillblade",
-    "version":  "0.1.0",
-    "private":  true,
-    "type":  "module",
-    "description":  "Low-spec browser tactical FPS: invisible knife-wielding ghosts vs armed defenders.",
-    "scripts":  {
-                    "dev":  "concurrently -k -n server,client -c magenta,cyan \"npm:dev:server\" \"npm:dev:client\"",
-                    "build":  "tsc --noEmit \u0026\u0026 vite build",
-                    "preview":  "vite preview",
-                    "typecheck":  "tsc --noEmit",
-                    "test":  "vitest run",
-                    "map:greybox":  "\"C:/Program Files/Blender Foundation/Blender 5.3/blender.exe\" --background --python tools/blender/greybox.py",
-                    "dev:client":  "vite",
-                    "dev:server":  "tsx watch server/src/main.ts",
-                    "server":  "tsx server/src/main.ts",
-                    "bot":  "tsx tools/bot.ts"
-                },
-    "dependencies":  {
-                         "playcanvas":  "^2.24.0",
-                         "ws":  "^8.22.2"
-                     },
-    "devDependencies":  {
-                            "@types/node":  "^20.19.43",
-                            "@types/ws":  "^8.18.2",
-                            "concurrently":  "^10.0.7",
-                            "tsx":  "^4.23.15",
-                            "typescript":  "^7.0.2",
-                            "vite":  "^6.4.6",
-                            "vitest":  "^3.2.7"
-                        }
+    "name": "stillblade",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "description": "Low-spec browser tactical FPS: invisible knife-wielding ghosts vs armed defenders.",
+    "scripts": {
+        "dev": "concurrently -k -n server,client -c magenta,cyan \"npm:dev:server\" \"npm:dev:client\"",
+        "build": "tsc --noEmit && npm run build:client && npm run build:server",
+        "build:client": "vite build",
+        "build:server": "node tools/build-server.mjs",
+        "start": "node --enable-source-maps dist/server/main.js",
+        "preview": "vite preview",
+        "typecheck": "tsc --noEmit",
+        "test": "vitest run",
+        "map:greybox": "\"C:/Program Files/Blender Foundation/Blender 5.3/blender.exe\" --background --python tools/blender/greybox.py",
+        "dev:client": "vite",
+        "dev:server": "tsx watch server/src/main.ts",
+        "server": "tsx server/src/main.ts",
+        "bot": "tsx tools/bot.ts"
+    },
+    "dependencies": {
+        "playcanvas": "^2.24.0",
+        "ws": "^8.22.2"
+    },
+    "devDependencies": {
+        "@types/node": "^20.19.43",
+        "@types/ws": "^8.18.2",
+        "concurrently": "^10.0.7",
+        "esbuild": "^0.25.12",
+        "tsx": "^4.23.15",
+        "typescript": "^7.0.2",
+        "vite": "^6.4.6",
+        "vitest": "^3.2.7"
+    }
 }

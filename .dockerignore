@@ -1,0 +1,21 @@
+# Keep the build context small: the image only needs package*.json, tsconfig.json,
+# shared/, server/, tools/build-server.mjs and client/public/maps/*.json.
+.git
+.github
+.claude
+.vite
+node_modules
+dist
+deploy
+*.md
+*.log
+.env
+.env.*
+**/.env
+client/src
+client/index.html
+client/public/**/*.glb
+client/public/**/*.webp
+tools/blender
+*.blend
+*.blend1

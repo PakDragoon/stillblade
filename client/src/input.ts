@@ -61,7 +61,9 @@ export class Input {
     sample(cmd: InputCmd): void {
         cmd.forward = this.axis('KeyS', 'KeyW');
         cmd.right = this.axis('KeyA', 'KeyD');
-        cmd.yaw = this.yaw;
+        // Rounded to float32 because that is what goes on the wire: the server must simulate the
+        // exact angle this client predicted with.
+        cmd.yaw = Math.fround(this.yaw);
         cmd.jump = this.jumpQueued;
         cmd.walk = this.keys.has('ShiftLeft');
         cmd.crouch = this.keys.has('KeyC') || this.keys.has('ControlLeft');

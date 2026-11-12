@@ -1,0 +1,62 @@
+name: Deploy client to GitHub Pages
+
+# Manual only: nothing is published until someone presses "Run workflow"
+# on the Actions tab. See DEPLOY.md, Part A.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never run two Pages deployments at once, and never cancel one halfway.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Check the SERVER_URL repository variable
+        env:
+          SERVER_URL: ${{ vars.SERVER_URL }}
+        run: |
+          case "$SERVER_URL" in
+            wss://*) echo "Game server: $SERVER_URL" ;;
+            "") echo "::error::Repository variable SERVER_URL is not set. Add it under Settings > Secrets and variables > Actions > Variables (for example wss://play.example.com)."; exit 1 ;;
+            *) echo "::error::SERVER_URL must start with wss:// (an https page cannot open ws:// sockets). Got: $SERVER_URL"; exit 1 ;;
+          esac
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build client
+        env:
+          VITE_SERVER_URL: ${{ vars.SERVER_URL }}
+        run: npm run build:client
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist/client
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

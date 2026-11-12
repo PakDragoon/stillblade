@@ -18,11 +18,11 @@ let ticksSinceSpawn = 0;
 ws.on('open', () => console.log(`bot connected to ${url}${shoot ? ' (shooting)' : ''}`));
 ws.on('close', () => { console.log('bot disconnected'); process.exit(0); });
 ws.on('error', err => { console.error(`bot could not connect: ${err.message}`); process.exit(1); });
-ws.on('message', data => {
-    const msg = decodeServer(data.toString());
+ws.on('message', (data, isBinary) => {
+    const msg = decodeServer(isBinary ? (data as Buffer) : data.toString());
     if (msg.type === 'welcome') console.log(`bot is player ${msg.id} on ${msg.team}`);
     else if (msg.type === 'snap') serverTime = msg.time;
-    else if (msg.type === 'spawn') { yaw = msg.yaw; ticksSinceSpawn = 0; }
+    else if (msg.type === 'spawn') { yaw = Math.fround(msg.yaw); ticksSinceSpawn = 0; }
 });
 
 setInterval(() => {

@@ -25,7 +25,16 @@ const RAD = Math.PI / 180;
 const SNAP_DISTANCE = 2;
 
 const params = new URLSearchParams(location.search);
-const serverBase = params.get('server') ?? `ws://${location.hostname}:${DEFAULT_PORT}`;
+// Where the game server is: ?server= for testing, VITE_SERVER_URL in production builds, otherwise
+// the same host as the page (local development). A secure page may only open secure sockets.
+const serverBase = (
+    params.get('server') ?? import.meta.env.VITE_SERVER_URL ??
+    `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname}:${DEFAULT_PORT}`
+).replace(/\/+$/, '');
+/** Relative, so the built client works from any sub-path (for example GitHub Pages). */
+const ASSETS = import.meta.env.BASE_URL;
+/** `?res=0.7` pins the render resolution; otherwise it adapts to hold the frame rate. */
+const fixedRes = Math.min(1, Math.max(0, Number(params.get('res')) || 0));
 /** `?lag=150` adds 150 ms of artificial round-trip latency. */
 const lagMs = Math.max(0, Number(params.get('lag')) || 0);
 
@@ -94,16 +103,16 @@ function loadContainer(url: string): Promise<pc.Asset> {
 
 async function start(): Promise<void> {
     const [mapData, mapAsset] = await Promise.all([
-        fetch(`/maps/${MAP}.json`).then(r => {
+        fetch(`${ASSETS}maps/${MAP}.json`).then(r => {
             if (!r.ok) throw new Error(`Failed to load map data: ${r.status}`);
             return r.json() as Promise<MapData>;
         }),
-        loadContainer(`/maps/${MAP}.glb`)
+        loadContainer(`${ASSETS}maps/${MAP}.glb`)
     ]);
     const mapEntity = (mapAsset.resource as pc.ContainerResource).instantiateRenderEntity();
     app.root.addChild(mapEntity);
     // Baked maps draw unlit from one atlas: no realtime lighting cost on the world at all.
-    if (mapData.baked) await applyBakedLighting(app, mapEntity, `/maps/${mapData.baked}`);
+    if (mapData.baked) await applyBakedLighting(app, mapEntity, `${ASSETS}maps/${mapData.baked}`);
 
     const boxes = mapData.boxes;
     const input = new Input(canvas);
@@ -253,11 +262,38 @@ async function start(): Promise<void> {
     let fps = 60;
     let hudTimer = 0;
 
+    // Adaptive resolution: integrated GPUs are fill-rate bound, so when frames run long the cheapest
+    // fix is fewer pixels. Steps down quickly, and back up only after a long smooth stretch.
+    let resScale = fixedRes > 0 ? Math.max(0.4, fixedRes) : 1;
+    let slowTime = 0, smoothTime = 0, sinceStepUp = Infinity, stepUpWait = 12;
+    const setRes = (scale: number): void => {
+        resScale = Math.round(scale * 100) / 100;
+        app.graphicsDevice.maxPixelRatio = resScale;
+        app.resizeCanvas();
+    };
+    if (resScale < 1) setRes(resScale);
+    const adaptResolution = (dt: number): void => {
+        if (fixedRes > 0 || dt > 0.2) return; // pinned, or a stall (tab switch) rather than a slow GPU
+        sinceStepUp += dt;
+        slowTime = dt > 1 / 50 ? slowTime + dt : Math.max(0, slowTime - dt);
+        smoothTime = dt < 1 / 57 ? smoothTime + dt : 0;
+        if (slowTime > 1 && resScale > 0.5) {
+            // Dropping straight after a step up means that step was too ambitious: wait longer next time.
+            if (sinceStepUp < 5) stepUpWait = Math.min(stepUpWait * 2, 120);
+            setRes(resScale - 0.1);
+            slowTime = smoothTime = 0;
+        } else if (smoothTime > stepUpWait && resScale < 1) {
+            setRes(resScale + 0.1);
+            smoothTime = 0;
+            sinceStepUp = 0;
+        }
+    };
+
     const tick = (): void => {
         copyPlayerState(prev, curr);
         const cmd: NetCmd = {
             seq: seq++, forward: 0, right: 0, yaw: 0, jump: false, walk: false, crouch: false,
-            pitch: input.pitch, fire: input.fire, use: input.use, viewTime: net.renderTime()
+            pitch: Math.fround(input.pitch), fire: input.fire, use: input.use, viewTime: net.renderTime()
         };
         input.sample(cmd);
         // Rooted during the freeze and while planting or defusing: the server applies the same rule,
@@ -358,12 +394,13 @@ async function start(): Promise<void> {
         audio.frame(dt, listener, remotes, bomb);
 
         if (dt > 0) fps += (1 / dt - fps) * 0.05;
+        adaptResolution(dt);
         hudTimer += dt;
         if (hudTimer >= 0.1) {
             hudTimer = 0;
             const p = curr.pos;
             hud.textContent =
-                `${fps.toFixed(0)} fps${lagMs ? `  (+${lagMs} ms test lag)` : ''}\n` +
+                `${fps.toFixed(0)} fps${resScale < 1 ? `  res ${Math.round(resScale * 100)}%` : ''}${lagMs ? `  (+${lagMs} ms test lag)` : ''}\n` +
                 `speed ${horizontalSpeed(curr).toFixed(2)} m/s${curr.onGround ? '' : ' (air)'}${curr.crouched ? ' (crouch)' : ''}\n` +
                 `pos ${p[0].toFixed(1)} ${p[1].toFixed(1)} ${p[2].toFixed(1)}`;
         }
@@ -373,7 +410,7 @@ async function start(): Promise<void> {
     Object.assign(window, {
         __sb: {
             app, state: curr, input, net, mapData, audio, presenter, match,
-            stats: () => ({ fps, alive, health, vis, pending: pending.length, error: Math.hypot(...errorOffset) })
+            stats: () => ({ fps, resScale, alive, health, vis, pending: pending.length, error: Math.hypot(...errorOffset) })
         }
     });
 }

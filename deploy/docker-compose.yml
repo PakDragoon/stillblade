@@ -1,0 +1,54 @@
+# Stillblade production stack: the game server behind Caddy (automatic HTTPS).
+#
+#   cp .env.example .env      # then edit .env
+#   docker compose up -d --build
+#
+# Run these from this deploy/ folder; Compose reads ./.env from here.
+
+name: stillblade
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  game:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: stillblade-server
+    restart: unless-stopped
+    init: true
+    environment:
+      SB_SERVER_PORT: "8080"
+      SB_ALLOWED_ORIGINS: ${SB_ALLOWED_ORIGINS:?Set SB_ALLOWED_ORIGINS in deploy/.env}
+      # Caddy is the only thing that can reach this container, so its X-Forwarded-For is trustworthy.
+      SB_TRUST_PROXY: "1"
+    # No "ports:" on purpose: the game server is reachable only through Caddy.
+    expose:
+      - "8080"
+    logging: *logging
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - game
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SB_DOMAIN: ${SB_DOMAIN:?Set SB_DOMAIN in deploy/.env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging: *logging
+
+volumes:
+  # caddy_data holds the HTTPS certificates; keep it so Caddy does not re-request them on every restart.
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,12 @@
+# Caddy gets and renews a Let's Encrypt certificate for SB_DOMAIN automatically
+# (the domain's DNS must already point at this server, and ports 80 and 443 must be open).
+# Players' browsers connect to wss://SB_DOMAIN; Caddy decrypts and forwards to the game
+# server. reverse_proxy handles WebSocket upgrades on its own, and /health is forwarded too.
+{$SB_DOMAIN} {
+	reverse_proxy game:8080
+
+	log {
+		output stdout
+		format console
+	}
+}

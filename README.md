@@ -17,6 +17,10 @@ This starts the game server (ws://localhost:8080) and the web client. Open http:
 - Players in the same room code play together; an empty code joins the public room. `?auto=1` skips the menu.
 - Add `?lag=150` to the URL to simulate 150 ms of round-trip latency.
 - Add `?server=ws://host:port` to connect to a server elsewhere.
+- Render resolution drops automatically when frames run slow and recovers when they are smooth; `?res=0.7` pins it.
+- `npx tsx tools/bench.ts` measures what a full ten-player room costs the server.
+
+To put the game online, see [DEPLOY.md](DEPLOY.md).
 
 ## Layout
 
