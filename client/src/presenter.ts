@@ -4,6 +4,7 @@ import type { RosterEntry, Team } from '@shared/protocol';
 import { ROUNDS_TO_WIN, type Phase, type RoundReason } from '@shared/rules';
 import type { Vec3 } from '@shared/types';
 import type { CreatePresenter, KillKind, LocalView, MatchView, RemoteView } from './presenter-api';
+import { Character, CharLook, loadCharacterModel, makeSkinnedGhostMaterial, type CharacterModel } from './characters';
 
 const DEG = 180 / Math.PI;
 const HEAD_WIDTH = 0.4;
@@ -319,6 +320,8 @@ interface Remote {
     visor: pc.Entity;
     bodyMi: pc.MeshInstance;
     headMi: pc.MeshInstance;
+    /** Animated character, once the model has loaded; null while the boxes stand in. */
+    char: Character | null;
     height: number;
     seen: number;
 }
@@ -336,6 +339,15 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     // Materials (shared; per-instance opacity goes through mesh-instance parameters).
     const defenderMats = { body: makeMaterial(0.95, 0.5, 0.15, false), head: makeMaterial(0.85, 0.32, 0.12, false) };
     const ghostMat = makeGhostMaterial();
+    const ghostSkinMat = makeSkinnedGhostMaterial(ENEMY_TINT);
+    // The animated character loads in the background; until then (and for good if it fails)
+    // remote players keep drawing as the box stand-ins below.
+    let charModel: CharacterModel | null = null;
+    loadCharacterModel(app, `${import.meta.env.BASE_URL}models/character.glb`, ghostSkinMat)
+        .then(m => { charModel = m; })
+        .catch((err: unknown) => {
+            console.warn('[stillblade] Character model failed to load; drawing box players instead.', err);
+        });
     const visorMat = makeMaterial(0.95, 0.95, 0.85, true);
     const gunMat = makeMaterial(0.13, 0.14, 0.16, false);
     const gunAccentMat = makeMaterial(0.28, 0.3, 0.33, false);
@@ -392,7 +404,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         return {
             id: -1, team: null, look: Look.None, root, body, neck, head, visor,
             bodyMi: body.render!.meshInstances[0], headMi: head.render!.meshInstances[0],
-            height: HULL_HEIGHT, seen: 0
+            char: null, height: HULL_HEIGHT, seen: 0
         };
     };
 
@@ -412,6 +424,22 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                 r.headMi.setParameter('uVis', ALLY_GHOST_VIS);
             }
         }
+        if (r.char) applyCharLook(r);
+    };
+
+    const applyCharLook = (r: Remote): void => {
+        const look = r.look === Look.Defender ? CharLook.Defender
+            : r.look === Look.AllyGhost ? CharLook.AllyGhost : CharLook.EnemyGhost;
+        r.char!.setLook(look, look === CharLook.AllyGhost ? ALLY_TINT : ENEMY_TINT, ALLY_GHOST_VIS);
+    };
+
+    /** Swaps a Remote from boxes to the animated character (once the model is loaded). */
+    const attachCharacter = (r: Remote, model: CharacterModel): void => {
+        r.char = new Character(model, r.root);
+        r.body.enabled = false;
+        r.neck.enabled = false;
+        r.char.reset();
+        if (r.look !== Look.None) applyCharLook(r);
     };
 
     const layoutRemote = (r: Remote): void => {
@@ -435,6 +463,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                 r = free.pop() ?? makeRemote();
                 r.id = v.id;
                 r.height = target;
+                r.char?.reset();
                 active.push(r);
             } else {
                 r.height += (target - r.height) * k;
@@ -444,19 +473,26 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             const look = v.team === 'defenders' ? Look.Defender
                 : localTeam === 'ghosts' ? Look.AllyGhost : Look.EnemyGhost;
             if (r.look !== look) setLook(r, look);
-            let visible = v.alive;
+            if (!r.char && charModel) attachCharacter(r, charModel);
+            const ch = r.char;
+            // The character also shows a brief death; boxes simply vanish when dead.
+            let visible = ch ? ch.update(dt, v) : v.alive;
             if (look === Look.EnemyGhost) {
                 const vis = v.vis > 1 ? 1 : v.vis;
                 visible = visible && vis >= VIS_CULL;
                 if (visible) {
-                    r.bodyMi.setParameter('uVis', vis);
-                    r.headMi.setParameter('uVis', vis);
+                    if (ch) ch.setVis(vis);
+                    else {
+                        r.bodyMi.setParameter('uVis', vis);
+                        r.headMi.setParameter('uVis', vis);
+                    }
                 }
             }
             r.root.enabled = visible;
             if (!visible) continue;
             r.root.setPosition(v.pos[0], v.pos[1], v.pos[2]);
             r.root.setEulerAngles(0, v.yaw * DEG, 0);
+            if (ch) continue;
             r.neck.setLocalEulerAngles(v.pitch * DEG, 0, 0);
             layoutRemote(r);
         }
@@ -936,6 +972,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             localTeam = local.team;
             time = (time + dt) % 1000;
             ghostMat.setParameter('uTime', time);
+            ghostSkinMat.setParameter('uTime', time);
             updateRemotes(dt, remotes);
             updateViewmodel(dt, local.team);
             updateEffects(dt);
