@@ -1,5 +1,6 @@
 import * as pc from 'playcanvas';
 import type { RemoteView } from './presenter-api';
+import { instantiateWeapon, type WeaponModel } from './weapons';
 
 /**
  * Animated remote-player characters.
@@ -22,6 +23,14 @@ import type { RemoteView } from './presenter-api';
  *   - Defender: one shared lit StandardMaterial using the vertex colours (orange suit).
  *   - Enemy ghost: one shared skinned shimmer ShaderMaterial; opacity per mesh instance (uVis).
  *   - Ally ghost: the same shader, steady violet, fixed opacity.
+ *
+ * Weapons (weapons.ts) hang from the "socket_gun" / "socket_knife" nodes on the right wrist bone:
+ *   - Defenders carry the gun (same vertex-colour material as the body) and hold it with the "aim" pose on
+ *     the upper layer at full weight; a remote shot plays "shoot" (a recoil that ends on the aim pose).
+ *     After the animation is applied, the spine is bent by the aim pitch.
+ *   - Ghosts carry the knife, drawn with the body's own material and per-instance parameters, so it is
+ *     exactly as visible as the body (and disabled with it when the player is culled).
+ * Each character is therefore at most two draw calls: the skinned body and one weapon.
  */
 
 export const CharLook = { None: 0, Defender: 1, EnemyGhost: 2, AllyGhost: 3 } as const;
@@ -64,9 +73,22 @@ const S_CWALK = 'crouch_walk';
 const S_DEATH = 'death';
 const U_SLASH = 'slash';
 const U_HIT = 'hit';
+/** Defenders: static two-handed gun hold, and a short recoil that ends exactly on it (characters.py). */
+const U_AIM = 'aim';
+const U_SHOOT = 'shoot';
 const BASE_STATES = [S_IDLE, S_WALK, S_RUN, S_CIDLE, S_CWALK, S_DEATH];
-const UPPER_STATES = [U_SLASH, U_HIT];
+const UPPER_STATES = [U_SLASH, U_HIT, U_AIM, U_SHOOT];
 const UPPER_ROOT_BONE = 'Abdomen';
+
+// Aim pitch (defenders): after the animation is applied, bones turn about the character's right axis so
+// the gun and head follow RemoteView.pitch. Fractions of the pitch per bone, applied parent first: the
+// spine takes under half, the rest is both upper arms turning about the shoulder line (the two shoulder
+// joints lie on that line, so the hands stay together on the gun); the neck adds a little for the head.
+// Gun: 0.2 + 0.25 + 0.55 = the full pitch; head: 0.2 + 0.25 + 0.3. Clamped.
+const PITCH_BONES = ['Abdomen', 'Chest', 'Neck', 'UpperArm.R', 'UpperArm.L'];
+const PITCH_SHARE = [0.2, 0.25, 0.3, 0.55, 0.55];
+const PITCH_LIMIT = 1.1;
+const DEG_PER_RAD = 180 / Math.PI;
 
 // ---------------------------------------------------------------------------------------------
 // Skinned ghost shimmer. ShaderMaterial in engine 2.24 defines SKIN and adds the
@@ -234,6 +256,17 @@ export class Character {
     private prevVis = 0;
     private spikeT = -1;
     private spikePeak = 0;
+    /** Holding the gun pose on the upper layer (defender look). */
+    private armed = false;
+    private tint: Float32Array | null = null;
+    private fixedVis = 1;
+    private gun: pc.Entity | null = null;
+    private gunMuzzle: pc.GraphNode | null = null;
+    private knife: pc.Entity | null = null;
+    private knifeMi: pc.MeshInstance | null = null;
+    private readonly pitchBones: pc.GraphNode[] = [];
+    private readonly qa = new pc.Quat();
+    private readonly qb = new pc.Quat();
 
     constructor(model: CharacterModel, parent: pc.Entity) {
         this.model = model;
@@ -272,11 +305,37 @@ export class Character {
         } else {
             this.upper = null;
         }
+        for (const name of PITCH_BONES) {
+            const b = e.findByName(name);
+            if (b) this.pitchBones.push(b);
+        }
         this.state = S_IDLE;
+    }
+
+    /** Puts the gun and knife into the hand sockets (once; the model may load after the character). */
+    setWeapons(w: WeaponModel): void {
+        if (this.gun || this.knife) return;
+        const gs = this.entity.findByName('socket_gun');
+        const ks = this.entity.findByName('socket_knife');
+        if (gs) {
+            const g = instantiateWeapon(w, 'gun', this.model.defenderMat);
+            gs.addChild(g.entity);
+            this.gun = g.entity;
+            this.gunMuzzle = g.muzzle;
+        }
+        if (ks) {
+            const k = instantiateWeapon(w, 'knife', this.model.ghostMat);
+            ks.addChild(k.entity);
+            this.knife = k.entity;
+            this.knifeMi = k.meshInstance;
+        }
+        this.applyWeaponLook();
     }
 
     setLook(look: CharLook, tint: Float32Array | null, fixedVis: number): void {
         this.look = look;
+        this.tint = tint;
+        this.fixedVis = fixedVis;
         const ghost = look !== CharLook.Defender;
         const mat = ghost ? this.model.ghostMat : this.model.defenderMat;
         for (const mi of this.meshInstances) {
@@ -285,6 +344,71 @@ export class Character {
                 mi.setParameter('uTint', tint);
                 mi.setParameter('uVis', fixedVis);
             }
+        }
+        this.applyWeaponLook();
+        this.setArmed(look === CharLook.Defender);
+    }
+
+    private applyWeaponLook(): void {
+        const ghost = this.look === CharLook.EnemyGhost || this.look === CharLook.AllyGhost;
+        if (this.gun) this.gun.enabled = this.look === CharLook.Defender;
+        if (this.knife && this.knifeMi) {
+            this.knife.enabled = ghost;
+            // Same material and parameters as the body: the knife is never more visible than its owner.
+            if (ghost && this.tint) {
+                this.knifeMi.setParameter('uTint', this.tint);
+                this.knifeMi.setParameter('uVis', this.fixedVis);
+            }
+        }
+    }
+
+    private setArmed(on: boolean): void {
+        if (on === this.armed) return;
+        this.armed = on;
+        this.holdPose();
+    }
+
+    /** Upper layer at rest: the gun hold for defenders, nothing for ghosts. */
+    private holdPose(): void {
+        if (!this.upper) return;
+        this.upperT = -1;
+        if (this.armed && this.alive) {
+            this.upper.play(U_AIM);
+            this.upper.weight = 1;
+        } else {
+            this.upper.weight = 0;
+        }
+    }
+
+    /** A remote shot by this player: recoil on the upper body. False if it cannot be shown. */
+    shoot(): boolean {
+        if (!this.armed || !this.alive || !this.upper) return false;
+        this.upper.play(U_SHOOT);
+        return true;
+    }
+
+    /** World position of the gun's muzzle, or null without a gun in hand. Valid until the next change. */
+    muzzle(): pc.Vec3 | null {
+        return this.armed && this.gun && this.gunMuzzle ? this.gunMuzzle.getPosition() : null;
+    }
+
+    /** World rotation of the gun (its -Z is the barrel), or null. */
+    gunRotation(): pc.Quat | null {
+        return this.armed && this.gun ? this.gun.getRotation() : null;
+    }
+
+    /** Bend the spine by the aim pitch. Must run after the animation has been applied this frame. */
+    private applyPitch(pitch: number): void {
+        const p = pitch > PITCH_LIMIT ? PITCH_LIMIT : pitch < -PITCH_LIMIT ? -PITCH_LIMIT : pitch;
+        if (p > -1e-3 && p < 1e-3) return;
+        const right = this.entity.parent ? this.entity.parent.right : this.entity.right;
+        for (let i = 0; i < this.pitchBones.length; i++) {
+            const b = this.pitchBones[i];
+            // Positive angle about +right tips -Z (forward) up: positive pitch looks up.
+            this.qa.setFromAxisAngle(right, p * PITCH_SHARE[i] * DEG_PER_RAD);
+            this.qb.copy(b.getRotation());
+            this.qa.mul(this.qb);
+            b.setRotation(this.qa);
         }
     }
 
@@ -297,12 +421,13 @@ export class Character {
         this.upperT = -1;
         this.spikeT = -1;
         this.prevVis = 0;
-        if (this.upper) this.upper.weight = 0;
+        this.holdPose();
         this.go(S_IDLE, 0);
     }
 
     setVis(vis: number): void {
         for (let i = 0; i < this.meshInstances.length; i++) this.meshInstances[i].setParameter('uVis', vis);
+        if (this.knifeMi) this.knifeMi.setParameter('uVis', vis);
     }
 
     private go(state: string, fade: number): void {
@@ -355,6 +480,7 @@ export class Character {
             this.alive = true;
             this.deadT = -1;
             this.go(S_IDLE, 0);
+            this.holdPose();
         }
 
         const s = this.speed;
@@ -398,6 +524,7 @@ export class Character {
                 this.upperT = -1;
             }
         }
+        if (this.armed) this.applyPitch(v.pitch);
         return true;
     }
 }

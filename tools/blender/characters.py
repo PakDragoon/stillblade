@@ -1,4 +1,4 @@
-"""
+﻿"""
 Stillblade character pipeline: CC0 source model -> client/public/models/character.glb
 
     "C:/Program Files/Blender Foundation/Blender 5.3/blender.exe" --background --factory-startup \
@@ -13,8 +13,14 @@ What it does, in order:
   3. Builds two new clips, crouch_idle and crouch_walk, from Idle and Walk: the hips are lowered,
      the spine leans forward, the head counter-rotates, and the legs are re-solved with an
      analytic two-bone IK onto the original (unchanged) foot bones, so the feet stay planted.
+  3b. Builds the armed upper-body clips for defenders, aim (static two-handed hold of the gun in
+     tools/blender/weapons.py's convention, arms solved with two-bone IK) and shoot (recoil ending on
+     aim). The source has gun clips, but they are one-handed pistol poses that do not suit an SMG.
+     It also measures a grip frame in each hand from the finger bones, used for the hand IK and for
+     two empties on Wrist.R ("socket_gun", "socket_knife") that client/src/characters.ts hangs the
+     weapon meshes from.
   4. Keeps only the clips the game uses, renamed: idle, walk, run, crouch_idle, crouch_walk,
-     death, slash, hit.
+     death, slash, hit, aim, shoot.
   5. Joins the meshes, bakes the material colours into a vertex-colour attribute (defender
      palette: orange body, charcoal gear, skin, black visor), welds, decimates to <= ~3,800
      triangles and leaves ONE material -> one draw call.
@@ -62,6 +68,23 @@ PALETTE = {
     'Skin': (0.49, 0.33, 0.19, 1.0),
     'Visor': (0.01, 0.01, 0.012, 1.0),
 }
+
+# Armed clips (defenders). Gun placement relative to the right shoulder joint, metres in the character's own
+# frame (right, forward, up) at the final 1.8 m scale; the gun points straight ahead, level.
+AIM_GUN_FROM_SHOULDER = (-0.11, 0.17, -0.09)
+# Support hand: where the left hand grips the gun, metres in the gun's frame (right, forward, up), origin at
+# the pistol grip: the front of the magazine well (weapons.py: magazine spans 0.20-0.35 m forward).
+AIM_SUPPORT_ON_GUN = (0.0, 0.17, -0.02)
+# Elbow pole directions in the character frame (right, forward, up), per side.
+AIM_POLE = {'R': (0.65, -0.15, -1.0), 'L': (-0.55, -0.1, -1.0)}
+# Shoot: recoil per frame (24 fps) as a fraction of the peak; peak kick back (m) and muzzle climb (degrees).
+SHOOT_CURVE = (0.0, 1.0, 0.62, 0.32, 0.12, 0.0)
+SHOOT_BACK = 0.045
+SHOOT_CLIMB = 7.0
+SHOOT_CHEST = 2.5           # degrees the chest rocks back at the peak
+# How far the grip sits off the palm (metres, along the palm normal) and how far along the hand from the wrist.
+GRIP_PALM_OFFSET = 0.028
+GRIP_ALONG_HAND = 0.55       # 0 = wrist joint, 1 = finger knuckles
 
 FINGERS = ('Index', 'Middle', 'Ring', 'Pinky', 'Thumb')
 DROP_BONES = ('PT.L', 'PT.R')
@@ -206,6 +229,11 @@ def main():
     crouch_idle = build_crouch(arm, actions['Idle'], 'crouch_idle', unit, forward)
     crouch_walk = build_crouch(arm, actions['Walk'], 'crouch_walk', unit, forward)
 
+    # Hand grip frames (need the finger bones, so before they are deleted) and the armed clips.
+    am = unit / arm.matrix_world.to_scale()[0]          # armature units per metre
+    sockets = hand_sockets(arm, forward, am)
+    aim, shoot = build_aim(arm, actions['Idle'], am, forward, sockets)
+
     # Delete finger and pole bones (edit mode), then their curves.
     bpy.ops.object.mode_set(mode='EDIT')
     eb = arm.data.edit_bones
@@ -217,7 +245,7 @@ def main():
     log('bones', len(bones))
 
     # --- 4. Keep and rename clips ---------------------------------------------------------------
-    keep = {crouch_idle.name: crouch_idle, crouch_walk.name: crouch_walk}
+    keep = {crouch_idle.name: crouch_idle, crouch_walk.name: crouch_walk, aim.name: aim, shoot.name: shoot}
     for a in list(bpy.data.actions):
         short = a.name.split('|')[-1]
         if a in keep.values():
@@ -298,11 +326,31 @@ def main():
     for name in sorted(keep):
         log(f'clip {name} duration', round(clip_seconds(keep[name]), 3))
 
+    # --- Weapon sockets: empties parented to the right wrist bone (see hand_sockets) --------------
+    arm.data.pose_position = 'REST'
+    bpy.context.view_layer.update()
+    socket_objs = []
+    wrist = arm.data.bones['Wrist.R']
+    for name in ('socket_gun', 'socket_knife'):
+        e = bpy.data.objects.new(name, None)
+        scene.collection.objects.link(e)
+        e.parent = arm
+        e.parent_type = 'BONE'
+        e.parent_bone = 'Wrist.R'
+        bpy.context.view_layer.update()
+        loc, rot, _ = (arm.matrix_world @ wrist.matrix_local @ sockets[name]).decompose()
+        e.matrix_world = Matrix.LocRotScale(loc, rot, Vector((1, 1, 1)))
+        socket_objs.append(e)
+        bpy.context.view_layer.update()
+        log(name, 'world (rest pose, Blender Z up)', tuple(round(c, 3) for c in e.matrix_world.translation))
+    arm.data.pose_position = 'POSE'
+    bpy.context.view_layer.update()
+
     # --- Export --------------------------------------------------------------------------------
     set_action(arm, keep['idle'])
     scene.frame_set(0)
     for o in bpy.data.objects:
-        o.select_set(o in (arm, body))
+        o.select_set(o in (arm, body) or o in socket_objs)
     bpy.context.view_layer.objects.active = arm
     os.makedirs(os.path.dirname(out), exist_ok=True)
     bpy.ops.export_scene.gltf(
@@ -526,6 +574,201 @@ def solve_leg(data, mats, side, fwd_a):
     ml = rotated(mats[lo_name], q1, H, K)
     q2 = ((ml @ ankle_local) - K).rotation_difference(T - K)
     mats[lo_name] = rotated(ml, q2, K, K)
+
+
+# ---------------------------------------------------------------------------------------------
+# Weapons: hand sockets and the armed (two-handed) upper-body clips
+
+def frame_from(right, fwd, up, origin):
+    m = Matrix((right, fwd, up)).transposed().to_4x4()
+    m.translation = origin
+    return m
+
+
+def hand_grip_frame(data, side, am):
+    """
+    Rest-pose grip frame of one hand, in armature space: origin in the palm where a handle would sit,
+    axes (right, forward, up) of a pistol grip held in it: 'up' runs from the pinky side to the index side,
+    'forward' follows the fingers (the barrel of a pistol lies along the forearm), 'right' completes the frame.
+    The palm normal (which way the palm faces) is the frame's -right for the right hand and +right for the left.
+    """
+    wrist = data.bones[f'Wrist.{side}']
+    w = wrist.head_local
+    # The first finger bones all start at one point at the wrist; the knuckles are the heads of the second ones.
+    knuckles = sum((data.bones[f'{f}2.{side}'].head_local for f in ('Index', 'Middle', 'Ring', 'Pinky')), Vector()) / 4
+    fingers = (knuckles - w).normalized()
+    across = (data.bones[f'Index2.{side}'].head_local - data.bones[f'Pinky2.{side}'].head_local)
+    up = (across - fingers * across.dot(fingers)).normalized()
+    right = fingers.cross(up)
+    # Palm side: a right hand closes on a grip from the grip's right side (palm faces -right), a left hand
+    # from its left side (palm faces +right). (Rest pose: T-pose, palms down, thumbs forward.)
+    palm = -right if side == 'R' else right
+    origin = w + (knuckles - w) * GRIP_ALONG_HAND + palm * (GRIP_PALM_OFFSET * am)
+    return frame_from(right, fingers, up, origin), palm
+
+
+def hand_sockets(arm, forward, am):
+    """
+    Socket transforms relative to the rest pose of Wrist.R (armature units), keyed by socket name, plus the
+    left hand's grip frame for the support-hand IK:
+      socket_gun   : the gun model's frame (X right, Y forward = muzzle, Z up; origin = pistol grip)
+      socket_knife : the knife model's frame (Y forward = blade tip out of the thumb side, Z up = spine,
+                     toward the elbow, so the cutting edge faces the way the fingers point)
+    """
+    data = arm.data
+    out = {}
+    g, palm = hand_grip_frame(data, 'R', am)
+    wr = data.bones['Wrist.R'].matrix_local
+    out['socket_gun'] = wr.inverted() @ g
+    r, f, u = (g.col[i].to_3d() for i in range(3))
+    k_fwd, k_up = u, -f
+    k = frame_from(k_fwd.cross(k_up), k_fwd, k_up, g.translation)
+    out['socket_knife'] = wr.inverted() @ k
+    gl, palm_l = hand_grip_frame(data, 'L', am)
+    out['left_grip'] = data.bones['Wrist.L'].matrix_local.inverted() @ gl
+    fwd_a = (arm.matrix_world.inverted().to_3x3() @ forward).normalized()
+    up_a = (arm.matrix_world.inverted().to_3x3() @ Vector((0, 0, 1))).normalized()
+    log('palm . up (rest T-pose, palms down: expect ~ -1): right', round(palm.dot(up_a), 2),
+        'left', round(palm_l.dot(up_a), 2))
+    return out
+
+
+def solve_arm(data, mats, side, target, pole):
+    """Two-bone IK (UpperArm, LowerArm) putting the wrist joint at `target`; elbow bends toward `pole`."""
+    up_name, lo_name, end_name = f'UpperArm.{side}', f'LowerArm.{side}', f'Wrist.{side}'
+    ub, lb, eb = data.bones[up_name], data.bones[lo_name], data.bones[end_name]
+    la = (lb.head_local - ub.head_local).length
+    lbl = (eb.head_local - lb.head_local).length
+    H = mats[up_name].to_translation()
+    ht = target - H
+    reach = ht.length / (la + lbl)
+    d = min(max(ht.length, abs(la - lbl) + 1e-6), la + lbl - 1e-6)
+    dirv = ht.normalized()
+    bend = (pole - dirv * pole.dot(dirv)).normalized()
+    x = (la * la - lbl * lbl + d * d) / (2 * d)
+    h = math.sqrt(max(la * la - x * x, 0.0))
+    K = H + dirv * x + bend * h
+    T = H + dirv * d
+    elbow_local = ub.matrix_local.inverted() @ lb.head_local
+    wrist_local = lb.matrix_local.inverted() @ eb.head_local
+
+    def rotated(m, q, new_head):
+        nm = (q.to_matrix() @ m.to_3x3()).to_4x4()
+        nm.translation = new_head
+        return nm
+
+    mu = mats[up_name]
+    q1 = ((mu @ elbow_local) - H).rotation_difference(K - H)
+    mats[up_name] = rotated(mu, q1, H)
+    ml = rotated(mats[lo_name], q1, K)
+    q2 = ((ml @ wrist_local) - K).rotation_difference(T - K)
+    mats[lo_name] = rotated(ml, q2, K)
+    return reach
+
+
+def write_action(arm, name, frames):
+    """New action from per-frame armature-space pose matrices {bone: Matrix}."""
+    pose, data = arm.pose, arm.data
+    order = [bn.name for bn in data.bones]   # parents come before children in this list
+    new = bpy.data.actions.new(name)
+    set_action(arm, new)
+    for f, mats in frames:
+        for n in order:
+            pb = pose.bones[n]
+            bone = data.bones[n]
+            if bone.parent:
+                par = bone.parent
+                basis = (mats[par.name] @ par.matrix_local.inverted() @ bone.matrix_local).inverted() @ mats[n]
+            else:
+                basis = bone.matrix_local.inverted() @ mats[n]
+            pb.rotation_mode = 'QUATERNION'
+            loc, rotq, scl = basis.decompose()
+            pb.location = loc
+            pb.rotation_quaternion = rotq
+            pb.scale = scl
+            pb.keyframe_insert('location', frame=f, group=n)
+            pb.keyframe_insert('rotation_quaternion', frame=f, group=n)
+            pb.keyframe_insert('scale', frame=f, group=n)
+    new.use_fake_user = True
+    return new
+
+
+def build_aim(arm, src_action, am, forward, sockets):
+    """
+    'aim': a static two-handed hold (the source has only one-handed pistol clips): the spine and head of the
+    first Idle frame, the gun level and straight ahead in front of the right shoulder, the right wrist placed
+    so the gun socket lands on that gun frame, the left hand on the front of the magazine, both arms solved
+    with two-bone IK. 'shoot': the same pose with a short recoil (gun kicks back and climbs, chest rocks),
+    ending exactly on the aim pose so the game can cut between the two.
+    """
+    data = arm.data
+    inv_w = arm.matrix_world.inverted()
+    up_a = (inv_w.to_3x3() @ Vector((0, 0, 1))).normalized()
+    fwd_a = (inv_w.to_3x3() @ forward).normalized()
+    fwd_a = (fwd_a - up_a * fwd_a.dot(up_a)).normalized()
+    side_a = fwd_a.cross(up_a)                                   # character's right
+    char = lambda v: side_a * v[0] + fwd_a * v[1] + up_a * v[2]
+
+    # Bones the source clip does not key keep whatever was set last (build_crouch leaves its final frame
+    # in the pose), so clear the pose to rest before sampling.
+    for pb in arm.pose.bones:
+        pb.rotation_mode = 'QUATERNION'
+        pb.location = (0, 0, 0)
+        pb.rotation_quaternion = (1, 0, 0, 0)
+        pb.scale = (1, 1, 1)
+    set_action(arm, src_action)
+    a = int(round(src_action.frame_range[0]))
+    bpy.context.scene.frame_set(a + 1)
+    bpy.context.scene.frame_set(a)
+    base = {pb.name: pb.matrix.copy() for pb in arm.pose.bones}
+
+    shoulder_r = base['UpperArm.R'].to_translation()
+    g0 = frame_from(side_a, fwd_a, up_a, shoulder_r + char(AIM_GUN_FROM_SHOULDER) * am)
+    s_gun_inv = sockets['socket_gun'].inverted()
+    s_left_inv = sockets['left_grip'].inverted()
+    chest_set = set(['Chest'] + descendants(data.bones['Chest']))
+
+    def pose_for(k):
+        mats = {n: m.copy() for n, m in base.items()}
+        # Chest rocks back about its own joint.
+        if k > 0:
+            pivot = mats['Chest'].to_translation()
+            # (right, forward, up) is right-handed, so a positive turn about 'right' tips 'up' backward.
+            rc = (Matrix.Translation(pivot) @ Matrix.Rotation(math.radians(SHOOT_CHEST) * k, 4, side_a)
+                  @ Matrix.Translation(-pivot))
+            for n in chest_set:
+                mats[n] = rc @ mats[n]
+            g = rc @ g0
+        else:
+            g = g0.copy()
+        # Recoil in the gun's own frame: back along -forward, muzzle climbs about the grip.
+        g = g @ Matrix.Translation(Vector((0, -SHOOT_BACK * am * k, 0))) @ Matrix.Rotation(math.radians(SHOOT_CLIMB) * k, 4, 'X')
+        support = g @ Matrix.Translation(Vector(AIM_SUPPORT_ON_GUN) * am)
+        w_r = g @ s_gun_inv
+        w_l = support @ s_left_inv
+        reach_r = solve_arm(data, mats, 'R', w_r.to_translation(), char(AIM_POLE['R']))
+        reach_l = solve_arm(data, mats, 'L', w_l.to_translation(), char(AIM_POLE['L']))
+        mats['Wrist.R'] = w_r
+        mats['Wrist.L'] = w_l
+        # Children of the wrists (finger bones, deleted later) are left as they were: they are not shipped.
+        return mats, reach_r, reach_l
+
+    mats0, rr, rl = pose_for(0)
+    sl = base['UpperArm.L'].to_translation()
+    arm_len = ((data.bones['LowerArm.R'].head_local - data.bones['UpperArm.R'].head_local).length +
+               (data.bones['Wrist.R'].head_local - data.bones['LowerArm.R'].head_local).length) / am
+    rel = lambda p: tuple(round(c, 3) for c in ((p - shoulder_r).dot(side_a) / am, (p - shoulder_r).dot(fwd_a) / am,
+                                                (p - shoulder_r).dot(up_a) / am))
+    log('arm length m', round(arm_len, 3), 'left shoulder rel. right (r,f,u)', rel(sl),
+        'right wrist target', rel(mats0['Wrist.R'].to_translation()), 'left wrist target', rel(mats0['Wrist.L'].to_translation()))
+    log('aim reach (fraction of arm length) right', round(rr, 3), 'left', round(rl, 3))
+    if rr > 0.999 or rl > 0.999:
+        log('WARNING aim target out of reach: the hands will not meet the gun')
+    aim = write_action(arm, 'aim', [(0, mats0), (12, mats0)])
+    frames = [(i, pose_for(k)[0]) for i, k in enumerate(SHOOT_CURVE)]
+    shoot = write_action(arm, 'shoot', frames)
+    log('built aim, shoot frames', len(frames))
+    return aim, shoot
 
 
 main()

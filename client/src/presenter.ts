@@ -1,10 +1,13 @@
 import * as pc from 'playcanvas';
-import { HEAD_ZONE, HULL_HALF_WIDTH, HULL_HEIGHT, HULL_HEIGHT_CROUCHED } from '@shared/constants';
+import {
+    EYE_HEIGHT, EYE_HEIGHT_CROUCHED, HEAD_ZONE, HULL_HALF_WIDTH, HULL_HEIGHT, HULL_HEIGHT_CROUCHED
+} from '@shared/constants';
 import type { RosterEntry, Team } from '@shared/protocol';
 import { ROUNDS_TO_WIN, type Phase, type RoundReason } from '@shared/rules';
 import type { Vec3 } from '@shared/types';
 import type { CreatePresenter, KillKind, LocalView, MatchView, RemoteView } from './presenter-api';
 import { Character, CharLook, loadCharacterModel, makeSkinnedGhostMaterial, type CharacterModel } from './characters';
+import { instantiateWeapon, loadWeaponModel, makeWeaponMaterial, type WeaponModel } from './weapons';
 
 const DEG = 180 / Math.PI;
 const HEAD_WIDTH = 0.4;
@@ -19,7 +22,26 @@ const FLASH_TIME = 0.04;
 const KILLFEED_MAX = 5;
 const KILLFEED_LIFE = 5;
 const KILLFEED_FADE = 0.5;
+/** Box stand-in gun (origin mid-receiver), used until weapons.glb has loaded or if it fails. */
 const GUN_POS = new pc.Vec3(0.15, -0.15, -0.46);
+/**
+ * Model gun (origin at the pistol grip, see weapons.ts): grip position in camera space, and a small
+ * inward yaw / roll so it reads as held, the suppressor angling toward the crosshair.
+ */
+const GUN_MODEL_POS = new pc.Vec3(0.17, -0.32, -0.5);
+const GUN_MODEL_YAW = 6;
+const GUN_MODEL_ROLL = -6;
+const GUN_MODEL_PITCH = 4;
+/** Model knife: handle centre sits this far behind the knife pivot (the box knife's guard). */
+const KNIFE_MODEL_BACK = 0.055;
+/** Idle sway of the viewmodel: amplitude (m, degrees) and rate (rad/s). Time-based only. */
+const SWAY_POS = 0.0022;
+const SWAY_ROT = 0.45;
+const SWAY_RATE = 1.3;
+/** A remote shot's eye position must be this close to a defender's (m) to count as theirs. */
+const SHOOTER_MATCH = 1.6;
+const REMOTE_FLASH_COUNT = 4;
+const REMOTE_FLASH_TIME = 0.05;
 /** Below this an enemy ghost is not drawn at all (entity disabled: zero cost, truly invisible). */
 const VIS_CULL = 0.01;
 /** Fixed opacity for ghosts seen by their own teammates. */
@@ -324,9 +346,16 @@ interface Remote {
     char: Character | null;
     height: number;
     seen: number;
+    /** Copy of this frame's view, for matching remote shots to their shooter. */
+    x: number;
+    y: number;
+    z: number;
+    crouched: boolean;
+    alive: boolean;
 }
 
 interface Tracer { e: pc.Entity; mi: pc.MeshInstance; t: number; }
+interface Flash { e: pc.Entity; t: number; }
 interface Impact { e: pc.Entity; t: number; }
 interface FeedLine { el: HTMLDivElement; age: number; }
 
@@ -347,6 +376,16 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         .then(m => { charModel = m; })
         .catch((err: unknown) => {
             console.warn('[stillblade] Character model failed to load; drawing box players instead.', err);
+        });
+    // Weapons load independently: the viewmodel keeps its boxes and characters stay unarmed until then.
+    let weaponModel: WeaponModel | null = null;
+    loadWeaponModel(app, `${import.meta.env.BASE_URL}models/weapons.glb`)
+        .then(m => {
+            weaponModel = m;
+            useWeaponModel(m);
+        })
+        .catch((err: unknown) => {
+            console.warn('[stillblade] Weapon model failed to load; keeping the box viewmodels.', err);
         });
     const visorMat = makeMaterial(0.95, 0.95, 0.85, true);
     const gunMat = makeMaterial(0.13, 0.14, 0.16, false);
@@ -404,7 +443,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         return {
             id: -1, team: null, look: Look.None, root, body, neck, head, visor,
             bodyMi: body.render!.meshInstances[0], headMi: head.render!.meshInstances[0],
-            char: null, height: HULL_HEIGHT, seen: 0
+            char: null, height: HULL_HEIGHT, seen: 0, x: 0, y: 0, z: 0, crouched: false, alive: false
         };
     };
 
@@ -438,6 +477,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         r.char = new Character(model, r.root);
         r.body.enabled = false;
         r.neck.enabled = false;
+        if (weaponModel) r.char.setWeapons(weaponModel);
         r.char.reset();
         if (r.look !== Look.None) applyCharLook(r);
     };
@@ -470,6 +510,9 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             }
             r.seen = stamp;
             r.team = v.team;
+            r.x = v.pos[0]; r.y = v.pos[1]; r.z = v.pos[2];
+            r.crouched = v.crouched;
+            r.alive = v.alive;
             const look = v.team === 'defenders' ? Look.Defender
                 : localTeam === 'ghosts' ? Look.AllyGhost : Look.EnemyGhost;
             if (r.look !== look) setLook(r, look);
@@ -501,34 +544,63 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         for (let j = 0; j < active.length; j++) {
             const r = active[j];
             if (r.seen === stamp) active[w++] = r;
-            else { r.root.enabled = false; r.id = -1; free.push(r); }
+            else { r.root.enabled = false; r.id = -1; r.alive = false; free.push(r); }
         }
         active.length = w;
     };
 
     // --- Viewmodels ------------------------------------------------------------------------------
     // All geometry sits at least ~0.2 m in front of the eye, well clear of the 0.05 m near plane.
+    // The box versions are the fallback while weapons.glb loads (or if it fails); useWeaponModel swaps in
+    // the meshes: gun = 1 draw call + the flash, knife = 1.
     const gun = new pc.Entity('viewmodel-gun');
     camera.addChild(gun);
-    box(gun, gunMat, 0.05, 0.07, 0.26, 0, 0, 0, VM);                       // receiver
-    box(gun, gunAccentMat, 0.026, 0.026, 0.22, 0, 0.012, -0.24, VM);       // barrel
-    box(gun, gunMat, 0.036, 0.085, 0.05, 0, -0.065, -0.05, VM);            // magazine
-    const grip = box(gun, gunAccentMat, 0.04, 0.08, 0.045, 0, -0.06, 0.08, VM);
+    const gunBoxes = new pc.Entity('boxes');
+    gun.addChild(gunBoxes);
+    box(gunBoxes, gunMat, 0.05, 0.07, 0.26, 0, 0, 0, VM);                       // receiver
+    box(gunBoxes, gunAccentMat, 0.026, 0.026, 0.22, 0, 0.012, -0.24, VM);       // barrel
+    box(gunBoxes, gunMat, 0.036, 0.085, 0.05, 0, -0.065, -0.05, VM);            // magazine
+    const grip = box(gunBoxes, gunAccentMat, 0.04, 0.08, 0.045, 0, -0.06, 0.08, VM);
     grip.setLocalEulerAngles(-15, 0, 0);
     const muzzle = new pc.Entity('muzzle');
     muzzle.setLocalPosition(0, 0.012, -0.36);
     gun.addChild(muzzle);
     const flash = box(muzzle, flashMat, 0.045, 0.045, 0.07, 0, 0, -0.03, VM);
     flash.enabled = false;
+    let gunPos = GUN_POS;
+    let gunPitch = 0, gunYaw = 0, gunRoll = 0;
 
     // Knife: origin at the guard, blade along -Z.
     const knife = new pc.Entity('viewmodel-knife');
     camera.addChild(knife);
-    box(knife, bladeMat, 0.007, 0.03, 0.16, 0, 0.003, -0.08, VM);          // blade
-    box(knife, bladeMat, 0.005, 0.016, 0.03, 0, 0.01, -0.172, VM);         // tip (narrower)
-    box(knife, knifeGuardMat, 0.02, 0.055, 0.012, 0, 0, 0, VM);            // guard
-    box(knife, knifeHandleMat, 0.022, 0.028, 0.09, 0, -0.002, 0.051, VM);  // handle
+    const knifeBoxes = new pc.Entity('boxes');
+    knife.addChild(knifeBoxes);
+    box(knifeBoxes, bladeMat, 0.007, 0.03, 0.16, 0, 0.003, -0.08, VM);          // blade
+    box(knifeBoxes, bladeMat, 0.005, 0.016, 0.03, 0, 0.01, -0.172, VM);         // tip (narrower)
+    box(knifeBoxes, knifeGuardMat, 0.02, 0.055, 0.012, 0, 0, 0, VM);            // guard
+    box(knifeBoxes, knifeHandleMat, 0.022, 0.028, 0.09, 0, -0.002, 0.051, VM);  // handle
     knife.enabled = false;
+
+    const useWeaponModel = (m: WeaponModel): void => {
+        const vmMat = makeWeaponMaterial(0.4);
+        const g = instantiateWeapon(m, 'gun', vmMat, VM);
+        gun.addChild(g.entity);
+        gunBoxes.enabled = false;
+        // Tracers and the flash start at the end of the suppressor.
+        muzzle.reparent(g.muzzle!);
+        muzzle.setLocalPosition(0, 0, 0);
+        muzzle.setLocalEulerAngles(0, 0, 0);
+        flash.setLocalScale(0.05, 0.05, 0.085);
+        flash.setLocalPosition(0, 0, -0.04);
+        gunPos = GUN_MODEL_POS;
+        gunPitch = GUN_MODEL_PITCH; gunYaw = GUN_MODEL_YAW; gunRoll = GUN_MODEL_ROLL;
+        const k = instantiateWeapon(m, 'knife', vmMat, VM);
+        knife.addChild(k.entity);
+        k.entity.setLocalPosition(0, 0, KNIFE_MODEL_BACK);
+        knifeBoxes.enabled = false;
+        for (let i = 0; i < active.length; i++) active[i].char?.setWeapons(m);
+        for (let i = 0; i < free.length; i++) free[i].char?.setWeapons(m);
+    };
 
     let recoilT = 0;
     let flashT = 0;
@@ -560,11 +632,21 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             flash.enabled = flashT > 0;
             const k = recoilT / RECOIL_TIME;
             const e = k * k;
-            gun.setLocalPosition(GUN_POS.x, GUN_POS.y + 0.012 * e, GUN_POS.z + 0.035 * e);
-            gun.setLocalEulerAngles(4 * e, 0, 0);
+            // Subtle time-based sway (the presenter has no player speed); damped while firing.
+            const s = 1 - 0.7 * k;
+            const sx = Math.sin(time * SWAY_RATE) * SWAY_POS * s;
+            const sy = Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6 * s;
+            gun.setLocalPosition(gunPos.x + sx, gunPos.y + sy + 0.012 * e, gunPos.z + 0.035 * e);
+            gun.setLocalEulerAngles(gunPitch + 4 * e + sy * 120, gunYaw + Math.sin(time * SWAY_RATE * 0.7) * SWAY_ROT * s,
+                gunRoll + sx * 160);
             return;
         }
-        if (swingT < 0) { setKnifePose(KNIFE_REST, KNIFE_REST, 0); return; }
+        if (swingT < 0) {
+            setKnifePose(KNIFE_REST, KNIFE_REST, 0);
+            // Same idle sway as the gun, only while not swinging.
+            knife.translateLocal(Math.sin(time * SWAY_RATE) * SWAY_POS, Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6, 0);
+            return;
+        }
         swingT += dt;
         let t = swingT;
         if (t < windup) {
@@ -597,8 +679,38 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         impacts.push({ e, t: 0 });
     }
     let nextImpact = 0;
+    // Muzzle flashes of remote defenders: world-space effects like the tracers (not part of a character).
+    const remoteFlashes: Flash[] = [];
+    for (let i = 0; i < REMOTE_FLASH_COUNT; i++) {
+        const e = box(app.root, flashMat, 0.06, 0.06, 0.1);
+        e.enabled = false;
+        remoteFlashes.push({ e, t: 0 });
+    }
+    let nextFlash = 0;
+
+    /** The living defender whose eye is nearest `from` (within SHOOTER_MATCH), or null. */
+    const findShooter = (from: Vec3): Remote | null => {
+        let best: Remote | null = null;
+        let bestD = SHOOTER_MATCH * SHOOTER_MATCH;
+        for (let i = 0; i < active.length; i++) {
+            const r = active[i];
+            if (r.team !== 'defenders' || !r.alive) continue;
+            const dx = r.x - from[0];
+            const dy = r.y + (r.crouched ? EYE_HEIGHT_CROUCHED : EYE_HEIGHT) - from[1];
+            const dz = r.z - from[2];
+            const d = dx * dx + dy * dy + dz * dz;
+            if (d < bestD) { bestD = d; best = r; }
+        }
+        return best;
+    };
 
     const updateEffects = (dt: number): void => {
+        for (let i = 0; i < REMOTE_FLASH_COUNT; i++) {
+            const f = remoteFlashes[i];
+            if (f.t <= 0) continue;
+            f.t -= dt;
+            if (f.t <= 0) f.e.enabled = false;
+        }
         for (let i = 0; i < TRACER_COUNT; i++) {
             const tr = tracers[i];
             if (tr.t <= 0) continue;
@@ -1003,6 +1115,23 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                 tmpA.copy(muzzle.getPosition());
             } else {
                 tmpA.set(from[0], from[1], from[2]);
+                // Remote shot: recoil and a flash on the shooter's gun, and the tracer from its muzzle.
+                const ch = isLocal ? null : findShooter(from)?.char;
+                if (ch && ch.shoot()) {
+                    const mp = ch.muzzle();
+                    const rot = ch.gunRotation();
+                    if (mp && rot) {
+                        tmpA.copy(mp);
+                        const f = remoteFlashes[nextFlash];
+                        nextFlash = (nextFlash + 1) % REMOTE_FLASH_COUNT;
+                        f.e.setRotation(rot);
+                        f.e.setPosition(mp);
+                        f.e.translateLocal(0, 0, -0.04);
+                        f.e.rotateLocal(0, 0, Math.random() * 90);
+                        f.e.enabled = true;
+                        f.t = REMOTE_FLASH_TIME;
+                    }
+                }
             }
             tmpB.set(to[0], to[1], to[2]);
 
