@@ -68,7 +68,7 @@ interface VmLook {
 const VM_LOOKS: Record<WeaponId, VmLook> = {
     rifle: {
         hip: [0.17, -0.32, -0.5, 4, 6, -6],
-        aim: [-0.013, -0.228, -0.34, 0, 0, 0],
+        aim: [-0.013, -0.226, -0.47, 0, 0, 0],
         draw: [0.03, -0.24, 0.06, -40, 12, 25],
         // Lowered, pulled in toward the centre and canted so the magazine well faces the support hand.
         reload: [-0.05, -0.085, 0.05, 12, 16, -28],
@@ -79,8 +79,8 @@ const VM_LOOKS: Record<WeaponId, VmLook> = {
         fx: 1
     },
     pistol: {
-        hip: [0.13, -0.19, -0.38, 2, 4, -3],
-        aim: [-0.002, -0.088, -0.36, 0, 0, 0],
+        hip: [0.12, -0.175, -0.34, 2, 4, -3],
+        aim: [-0.002, -0.084, -0.3, 0, 0, 0],
         draw: [0, -0.2, 0.05, -55, 0, 20],
         // Tilted onto its side and brought in, magazine well toward the support hand.
         reload: [-0.04, -0.04, 0.04, 16, 12, -38],
