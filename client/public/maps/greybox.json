@@ -1,5 +1,6 @@
 {
   "name": "greybox",
+  "displayName": "Test Map 1",
   "bounds": {
     "min": [
       -15.5,
