@@ -413,6 +413,21 @@ const synthHurt: Synth = (v, t) => {
     env(body.gain, t, 0.003, 0.7, 0.15);
 };
 
+/** Hit marker: a short bright tick; the headshot is higher and doubled, the kill lower and longer. flag = head, x = 1 for a kill. */
+const synthHit: Synth = (v, t, x, flag) => {
+    const kill = x > 0.5;
+    const f = kill ? 880 : flag ? 2300 : 1500;
+    const a = v.gain(v.input);
+    const o = v.osc('triangle', f, t, 0.12, a);
+    if (kill) o.frequency.exponentialRampToValueAtTime(440, t + 0.14);
+    env(a.gain, t, 0.002, 0.8, kill ? 0.16 : 0.05);
+    if (flag && !kill) {
+        const b = v.gain(v.input);
+        v.osc('triangle', f * 1.5, t + 0.045, 0.08, b);
+        env(b.gain, t + 0.045, 0.002, 0.6, 0.05);
+    }
+};
+
 /** A single enveloped oscillator layer; returns the oscillator for pitch automation. */
 function tone(v: Voice, type: OscillatorType, freq: number, t: number, attack: number, peak: number,
     decay: number, dest: AudioNode = v.input): OscillatorNode {
@@ -643,6 +658,8 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
     let failed = false;
     let master: GainNode | null = null;
     let bank: NoiseBank | null = null;
+    // Player volume settings (0..1): master scales the master gain, the others scale each sound.
+    let volMaster = 1, volEffects = 1, volSteps = 1, stepMode = false;
 
     const voices: Voice[] = [];
     const breathers: Breather[] = [];
@@ -691,6 +708,8 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
         weight = 1): void {
         if (!ctx || !master || !bank) return;
         const now = ctx.currentTime;
+        gain *= stepMode ? volSteps : volEffects;
+        if (gain <= 0) return;
 
         let att = 1, occ = false;
         if (pos && haveListener) {
@@ -862,6 +881,19 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
 
     // ---- public API -------------------------------------------------------------------------
 
+    function stepSound(pos: Vec3, l: number, isLocal: boolean): void {
+        if (isLocal) {
+            // Own footsteps: present for feedback, but subdued so they never mask enemies.
+            oneShot(null, STEP_CFG, 0.3, synthStep, l, false);
+            return;
+        }
+        // The gameplay range is measured along the ground, but the listener is at eye height and
+        // the step at the feet: stretch the 3D range so a step on the same floor dies exactly at it.
+        const r = Math.max(STEP_RANGE * l, 1.5);
+        stepCfg.range = Math.sqrt(r * r + EYE_HEIGHT * EYE_HEIGHT);
+        oneShot(pos, stepCfg, 1, synthStep, l, false);
+    }
+
     return {
         unlock(): void {
             if (failed) return;
@@ -891,7 +923,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
                 comp.connect(limit);
                 limit.connect(c.destination);
                 const m = c.createGain();
-                m.gain.value = MASTER_GAIN;
+                m.gain.value = MASTER_GAIN * volMaster;
                 m.connect(comp);
                 bank = makeNoiseBank(c);
                 master = m;
@@ -984,16 +1016,8 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
         step(pos: Vec3, loud: number, isLocal: boolean): void {
             const l = Math.min(1, Math.max(0, loud));
             if (l <= 0) return;
-            if (isLocal) {
-                // Own footsteps: present for feedback, but subdued so they never mask enemies.
-                oneShot(null, STEP_CFG, 0.3, synthStep, l, false);
-                return;
-            }
-            // The gameplay range is measured along the ground, but the listener is at eye height and
-            // the step at the feet: stretch the 3D range so a step on the same floor dies exactly at it.
-            const r = Math.max(STEP_RANGE * l, 1.5);
-            stepCfg.range = Math.sqrt(r * r + EYE_HEIGHT * EYE_HEIGHT);
-            oneShot(pos, stepCfg, 1, synthStep, l, false);
+            stepMode = true;
+            try { stepSound(pos, l, isLocal); } finally { stepMode = false; }
         },
 
         gunshot(pos: Vec3, isLocal: boolean): void {
@@ -1024,6 +1048,17 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
 
         knifeSlash(pos: Vec3, hit: boolean, isLocal: boolean): void {
             oneShot(isLocal ? null : pos, KNIFE_CFG, isLocal ? 0.6 : 1, synthSlash, 0, hit);
+        },
+
+        hitMarker(kind: 'body' | 'head' | 'kill'): void {
+            oneShot(null, CUE_CFG, 0.55, synthHit, kind === 'kill' ? 1 : 0, kind === 'head');
+        },
+
+        setVolumes(v: { master: number; effects: number; footsteps: number }): void {
+            volMaster = Math.min(1, Math.max(0, v.master));
+            volEffects = Math.min(1, Math.max(0, v.effects));
+            volSteps = Math.min(1, Math.max(0, v.footsteps));
+            if (master) master.gain.value = MASTER_GAIN * volMaster;
         },
 
         hurt(): void {

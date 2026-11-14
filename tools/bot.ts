@@ -4,6 +4,7 @@
 //   --map <id>    map for the room if the bot creates it (default: the server's default map)
 //   --room <code> room to join (default: the public room)
 //   --still       stand still instead of walking (handy as a target)
+//   --unready     do not press ready (the match then waits for the human or the room creator)
 import WebSocket from 'ws';
 import { TICK_RATE } from '../shared/constants';
 import { DEFAULT_PORT, decodeServer, encodeClient, type NetCmd } from '../shared/protocol';
@@ -39,7 +40,11 @@ ws.on('close', (code, reason) => { console.log(`bot disconnected (${code}${reaso
 ws.on('error', err => { console.error(`bot could not connect: ${err.message}`); process.exit(1); });
 ws.on('message', (data, isBinary) => {
     const msg = decodeServer(isBinary ? (data as Buffer) : data.toString());
-    if (msg.type === 'welcome') console.log(`bot is player ${msg.id} on ${msg.team}, map ${msg.map} (${msg.mapName})`);
+    if (msg.type === 'welcome') {
+        console.log(`bot is player ${msg.id} on ${msg.team}, map ${msg.map} (${msg.mapName})`);
+        // Rooms wait in warmup until everyone is ready (or the creator starts): a bot is always ready.
+        if (!process.argv.includes('--unready')) ws.send(encodeClient({ type: 'ready', ready: true }));
+    }
     else if (msg.type === 'snap') {
         serverTime = msg.time;
         ({ mag, reserve } = msg.me.gun);

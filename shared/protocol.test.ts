@@ -95,4 +95,14 @@ describe('wire format', () => {
     it('rejects unknown binary from the server', () => {
         expect(() => decodeServer(new Uint8Array(10))).toThrow();
     });
+
+    it('round-trips the JSON client messages and rejects junk', () => {
+        expect(decodeClient(encodeClient({ type: 'chat', team: true, text: 'hi' }) as string)).toEqual({ type: 'chat', team: true, text: 'hi' });
+        expect(decodeClient(encodeClient({ type: 'ready', ready: true }) as string)).toEqual({ type: 'ready', ready: true });
+        expect(decodeClient('{"type":"start"}')).toEqual({ type: 'start' });
+        expect(decodeClient('{"type":"team"}')).toEqual({ type: 'team' });
+        expect(() => decodeClient('{"type":"chat","text":5}')).toThrow();
+        expect(() => decodeClient('{"type":"nope"}')).toThrow();
+        expect(() => decodeClient('x'.repeat(700))).toThrow();
+    });
 });

@@ -5,7 +5,7 @@ import {
 import type { RosterEntry, Team } from '@shared/protocol';
 import { ROUNDS_TO_WIN, type Phase, type RoundReason } from '@shared/rules';
 import type { Vec3 } from '@shared/types';
-import type { CreatePresenter, KillKind, LocalView, MatchView, RemoteView } from './presenter-api';
+import type { CreatePresenter, CrosshairConfig, KillKind, LocalView, MatchView, RemoteView } from './presenter-api';
 import { Character, CharLook, loadCharacterModel, makeSkinnedGhostMaterial, type CharacterModel } from './characters';
 import { instantiateWeapon, loadWeaponModel, makeWeaponMaterial, type WeaponModel } from './weapons';
 
@@ -22,6 +22,9 @@ const FLASH_TIME = 0.04;
 const KILLFEED_MAX = 5;
 const KILLFEED_LIFE = 5;
 const KILLFEED_FADE = 0.5;
+const MAX_PIPS = 5;
+const DMG_MARKERS = 4;
+const DMG_LIFE = 1.2;
 /** Box stand-in gun (origin mid-receiver), used until weapons.glb has loaded or if it fails. */
 const GUN_POS = new pc.Vec3(0.15, -0.15, -0.46);
 /**
@@ -289,21 +292,48 @@ const HUD_CSS = `
 #sb-feed div.me { background: rgba(255,255,255,.18); outline: 1px solid rgba(255,255,255,.5); }
 #sb-dead { left: 50%; top: 58%; transform: translateX(-50%); display: none; white-space: nowrap;
     font: 600 26px/1 system-ui, sans-serif; letter-spacing: .08em; }
-#sb-match { top: 8px; left: 50%; transform: translateX(-50%); text-align: center; white-space: nowrap;
-    font: 600 13px/1.2 system-ui, sans-serif; letter-spacing: .12em; }
-#sb-match .tag { display: none; color: #ff3b30; font-size: 10px; letter-spacing: .35em; }
-#sb-match.planted .tag { display: block; }
-#sb-match .timer { display: inline-block; font: 700 30px/1 system-ui, sans-serif; letter-spacing: .04em;
-    font-variant-numeric: tabular-nums; }
-#sb-match .timer.warm { font: 600 14px/1.8 system-ui, sans-serif; letter-spacing: .16em; opacity: .9; }
-#sb-match .timer.bomb { color: #ff3b30; }
+#sb-match { top: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: stretch; gap: 2px;
+    white-space: nowrap; font: 600 13px/1.2 'Bahnschrift', 'Segoe UI Variable Display', system-ui, sans-serif; }
+#sb-match .team { display: flex; flex-direction: column; justify-content: center; gap: 5px; min-width: 150px;
+    padding: 6px 14px; background: rgba(9,12,16,.66); border-top: 2px solid currentColor; }
+#sb-match .team.ghosts { color: #9d8cff; align-items: flex-end; } #sb-match .team.defenders { color: #ff9a3c; align-items: flex-start; }
+#sb-match .team .nm { font-size: 11px; letter-spacing: .12em; opacity: .75; }
+#sb-match .team.mine .nm::after { content: ' (you)'; opacity: .8; }
+#sb-match .team .sc { font: 700 34px/.9 'Bahnschrift', system-ui, sans-serif; color: #f2f4f1; font-variant-numeric: tabular-nums; }
+#sb-match .pips { display: flex; gap: 4px; height: 10px; }
+#sb-match .pips i { width: 10px; height: 10px; border-radius: 50%; background: currentColor; display: none; }
+#sb-match .pips i.on { display: block; } #sb-match .pips i.dead { display: block; background: none; box-shadow: inset 0 0 0 2px currentColor; opacity: .4; }
+#sb-match .mid { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 124px;
+    padding: 4px 12px 5px; background: rgba(9,12,16,.78); border-top: 2px solid rgba(255,255,255,.5); }
+#sb-match .tag { display: none; color: #ff3b30; font: 800 11px/1 'Bahnschrift', system-ui, sans-serif; letter-spacing: .3em; }
+#sb-match.planted .tag { display: block; } #sb-match.planted .mid { border-top-color: #ff3b30; background: rgba(40,6,6,.8); }
+#sb-match .timer { font: 700 42px/1 'Bahnschrift', system-ui, sans-serif; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+#sb-match .timer.warm { font: 600 14px/2.6 'Bahnschrift', system-ui, sans-serif; letter-spacing: .14em; opacity: .9; }
+#sb-match .timer.bomb { color: #ff3b30; font-size: 48px; }
 #sb-match .timer.pulse { animation: sb-pulse .5s ease-in-out infinite alternate; }
-@keyframes sb-pulse { from { opacity: 1; transform: scale(1); } to { opacity: .4; transform: scale(1.1); } }
-#sb-match .score { display: inline-block; margin-top: 4px; padding: 3px 10px; background: rgba(0,0,0,.4); }
-#sb-match .score span { opacity: .7; }
-#sb-match .score .ghosts { color: #9d8cff; } #sb-match .score .defenders { color: #ff9a3c; }
-#sb-match .score span.mine { opacity: 1; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; }
-#sb-match .round { margin-top: 3px; font-size: 11px; letter-spacing: .25em; opacity: .7; }
+@keyframes sb-pulse { from { opacity: 1; transform: scale(1); } to { opacity: .45; transform: scale(1.08); } }
+#sb-match .round { font-size: 11px; letter-spacing: .2em; opacity: .65; }
+#sb-low { inset: 0; display: none; animation: sb-low 1.1s ease-in-out infinite alternate;
+    background: radial-gradient(ellipse at center, rgba(120,0,0,0) 55%, rgba(150,0,0,.55) 100%); }
+body.sb-lowhp #sb-low { display: block; }
+@keyframes sb-low { from { opacity: .35; } to { opacity: 1; } }
+#sb-dmg { left: 50%; top: 50%; width: 0; height: 0; }
+#sb-dmg i { position: absolute; left: -46px; top: -150px; width: 92px; height: 300px; opacity: 0; transform-origin: 46px 150px;
+    background: radial-gradient(ellipse 46px 26px at 46px 8px, rgba(255,40,30,.95), rgba(255,40,30,0) 100%); }
+#sb-recap { left: 50%; top: calc(58% + 36px); transform: translateX(-50%); display: none; white-space: nowrap;
+    font: 500 17px/1.2 'Bahnschrift', system-ui, sans-serif; letter-spacing: .04em; opacity: .9; }
+#sb-spec { left: 50%; bottom: 70px; transform: translateX(-50%); display: none; text-align: center; white-space: nowrap;
+    padding: 8px 18px; background: rgba(9,12,16,.7); border-bottom: 2px solid #8fb4ff; font: 600 18px/1.3 'Bahnschrift', system-ui, sans-serif; }
+#sb-spec small { display: block; font-size: 12px; opacity: .65; letter-spacing: .06em; }
+#crosshair { width: var(--s, 4px); height: var(--s, 4px); margin: calc(var(--s, 4px) / -2) 0 0 calc(var(--s, 4px) / -2);
+    background: var(--c, #e8eaed); mix-blend-mode: normal; box-shadow: 0 0 0 1px rgba(0,0,0,.55); }
+#crosshair.x-cross { width: calc(var(--s, 4px) * 4); height: calc(var(--s, 4px) * 4); border-radius: 0; box-shadow: none;
+    margin: calc(var(--s, 4px) * -2) 0 0 calc(var(--s, 4px) * -2);
+    background: linear-gradient(var(--c), var(--c)) center / 100% 2px no-repeat, linear-gradient(var(--c), var(--c)) center / 2px 100% no-repeat;
+    filter: drop-shadow(0 0 1px #000); }
+#crosshair.x-ring { width: calc(var(--s, 4px) * 3); height: calc(var(--s, 4px) * 3); background: none;
+    margin: calc(var(--s, 4px) * -1.5) 0 0 calc(var(--s, 4px) * -1.5); border: 2px solid var(--c); box-shadow: 0 0 0 1px rgba(0,0,0,.55); box-sizing: border-box; }
+#sb-xhair { mix-blend-mode: normal; } #sb-xhair i { background: var(--c, #e8eaed); box-shadow: 0 0 0 1px rgba(0,0,0,.5); }
 #sb-banner { left: 50%; top: 22%; transform: translateX(-50%); text-align: center; display: none; white-space: nowrap; }
 #sb-banner div:empty { display: none; }
 #sb-banner .t { font: 800 56px/1 system-ui, sans-serif; letter-spacing: .1em; }
@@ -330,7 +360,7 @@ const HUD_CSS = `
     border-bottom: 2px solid currentColor; font: 800 16px/1 system-ui, sans-serif; letter-spacing: .15em; }
 #sb-scores .hdr.ghosts { color: #9d8cff; } #sb-scores .hdr.defenders { color: #ff9a3c; }
 #sb-scores .hdr.mine span:first-child::after { content: '  (YOU)'; white-space: pre; font-size: 10px; letter-spacing: .2em; opacity: .7; }
-#sb-scores .row { display: grid; grid-template-columns: 1fr 52px 52px; padding: 4px 6px; }
+#sb-scores .row { display: grid; grid-template-columns: 1fr 44px 44px 44px; padding: 4px 6px; }
 #sb-scores .row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #sb-scores .row span + span { text-align: right; font-variant-numeric: tabular-nums; }
 #sb-scores .row.cols { opacity: .5; font-size: 10px; letter-spacing: .2em; padding-bottom: 2px; }
@@ -846,6 +876,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     const teamEl = infoEl.appendChild(document.createElement('span'));
     const idEl = infoEl.appendChild(document.createElement('span'));
     const pingEl = infoEl.appendChild(document.createElement('span'));
+    pingEl.className = 'ping';
     // Ammo counter (bottom right, defenders only): magazine big, reserve small, then a state line.
     const ammoEl = div('sb-ammo');
     const magEl = span(ammoEl, 'mag');
@@ -869,18 +900,41 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     for (let i = 0; i < 4; i++) hitEl.appendChild(document.createElement('i'));
     const feedEl = div('sb-feed');
     const deadEl = div('sb-dead');
+    const recapEl = div('sb-recap');
+    const specEl = div('sb-spec');
+    const specName = new Slot(span(specEl));
+    const specHint = document.createElement('small');
+    specEl.appendChild(specHint);
+    const lowEl = div('sb-low');
+    const dmgEl = div('sb-dmg');
+    interface DmgMarker { el: HTMLElement; bearing: number; t: number }
+    const dmgMarkers: DmgMarker[] = [];
+    for (let i = 0; i < DMG_MARKERS; i++) dmgMarkers.push({ el: dmgEl.appendChild(document.createElement('i')), bearing: 0, t: 0 });
+    let nextDmg = 0;
+    let shownRecap = false, shownSpec = '', lastYaw = 0;
+    void lowEl;
     const feed: FeedLine[] = [];
 
-    // Match bar (top centre).
+    // Match bar (top centre): ghosts | timer | defenders, each side with its score and living players.
     const matchEl = div('sb-match');
-    div('', matchEl, 'tag').textContent = 'BOMB';
-    const timerEl = div('', matchEl, 'timer');
+    const makeTeam = (team: Team): { box: HTMLElement; score: HTMLElement; pips: HTMLElement[] } => {
+        const box = div('', matchEl, `team ${team}`);
+        div('', box, 'nm').textContent = TEAM_LABEL[team];
+        const score = div('', box, 'sc');
+        const pipsEl = div('', box, 'pips');
+        const pips: HTMLElement[] = [];
+        for (let i = 0; i < MAX_PIPS; i++) pips.push(pipsEl.appendChild(document.createElement('i')));
+        return { box, score, pips };
+    };
+    const tG = makeTeam('ghosts');
+    const mid = div('', matchEl, 'mid');
+    matchEl.insertBefore(mid, tG.box.nextSibling);
+    div('', mid, 'tag').textContent = 'BOMB PLANTED';
+    const timerEl = div('', mid, 'timer');
     const timerSlot = new Slot(timerEl);
-    const scoreRow = div('', div('', matchEl, ''), 'score');
-    const scoreG = span(scoreRow, 'ghosts');
-    span(scoreRow, '', ' — ').style.opacity = '.6';
-    const scoreD = span(scoreRow, 'defenders');
-    const roundSlot = new Slot(div('', matchEl, 'round'));
+    const roundSlot = new Slot(div('', mid, 'round'));
+    const tD = makeTeam('defenders');
+    const scoreG = tG.score, scoreD = tD.score;
 
     // Phase banner (centre upper).
     const bannerEl = div('sb-banner');
@@ -915,6 +969,10 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     let shownTimerKey = NaN;
     let shownTimerMode = -1;
     let shownPlanted: boolean | null = null;
+    /** Living and total players per team, from the roster; `pipsKey` changes whenever they do. */
+    const aliveCount: Record<Team, number> = { ghosts: 0, defenders: 0 };
+    const totalCount: Record<Team, number> = { ghosts: 0, defenders: 0 };
+    let pipsKey = 0, shownPipsKey = -1;
     let prevPhase: Phase | null = null;
     /** Seconds left before the banner starts fading; Infinity while held for the whole phase. */
     let bannerLeft = 0;
@@ -949,6 +1007,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     let shownAmmoKey = -1;
     let shownReloadPct = -1;
     let shownGap = -1;
+    let shownFov = 0;
     measureXhair();
 
     const updateHud = (dt: number, local: LocalView, phase: Phase): void => {
@@ -958,6 +1017,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             healthEl.textContent = String(hp);
             healthEl.classList.toggle('low', hp < 35);
         }
+        const lowHp = local.alive && hp < 35;
+        if (document.body.classList.contains('sb-lowhp') !== lowHp) document.body.classList.toggle('sb-lowhp', lowHp);
         const ping = Math.round(local.ping);
         if (local.team !== shownTeam || local.id !== shownId) {
             shownTeam = local.team;
@@ -992,7 +1053,18 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             shownAlive = local.alive;
             if (crosshair) crosshair.style.visibility = local.alive ? '' : 'hidden';
             shownDeadKey = NaN;
+            if (local.alive && shownRecap) { shownRecap = false; recapEl.style.display = 'none'; }
         }
+        if (local.alive !== true) {
+            const spec = local.spectating ?? (local.overview ? '\u0000overview' : '');
+            if (spec !== shownSpec) {
+                shownSpec = spec;
+                specEl.style.display = spec ? 'block' : 'none';
+                if (local.spectating) { specName.set(`Spectating ${local.spectating}`); specHint.textContent = 'Left and right arrows switch teammate'; }
+                else if (spec) { specName.set('No teammate left to follow'); specHint.textContent = 'Map overview'; }
+            }
+        } else if (shownSpec) { shownSpec = ''; specEl.style.display = 'none'; }
+        lastYaw = local.yaw;
         if (!local.alive) {
             // Respawns only exist in warmup; in a round the dead wait for the next one.
             const key = phase === 'warmup' ? Math.max(0, Math.ceil(local.respawnIn)) : -1;
@@ -1004,6 +1076,14 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         if (vignetteLevel > 0) {
             vignetteLevel = Math.max(0, vignetteLevel - dt / 0.4);
             vignette.style.opacity = vignetteLevel.toFixed(3);
+        }
+        for (let i = 0; i < DMG_MARKERS; i++) {
+            const m = dmgMarkers[i];
+            if (m.t <= 0) continue;
+            m.t -= dt;
+            if (m.t <= 0) { m.el.style.opacity = '0'; continue; }
+            m.el.style.opacity = Math.min(1, m.t / (DMG_LIFE * 0.6)).toFixed(2);
+            m.el.style.transform = `rotate(${(-(m.bearing - lastYaw) * DEG).toFixed(1)}deg)`;
         }
         if (hitT > 0) {
             hitT = Math.max(0, hitT - dt);
@@ -1026,6 +1106,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     const AMMO_LABEL = ['', 'RELOADING', 'R  RELOAD', 'NO AMMO'];
 
     const updateAmmo = (local: LocalView): void => {
+        if (cam.fov !== shownFov) { shownFov = cam.fov; measureXhair(); }
         const armed = local.alive && local.team === 'defenders';
         if (armed !== shownArmed) {
             shownArmed = armed;
@@ -1066,18 +1147,22 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         const secs = warm ? -1 : Math.max(0, Math.ceil(match.timeLeft));
         if (secs !== shownTimerKey) {
             shownTimerKey = secs;
-            timerSlot.set(warm ? 'WARMUP — waiting for players' : clock(secs));
+            timerSlot.set(warm ? 'WARMUP' : clock(secs));
         }
         if (planted !== shownPlanted) { shownPlanted = planted; matchEl.classList.toggle('planted', planted); }
-        if (match.scoreGhosts !== shownScoreG) { shownScoreG = match.scoreGhosts; scoreG.textContent = `GHOSTS ${shownScoreG}`; }
-        if (match.scoreDefenders !== shownScoreD) {
-            shownScoreD = match.scoreDefenders;
-            scoreD.textContent = `${shownScoreD} DEFENDERS`;
-        }
+        if (match.scoreGhosts !== shownScoreG) { shownScoreG = match.scoreGhosts; scoreG.textContent = String(shownScoreG); }
+        if (match.scoreDefenders !== shownScoreD) { shownScoreD = match.scoreDefenders; scoreD.textContent = String(shownScoreD); }
         if (local.team !== shownMine) {
             shownMine = local.team;
-            scoreG.className = local.team === 'ghosts' ? 'ghosts mine' : 'ghosts';
-            scoreD.className = local.team === 'defenders' ? 'defenders mine' : 'defenders';
+            tG.box.className = local.team === 'ghosts' ? 'team ghosts mine' : 'team ghosts';
+            tD.box.className = local.team === 'defenders' ? 'team defenders mine' : 'team defenders';
+        }
+        if (pipsKey !== shownPipsKey) {
+            shownPipsKey = pipsKey;
+            for (let i = 0; i < MAX_PIPS; i++) {
+                tG.pips[i].className = i < aliveCount.ghosts ? 'on' : i < totalCount.ghosts ? 'dead' : '';
+                tD.pips[i].className = i < aliveCount.defenders ? 'on' : i < totalCount.defenders ? 'dead' : '';
+            }
         }
         if (match.round !== shownRound) { shownRound = match.round; roundSlot.set(`ROUND ${shownRound}`); }
     };
@@ -1173,7 +1258,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             span(hdr, '', TEAM_LABEL[team]);
             span(hdr, '', String(team === 'ghosts' ? match.scoreGhosts : match.scoreDefenders));
             const cols = div('', scoresEl, 'row cols');
-            span(cols, '', 'NAME'); span(cols, '', 'K'); span(cols, '', 'D');
+            span(cols, '', 'NAME'); span(cols, '', 'K'); span(cols, '', 'D'); span(cols, '', 'A');
             const members = roster.filter(p => p.team === team)
                 .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths || a.id - b.id);
             if (members.length === 0) div('', scoresEl, 'empty').textContent = 'No players';
@@ -1182,6 +1267,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                 span(row, '', p.name || `Player ${p.id}`);
                 span(row, '', String(p.kills));
                 span(row, '', String(p.deaths));
+                span(row, '', String(p.assists));
             }
         }
     };
@@ -1224,10 +1310,17 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             names.clear();
             for (let i = 0; i < players.length; i++) {
                 const p = players[i];
-                roster.push({ id: p.id, name: p.name, team: p.team, kills: p.kills, deaths: p.deaths, alive: p.alive });
+                roster.push({ ...p });
                 if (p.name) names.set(p.id, p.name);
             }
             rosterVersion++;
+            aliveCount.ghosts = aliveCount.defenders = totalCount.ghosts = totalCount.defenders = 0;
+            for (const p of roster) {
+                if (p.idle && !p.alive) continue; // spectate-only players are not in the round
+                totalCount[p.team]++;
+                if (p.alive) aliveCount[p.team]++;
+            }
+            pipsKey = aliveCount.ghosts + 16 * aliveCount.defenders + 256 * totalCount.ghosts + 4096 * totalCount.defenders;
         },
 
         shot(from: Vec3, to: Vec3, isLocal: boolean): void {
@@ -1290,9 +1383,31 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             hitEl.style.opacity = '1';
         },
 
-        damaged(amount: number): void {
+        damaged(amount: number, bearing: number): void {
             vignetteLevel = Math.min(0.9, vignetteLevel + 0.25 + amount / 100);
             vignette.style.opacity = vignetteLevel.toFixed(3);
+            if (Number.isNaN(bearing)) return;
+            const m = dmgMarkers[nextDmg];
+            nextDmg = (nextDmg + 1) % DMG_MARKERS;
+            m.bearing = bearing;
+            m.t = DMG_LIFE;
+            m.el.style.opacity = '1';
+            m.el.style.transform = `rotate(${(-(bearing - lastYaw) * DEG).toFixed(1)}deg)`;
+        },
+
+        died(killerName: string, kind: KillKind, distance: number): void {
+            const how = kind === 'headshot' ? 'a headshot' : kind === 'shot' ? 'a gunshot' : kind === 'backstab' ? 'a backstab' : 'the knife';
+            recapEl.textContent = `${killerName} killed you with ${how} from ${distance.toFixed(0)} m`;
+            recapEl.style.display = 'block';
+            shownRecap = true;
+        },
+
+        setCrosshair(c: CrosshairConfig): void {
+            if (!crosshair) return;
+            crosshair.className = c.style === 'dot' ? '' : `x-${c.style}`;
+            crosshair.style.setProperty('--c', c.color);
+            crosshair.style.setProperty('--s', `${c.size}px`);
+            xhairEl.style.setProperty('--c', c.color);
         },
 
         killFeed(killerId: number, victimId: number, kind: KillKind): void {

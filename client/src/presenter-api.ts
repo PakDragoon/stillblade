@@ -54,6 +54,20 @@ export interface LocalView {
     reload: number;
     /** Current spread cone half-angle in radians (where shots may land around the crosshair centre). */
     spread: number;
+    /** The local view yaw in radians (0 faces -Z): damage direction markers turn with it. */
+    yaw: number;
+    /** While dead and following a living teammate: that player's name. Null otherwise. */
+    spectating: string | null;
+    /** Dead with no living teammate to follow: the fixed overview of the map is shown. */
+    overview: boolean;
+}
+
+export interface CrosshairConfig {
+    style: 'dot' | 'cross' | 'ring';
+    /** CSS colour. */
+    color: string;
+    /** Dot diameter in CSS px (a cross is four times, a ring three times as big). */
+    size: number;
 }
 
 /** The state of the match for this frame. */
@@ -92,8 +106,15 @@ export interface Presenter {
     knifeSwing(windupSeconds: number): void;
     /** The local player's attack hit someone. */
     hitConfirm(head: boolean, killed: boolean): void;
-    /** The local player took damage. */
-    damaged(amount: number): void;
+    /**
+     * The local player took damage. `bearing` is the world direction toward the attacker in radians
+     * (yaw convention: 0 faces -Z), or NaN if unknown; it is drawn around the crosshair, turning with the view.
+     */
+    damaged(amount: number, bearing: number): void;
+    /** The local player was killed: shown as a recap line under the death message. `distance` in metres. */
+    died(killerName: string, kind: KillKind, distance: number): void;
+    /** Player crosshair choice (settings). */
+    setCrosshair(c: CrosshairConfig): void;
     killFeed(killerId: number, victimId: number, kind: KillKind): void;
 }
 
