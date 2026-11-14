@@ -3,6 +3,10 @@
     {
       "id": "greybox",
       "name": "Test Map 1"
+    },
+    {
+      "id": "warehouse",
+      "name": "Warehouse"
     }
   ]
 }

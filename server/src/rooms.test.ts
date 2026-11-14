@@ -117,6 +117,12 @@ function plantSpot(map: MapData, s: MapData['bombSites'][number]): Vec3 {
 describe('shipped maps', () => {
     it('are all loaded, including Test Map 1 under its display name', () => {
         expect(shipped.get('greybox')?.displayName).toBe('Test Map 1');
+        // The second map, on three levels: site A in the basement, site B on the ground floor.
+        const wh = shipped.get('warehouse');
+        expect(wh?.displayName).toBe('Warehouse');
+        expect(wh!.bombSites.find(s => s.name === 'A')!.min[1]).toBeLessThan(-3);
+        expect(wh!.bombSites.find(s => s.name === 'B')!.min[1]).toBe(0);
+        expect(defaultMapId(shipped)).toBe('warehouse');
         for (const [id, map] of shipped) {
             expect(map.name).toBe(id);
             expect(map.spawns.ghosts.length).toBe(5);

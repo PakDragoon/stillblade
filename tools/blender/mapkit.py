@@ -59,8 +59,8 @@ TEXTURE_LIBRARY = {
                      albedo=0.26, contrast=0.7, sat=0.4, detile=0.6, tint=(1.0, 0.99, 0.97)),
     "wh_block": dict(src="concrete_block_wall_diff_1k.jpg", out="tex_wh_block.webp", tile=2.0,
                      albedo=0.30, contrast=0.8, sat=0.5, detile=0.5, tint=(1.0, 1.0, 1.0)),
-    "wh_paint": dict(src="painted_concrete_diff_1k.jpg", out="tex_wh_paint.webp", tile=2.0,
-                     albedo=0.52, contrast=0.6, sat=0.25, detile=0.6, tint=(1.0, 1.0, 1.0)),
+    "wh_paint": dict(src="plastered_wall_02_diff_1k.jpg", out="tex_wh_paint.webp", tile=2.0,
+                     albedo=0.5, contrast=1.0, sat=0.15, detile=0.4, tint=(1.0, 1.0, 1.0)),
     "wh_metal": dict(src="metal_plate_02_diff_1k.jpg", out="tex_wh_metal.webp", tile=1.5,
                      albedo=0.28, contrast=0.7, sat=0.3, detile=0.5, tint=(1.0, 1.0, 1.0)),
     "wh_tiles": dict(src="concrete_tiles_diff_1k.jpg", out="tex_wh_tiles.webp", tile=2.4,
@@ -113,13 +113,15 @@ GLYPH_STROKES = {
     "1": [[(0.16, 0.8), (0.36, 1.0), (0.36, 0.0)], [(0.12, 0.0), (0.6, 0.0)]],
     "2": [_arc(0.33, 0.7, 0.25, 160, -30, 8) + [(0.07, 0.0), (0.62, 0.0)]],
     ">": [[(0.0, 0.5), (0.78, 0.5)], [(0.45, 0.85), (0.8, 0.5), (0.45, 0.15)]],   # arrow, points +u
+    "-": [[(0.08, 0.5), (0.5, 0.5)]],
 }
-GLYPH_ADVANCE = {"A": 0.86, "B": 0.86, "P": 0.8, "1": 0.72, "2": 0.78, ">": 0.95}
+GLYPH_ADVANCE = {"A": 0.86, "B": 0.86, "P": 0.8, "1": 0.72, "2": 0.78, ">": 0.95, "-": 0.62}
 
 
-def text_quads(text, height, stroke=0.16):
-    """Quads [(u, v) x 4] for a string in a local frame: u to the right, v up, baseline v = 0,
-    centred on u = 0, v = 0.5 * height. A space advances half a glyph."""
+def text_quads(text, height, stroke=0.16, angle=0.0):
+    """Quads [(u, v) x 4] for a string in a local frame: u to the right, v up, centred on (0, 0),
+    rotated by `angle` degrees counter-clockwise (an arrow ">" with angle -90 points down).
+    A space advances half a glyph."""
     quads = []
     x = 0.0
     for ch in text:
@@ -140,9 +142,11 @@ def text_quads(text, height, stroke=0.16):
                               (x + bx2 + nx, by2 + ny), (x + ax2 + nx, ay2 + ny)])
         x += GLYPH_ADVANCE[ch]
     width = max(0.0, x - 0.12)
+    ca, sa = math.cos(math.radians(angle)), math.sin(math.radians(angle))
     out = []
     for q in quads:
-        out.append([((u - width / 2) * height, (v - 0.5) * height) for u, v in q])
+        pts = [((u - width / 2) * height, (v - 0.5) * height) for u, v in q]
+        out.append([(u * ca - v * sa, u * sa + v * ca) for u, v in pts])
     return out
 
 
@@ -174,6 +178,7 @@ class MapDef:
         self.decals = []         # dicts: corners (4 x xyz), axis, sign, off, colour
         self.sample_spots = []   # (label, point, axis, sign) printed after the bake
         self.max_sightline = None    # metres; None = not checked for this map
+        self.route_gates = {}        # site -> [(label, (x0, y0, z0, x1, y1, z1))]: distinct ghost routes
         self.sun_scale = 0.40
         self.sky_scale = 2.6
         self.lightmap_size = 4096
@@ -254,14 +259,14 @@ class MapDef:
         off = (0.006, 0.012, 0.018)[layer]
         self.decal([(x0, y0, z), (x1, y0, z), (x1, y1, z), (x0, y1, z)], 2, 1, off, colour)
 
-    def floor_text(self, text, centre, z, height, colour, up=(0, 1), layer=2, stroke=0.16):
+    def floor_text(self, text, centre, z, height, colour, up=(0, 1), layer=2, stroke=0.16, angle=0.0):
         """Text painted on a floor; `up` is the direction (x, y) of the letters' tops."""
         ux, uy = up
         n = math.hypot(ux, uy)
         ux, uy = ux / n, uy / n
         rx, ry = uy, -ux                       # right = up rotated -90 deg (reads correctly from below)
         off = (0.006, 0.012, 0.018)[layer]
-        for q in text_quads(text, height, stroke):
+        for q in text_quads(text, height, stroke, angle):
             pts = [(centre[0] + rx * u + ux * v, centre[1] + ry * u + uy * v, z) for u, v in q]
             self.decal(pts, 2, 1, off, colour)
 
@@ -274,10 +279,10 @@ class MapDef:
             pts.append((centre[0] + right[0] * u, centre[1] + right[1] * u, centre[2] + v))
         self.decal(pts, axis, sign, off, colour)
 
-    def wall_text(self, text, centre, axis, sign, height, colour, layer=1, stroke=0.16):
+    def wall_text(self, text, centre, axis, sign, height, colour, layer=1, stroke=0.16, angle=0.0):
         off = (0.008, 0.014, 0.02)[layer]
         right = self._wall_right(axis, sign)
-        for q in text_quads(text, height, stroke):
+        for q in text_quads(text, height, stroke, angle):
             pts = [(centre[0] + right[0] * u, centre[1] + right[1] * u, centre[2] + v) for u, v in q]
             self.decal(pts, axis, sign, off, colour)
 
@@ -509,8 +514,8 @@ class WalkGraph:
                 best = (dz, j)
         return None if best is None else best[1]
 
-    def reach(self, starts, allow_jump=True):
-        """Dijkstra from the start nodes: {node: path length}."""
+    def reach(self, starts, allow_jump=True, blocked=None):
+        """Dijkstra from the start nodes: {node: path length}. `blocked`: nodes never entered."""
         dist = {}
         heap = [(0.0, s) for s in starts]
         while heap:
@@ -520,6 +525,8 @@ class WalkGraph:
             dist[n] = d
             for j, c, kind in self.neighbours(n):
                 if kind == "jump" and not allow_jump:
+                    continue
+                if blocked is not None and j in blocked:
                     continue
                 if j not in dist:
                     heapq.heappush(heap, (d + c, j))
@@ -545,6 +552,53 @@ def check_constants(errors):
         got = float(text[i + len(key):].split(";")[0])
         if abs(got - value) > 1e-9:
             errors.append("mapkit %s %.3f differs from shared/constants.ts %.3f" % (name, value, got))
+
+
+def _merge_runs(boxes):
+    """Footprints of boxes merged where they continue each other in a straight run with the same
+    cross-section (the pieces of one wall around its openings, the steps of one flight), so the gap
+    check sees one wall instead of a sill sitting next to its own wall."""
+    rects = [dict(name=b["name"], cats={b["category"]}, mn=list(b["mn"]), mx=list(b["mx"])) for b in boxes]
+    for k in (1, 0):                      # merge runs along Y, then along X
+        o = 1 - k
+        rects.sort(key=lambda r: (round(r["mn"][o], 6), round(r["mx"][o], 6), r["mn"][k]))
+        out = []
+        for r in rects:
+            p = out[-1] if out else None
+            if p and abs(p["mn"][o] - r["mn"][o]) < 1e-6 and abs(p["mx"][o] - r["mx"][o]) < 1e-6                     and r["mn"][k] <= p["mx"][k] + 1e-6:
+                p["mx"][k] = max(p["mx"][k], r["mx"][k])
+                p["mn"][2] = min(p["mn"][2], r["mn"][2])
+                p["mx"][2] = max(p["mx"][2], r["mx"][2])
+                p["cats"] |= r["cats"]
+                if "+" not in p["name"]:
+                    p["name"] += "+"
+            else:
+                out.append(r)
+        rects = out
+    return rects
+
+
+def _gap_filled(a, b, band, grid, ia, ib):
+    """True if other solids at this level fill the space between boxes a and b (e.g. the full-height
+    piece of a wall between a window sill and the next wall), so there is no slot to walk into."""
+    lo, hi = [], []
+    for k in (0, 1):
+        if a["mx"][k] <= b["mn"][k]:
+            lo.append(a["mx"][k]); hi.append(b["mn"][k])
+        elif b["mx"][k] <= a["mn"][k]:
+            lo.append(b["mx"][k]); hi.append(a["mn"][k])
+        else:
+            lo.append(max(a["mn"][k], b["mn"][k])); hi.append(min(a["mx"][k], b["mx"][k]))
+    cand = [c for c in grid.query(lo[0] - 0.01, lo[1] - 0.01, hi[0] + 0.01, hi[1] + 0.01) if c not in (ia, ib)]
+    n = 5
+    for u in range(n):
+        for v in range(n):
+            x = lo[0] + (hi[0] - lo[0]) * (u + 0.5) / n
+            y = lo[1] + (hi[1] - lo[1]) * (v + 0.5) / n
+            if not any(band[c]["mn"][0] - 1e-6 <= x <= band[c]["mx"][0] + 1e-6 and
+                       band[c]["mn"][1] - 1e-6 <= y <= band[c]["mx"][1] + 1e-6 for c in cand):
+                return False
+    return True
 
 
 def verify(m, log=print):
@@ -596,8 +650,13 @@ def verify(m, log=print):
     levels = sorted(set(round(b["mx"][2], 3) for b in boxes if b["category"] in m.floor_categories))
     narrow = []
     for lv in levels:
-        band = [b for b in boxes if b["category"] not in m.floor_categories
-                and b["mn"][2] < lv + HULL_H - 1e-6 and b["mx"][2] > lv + 0.05]
+        raw = [b for b in boxes if b["category"] not in m.floor_categories
+               and b["mn"][2] < lv + HULL_H - 1e-6 and b["mx"][2] > lv + 0.05]
+        for i, a in enumerate(raw):
+            for b in raw[i + 1:]:
+                if overlap3(a["mn"], a["mx"], b["mn"], b["mx"]):
+                    narrow.append("%s overlaps %s" % (a["name"], b["name"]))
+        band = _merge_runs(raw)
         grid = Grid2D([(b["mn"], b["mx"]) for b in band], 2.0)
         for i, a in enumerate(band):
             cand = grid.query(a["mn"][0] - MIN_WALKWAY, a["mn"][1] - MIN_WALKWAY,
@@ -606,13 +665,11 @@ def verify(m, log=print):
                 if j <= i:
                     continue
                 b = band[j]
-                if a["category"] in m.structure_categories and b["category"] in m.structure_categories:
+                if a["cats"] <= m.structure_categories and b["cats"] <= m.structure_categories:
                     continue
                 d = rect_dist(a["mn"], a["mx"], b["mn"], b["mx"])
-                if 1e-6 < d < MIN_WALKWAY - 1e-6:
+                if 1e-6 < d < MIN_WALKWAY - 1e-6 and not _gap_filled(a, b, band, grid, i, j):
                     narrow.append("level %.2f: %s <-> %s gap %.2f m" % (lv, a["name"], b["name"], d))
-                if overlap3(a["mn"], a["mx"], b["mn"], b["mx"]):
-                    narrow.append("%s overlaps %s" % (a["name"], b["name"]))
     errors.extend(sorted(set(narrow)))
     log("%s walkway gaps: levels %s, %d narrow gaps or overlaps" % (tag, levels, len(set(narrow))))
 
@@ -662,6 +719,32 @@ def verify(m, log=print):
         log("%s stuck spots: %d" % (tag, len(stuck)))
         if spawn_nodes["defenders"] and not any(n in reach for n in spawn_nodes["defenders"]):
             errors.append("defender spawn is not connected to the ghost spawn")
+
+    # Every flight is climbable on foot: some spot on the first step has a walking move up from the
+    # floor below it, and some spot on the top step a walking move onto the floor above. (A flight
+    # whose bottom step is against a wall can only be entered from the side, where the hull spans
+    # two steps: too high to step, only jumpable.)
+    by_box = {bx["name"]: bx for bx in boxes}
+
+    def on_box(bx):
+        out = []
+        h = HULL_W / 2      # a hull stands on a step while overhanging its edge by up to this
+        for ix in range(int((bx["mn"][0] - h - g.x0) / CELL), int((bx["mx"][0] + h - g.x0) / CELL) + 1):
+            for iy in range(int((bx["mn"][1] - h - g.y0) / CELL), int((bx["mx"][1] + h - g.y0) / CELL) + 1):
+                x, y = g.centre(ix, iy)
+                if bx["mn"][0] - h < x < bx["mx"][0] + h and bx["mn"][1] - h < y < bx["mx"][1] + h:
+                    out += [n for n in g.at.get((ix, iy), ()) if abs(g.nodes[n][2] - bx["mx"][2]) < 1e-3]
+        return out
+
+    for fl in m.flights:
+        first, top = by_box[fl["steps"][0]], by_box[fl["steps"][-1]]
+        up = any(abs(g.nodes[j][2] - fl["z0"]) < 1e-3 and any(k == n and kind == "walk" for k, _c, kind in g.neighbours(j))
+                 for n in on_box(first) for j, _c, _k in g.neighbours(n))
+        off = any(abs(g.nodes[j][2] - fl["z1"]) < 1e-3 and kind == "walk"
+                  for n in on_box(top) for j, _c, kind in g.neighbours(n))
+        if not (up and off):
+            errors.append("flight %s cannot be climbed on foot (%s)" % (fl["name"], "bottom step" if not up else "top step"))
+    log("%s flights climbable on foot: %d checked" % (tag, len(m.flights)))
 
     # Headroom above every reachable spot.
     low = []
@@ -720,6 +803,30 @@ def verify(m, log=print):
             log("%s path %-9s -> site %s: %s m walking, %s m with jumps"
                 % (tag, team, name, "-" if walk is None else "%.1f" % walk, "-" if jump is None else "%.1f" % jump))
     m.path_lengths = lengths
+
+    # Distinct routes: each gate alone must connect the ghost spawn to the site, and closing every
+    # gate must cut the site off (so the gates really are separate ways in).
+    def in_gate(n, box):
+        ix, iy, z = g.nodes[n]
+        x, y = g.centre(ix, iy)
+        return box[0] <= x <= box[3] and box[1] <= y <= box[4] and box[2] <= z <= box[5]
+    for site_name, gates in m.route_gates.items():
+        ids = set(site_nodes.get(site_name, []))
+        gate_nodes = [set(n for n in reach if in_gate(n, box)) for _label, box in gates]
+        for k, (label, _box) in enumerate(gates):
+            if not gate_nodes[k]:
+                errors.append("route gate %s / %s covers no reachable spot" % (site_name, label))
+                continue
+            closed = set().union(*[gn for i, gn in enumerate(gate_nodes) if i != k])
+            d = g.reach(spawn_nodes["ghosts"][2:3], True, closed)
+            best = min((d[n] for n in ids if n in d), default=None)
+            if best is None:
+                errors.append("site %s: no route through %s alone" % (site_name, label))
+            log("%s route to %s via %-42s %s" % (tag, site_name, label, "-" if best is None else "%.1f m" % best))
+        all_closed = set().union(*gate_nodes) if gate_nodes else set()
+        d = g.reach(spawn_nodes["ghosts"][2:3], True, all_closed)
+        if any(n in d for n in ids):
+            errors.append("site %s is reachable with every route gate closed (routes not distinct)" % site_name)
 
     # Sightlines from ghost spawn eyes to defender spawn eyes (every map).
     eyes = {team: [(p[0], p[1], p[2] + EYE) for p, _ in lst] for team, lst in m.spawns.items()}

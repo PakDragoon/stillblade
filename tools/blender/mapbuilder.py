@@ -621,9 +621,17 @@ def decal_polys(faces, d):
 
 
 def build_paint(b, faces):
-    quads = []
+    """All decal polygons; raises listing every decal that does not sit on a visible face."""
+    quads, bad = [], []
     for d in b.m.decals:
-        quads.extend(decal_polys(faces, d))
+        try:
+            quads.extend(decal_polys(faces, d))
+        except RuntimeError as exc:
+            bad.append(str(exc))
+    if bad:
+        for e in bad:
+            log("FAIL: " + e)
+        raise RuntimeError("%d decal(s) are not on a visible face" % len(bad))
     return quads
 
 
@@ -1193,10 +1201,10 @@ def build(m, opts):
     albedos = process_textures(keys)
     process_sky()
     obj, faces = build_scene(b, size, albedos)
+    paint = build_paint(b, faces)          # before the bake, so a misplaced decal fails fast
     if opts["bake"]:
         bake_lighting(b, obj, faces, size, samples)
     finalize_materials(b, obj, albedos)
-    paint = build_paint(b, faces)
     if paint:
         make_mesh_object(m.id + "_paint", paint, ["paint"],
                          [make_export_material(b.export_names["paint"], (0.6, 0.2, 0.2))])
