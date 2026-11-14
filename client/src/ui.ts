@@ -112,6 +112,7 @@ export class Ui {
         this.chatForm.addEventListener('submit', e => { e.preventDefault(); this.sendChat(); });
         this.chatInput.addEventListener('keydown', e => {
             if (e.key === 'Escape') { e.preventDefault(); this.closeChat(false); }
+            else if (e.key === 'Enter') { e.preventDefault(); this.sendChat(); }
         });
         this.hint.addEventListener('click', () => this.hooks.lock());
         this.buildPause();
@@ -184,7 +185,13 @@ export class Ui {
         }
         if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
         if (this.modalOpen) {
-            if (e.code === 'KeyL' && this.lobby.classList.contains('open')) this.resume();
+            // The lobby panel takes the same keys it advertises.
+            if (this.lobby.classList.contains('open') && this.phase === 'warmup') {
+                if (e.code === 'KeyL') this.resume();
+                else if (e.code === 'KeyG') this.toggleReady();
+                else if (e.code === 'KeyU') this.hooks.start();
+                else if (e.code === 'KeyM') this.hooks.switchTeam();
+            }
             return;
         }
         switch (e.code) {

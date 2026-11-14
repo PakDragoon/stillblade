@@ -402,7 +402,7 @@ async function start(): Promise<void> {
     const local: LocalView = {
         id: 0, team: 'ghosts', health: MAX_HEALTH, alive: false, respawnIn: 0, connected: false, ping: 0, firing: false, vis: 0,
         canAct: false, action: 0, showScores: false, mag: MAG_SIZE, magSize: MAG_SIZE, reserve: 0, reload: 0, spread: 0,
-        yaw: 0, spectating: null, overview: false
+        yaw: 0, spectating: null, spectateId: -1, overview: false
     };
     const listener: ListenerView = { pos: [0, 0, 0], yaw: 0, pitch: 0, team: 'ghosts', alive: false };
     let accumulator = 0;
@@ -612,6 +612,7 @@ async function start(): Promise<void> {
             }
         } else specId = -1;
         local.spectating = followed ? (rosterNames.get(followed.id) ?? `Player ${followed.id}`) : null;
+        local.spectateId = followed ? followed.id : -1;
         local.overview = spectating && !followed;
         local.yaw = followed ? followed.yaw : input.yaw;
         presenter.frame(dt, local, remotes, match);

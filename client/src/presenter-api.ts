@@ -58,6 +58,8 @@ export interface LocalView {
     yaw: number;
     /** While dead and following a living teammate: that player's name. Null otherwise. */
     spectating: string | null;
+    /** Id of the teammate being followed (their body is not drawn: the camera is inside it), or -1. */
+    spectateId: number;
     /** Dead with no living teammate to follow: the fixed overview of the map is shown. */
     overview: boolean;
 }

@@ -319,7 +319,7 @@ body.sb-lowhp #sb-low { display: block; }
 @keyframes sb-low { from { opacity: .35; } to { opacity: 1; } }
 #sb-dmg { left: 50%; top: 50%; width: 0; height: 0; }
 #sb-dmg i { position: absolute; left: -46px; top: -150px; width: 92px; height: 300px; opacity: 0; transform-origin: 46px 150px;
-    background: radial-gradient(ellipse 46px 26px at 46px 8px, rgba(255,40,30,.95), rgba(255,40,30,0) 100%); }
+    background: radial-gradient(ellipse 40px 12px at 46px 8px, rgba(255,40,30,.95), rgba(255,40,30,0) 100%); }
 #sb-recap { left: 50%; top: calc(58% + 36px); transform: translateX(-50%); display: none; white-space: nowrap;
     font: 500 17px/1.2 'Bahnschrift', system-ui, sans-serif; letter-spacing: .04em; opacity: .9; }
 #sb-spec { left: 50%; bottom: 70px; transform: translateX(-50%); display: none; text-align: center; white-space: nowrap;
@@ -562,6 +562,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         r.neck.setLocalPosition(0, bodyH, 0);
     };
 
+    let followId = -1;
     const updateRemotes = (dt: number, remotes: readonly RemoteView[]): void => {
         stamp++;
         const k = 1 - Math.exp(-CROUCH_RATE * dt);
@@ -604,6 +605,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                     }
                 }
             }
+            if (v.id === followId) visible = false; // spectating from inside this player's head
             r.root.enabled = visible;
             if (!visible) continue;
             r.root.setPosition(v.pos[0], v.pos[1], v.pos[2]);
@@ -1293,6 +1295,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             time = (time + dt) % 1000;
             ghostMat.setParameter('uTime', time);
             ghostSkinMat.setParameter('uTime', time);
+            followId = local.spectateId;
             updateRemotes(dt, remotes);
             updateViewmodel(dt, local.team, local.reload);
             updateEffects(dt);

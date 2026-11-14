@@ -52,6 +52,9 @@ ws.on('message', (data, isBinary) => {
         if (shoot && mag === 0 && reserve === 0 && !outOfAmmo) console.log('bot is out of ammunition until it respawns');
         outOfAmmo = mag === 0 && reserve === 0;
     }
+    else if (msg.type === 'round' && msg.phase === 'warmup' && !process.argv.includes('--unready')) {
+        ws.send(encodeClient({ type: 'ready', ready: true })); // a match that fell back to warmup needs everyone ready again
+    }
     else if (msg.type === 'spawn') { yaw = Math.fround(msg.yaw); ticksSinceSpawn = 0; }
 });
 

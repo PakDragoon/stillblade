@@ -27,6 +27,33 @@ The game is playable end to end on a local machine: menu, rooms, rounds, bomb, s
 6. **Animation in real time.** Foot sliding and blending were only seen as still frames.
 7. **Deployment.** The Dockerfile, the Caddy/compose stack and the GitHub Pages workflow have never been run. See `DEPLOY.md`.
 
+## Match flow, HUD and menus (branch `claude/match-flow-hud-menus-da874f`, protocol 8)
+
+**Server (all JSON, nothing predicted).** `Game` takes `{ lobby: true }` (set by `Rooms`; tests and `tools/bench.ts` leave it off, which keeps the old "start as soon as both teams have a player" behaviour).
+- Lobby: a room starts in warmup (everyone walks around and respawns). The round machine leaves warmup when every connected player is `ready` **or** the creator sent `start`, and both teams have a (non-idle) player. Ready flags reset when a round starts and when a match falls back to warmup; a team emptying mid-match also zeroes the score and statistics.
+- Creator = longest-connected player (`Game.creatorId`, derived from `joinedAt`, so it passes on by itself when they leave).
+- Teams: a new player joins the smaller team (ghosts on a tie). In warmup `{type:'team'}` switches, refused if the teams would then differ by more than one (`MAX_TEAM_GAP`) and refused outside warmup.
+- Statistics (`MatchStats` in `shared/protocol.ts`, carried on every `RosterEntry`): kills, deaths, assists (damage within `ASSIST_MS` = 4 s before someone else's kill), headshots (headshot hits), backstabs, damage (health actually removed), plants, defuses. Reset when a match starts. The roster is re-sent on every kill, round start and round end.
+- Match end: the round that reaches 6 sends `summary` (winner, score, every player's stats, `mvp`, `nextAt`) once, holds the result `MATCH_OVER_MS` = 20 s, then starts a fresh match: same room, same map, score and stats zeroed, **players keep their group** (the side they started on, so the roles reset to the first-half roles, not to what they played last). Players joining during the result screen get the stored `summary`, are not spawned, and join the new match. MVP score is documented in `shared/stats.ts` (`mvpScore`).
+- Chat (`{type:'chat', team, text}`): `cleanChat` (`shared/chat.ts`) strips control characters, collapses whitespace and caps at 120 characters; 4 lines burst, one more per 1.5 s, extra lines dropped with a `notice`. While a round is on (freeze, live, planted) a dead player's line (a mid-round joiner counts as dead) reaches **only dead players**; team chat reaches only the sender's team; between rounds and in warmup everyone hears everyone.
+- Idle: a living player whose commands change nothing (movement, view angles, buttons; not `seq` or `viewTime`) for `IDLE_MS` = 90 s of a live or planted round is killed silently (no death counted), flagged `idle` in the roster, told by `notice`, and left out of the team counts so the round can end. Any input change clears the flag; they spawn again at the next round start. The clock only runs while a round is live.
+- Damage events: `dmg` goes to the victim with `dir` (world bearing toward the attacker, yaw convention) and `amount` only; the killing blow adds `by` and `dist`. `hitconfirm` (`body`, `head`, `kill`) goes to the attacker. A ghost that stabs a defender is within 2 m, inside the 8 m breathing range, so this adds nothing `knowsAbout` forbids; tests check the keys and that no `pos` appears. `shot` and `slash` events are unchanged.
+- Client JSON messages are routed by `Game.handleMessage` (text frames; `maxPayload` was raised from 256 to 1024 bytes for chat).
+
+**Client.** `client/src/ui.ts` + `ui.css`: menu (create, join, quick play, how-to shown once), loading screen, connection error screens, lobby panel, pause, settings, controls, result card, chat. `settings.ts` stores settings in `localStorage` (`sb-settings`) and notifies listeners; `radar.ts` is the radar; HUD additions (alive pips, bomb and round timer, damage direction, low-health pulse, death recap, spectating label, custom crosshair) are in `presenter.ts` behind `presenter-api.ts`. Hit marker sound and volume controls are in `audio.ts` behind `audio-api.ts`. In `main.ts`: join flow and connection handling, the settings subscription, the spectator camera and radar update.
+- Pause: whenever pointer lock is lost with nothing else open (Esc) the pause menu opens and the match keeps running. The mouse is released while typing chat so Esc reaches the chat box.
+- Spectating uses only what a dead player is already sent: teammates (always in snapshots, with yaw and pitch), followed in first person; with no living teammate the camera shows the whole map from above (this only lasts through the round-over pause or a planted bomb, since a round ends when the last ghost or defender dies).
+- Reconnect: a connection that drops after joining reloads the page once with the room, name and map remembered in `sessionStorage` (`sb-rejoin`); if that fails the error screen has a retry button. Settings survive in `localStorage`.
+- Radar: north-up, 24 m radius, boxes of the current floor, own team only, sites, and the planted bomb. It is never given enemies.
+
+**Match flow: gaps (what was and was not checked).** Checked in headless Chrome (driven over the DevTools protocol, software GL) against bots, on both maps: menu, join by code, lobby panel with ready, chat (all and team), HUD in a live round, Tab scoreboard, pause, settings, controls, loading and error screens (server unreachable, unknown map, too many connections), a complete match to the result card with its countdown and the rematch (on a scratch server with shortened rules: 10 s rounds, 2 rounds to win; the real 120 s rounds and 6-round match were only covered by `server/src/matchflow.test.ts`), idle move to spectate then first-person follow of a teammate and the map overview, and the hit marker and damage direction widgets (called through `__sb.presenter`, not from a real fight). Screenshots: `docs/review/match-flow/`.
+- **Never seen with real input:** pointer lock (Esc to pause, mouse released for chat and re-captured after), copy invite link (clipboard), the death recap and hit marker from real hits (server events are tested, the client wiring only by reading), the hit sound and the volume sliders by ear, the automatic reconnect after a dropped connection, "Room full" in a browser (local connections hit the per-IP limit first; `rooms.test.ts` covers the rule), and a long real match: a headless client dropped off the server after a few minutes in several runs, cause not found (it was a throttled headless page; no server error was logged), so a human playing 13 minutes is untested.
+- Graphics quality only caps the adaptive resolution step (low 60%, medium 80%, high 100%).
+- Radar: built from the collision boxes (floors within 0.45 m of the player's feet, solids that block a standing player). It was seen on both maps; multi-floor behaviour on Warehouse stairs was not checked.
+- A mid-round joiner counts as dead for chat purposes until the next round.
+- Dead players keep seeing enemy ghosts from the spot where they died (existing `knowsAbout` behaviour, unchanged); a spectator does not see through the teammate's eyes for that.
+- The old banner still shows "MATCH OVER" under the result card; the card is opaque enough to cover it.
+
 ## Known problems
 
 - **Phase edges and the gun.** The client decides "armed" (not frozen, hands free) from its own view of the round phase, which arrives late under lag. A trigger held across the freeze-to-live edge can fire on the server before the client predicts it; the snapshot corrects the gun state (one `gunMismatches` tick), but that shot's tracer and sound are not shown locally. Same as before this change for firing; never seen in testing.
@@ -50,9 +77,10 @@ The game is playable end to end on a local machine: menu, rooms, rounds, bomb, s
 - WebRTC transport (WebSockets only).
 - Desktop wrapper.
 - Accounts, matchmaking across servers, more than one region.
+- Team voice, a map vote or rotation after a match, kick and ban, bots that fill a lobby, player-chosen key bindings, a graphics setting beyond render resolution.
 - Particle effects, decals beyond a simple impact mark and map paint, a "High" graphics setting. Maps can be picked in the menu; there is no map vote or rotation.
 - Recorded audio (everything is synthesised).
-- A spectator camera: dead players keep their death view until the next round.
+
 
 ## Running it
 
@@ -67,9 +95,9 @@ npm run dev
 This starts the game server (ws://localhost:8080) and the web client (http://localhost:5173). Each browser tab is a player. The first to join is a ghost, the second a defender, alternating.
 
 - `npm run bot` adds a scripted player (walks in, then strafes). `npm run bot -- --shoot` makes it hold fire. To play as a defender alone, start the bot before opening the page.
-- `npm run bot -- --map warehouse --room test --still` (the map only matters if the bot creates the room).
-- URL options: `?auto=1` skips the menu, `?name=`, `?room=`, `?map=` (`warehouse`, `greybox`), `?lag=150` (simulated round-trip latency), `?res=0.7` (pin render resolution), `?server=ws://host:port`.
-- Keys: WASD move, mouse look, left click attack (F also attacks, useful without pointer lock), R reload, E plant or defuse, Tab scoreboard, Space jump, Shift quiet walk, C crouch.
+- `npm run bot -- --map warehouse --room test --still` (the map only matters if the bot creates the room). Bots press ready on joining and again whenever a room falls back to warmup; `--unready` stops that.
+- URL options: `?auto=1` skips the menu and the lobby panel (and `?quiet=1` only the pause menu, click hint and lobby panel: for scripted runs), `?name=`, `?room=`, `?map=` (`warehouse`, `greybox`), `?lag=150` (simulated round-trip latency), `?res=0.7` (pin render resolution), `?server=ws://host:port`.
+- Keys: WASD move, mouse look, left click attack (F also attacks, useful without pointer lock), R reload, E plant or defuse, Tab scoreboard, Space jump, Shift quiet walk, C crouch, Enter all chat, Y team chat, Esc pause menu (Esc cancels chat), left/right arrows follow another teammate when dead, and in warmup G ready, U start (room creator), M switch team, L open the lobby panel.
 - `npm test`, `npm run typecheck`, `npm run build`.
 - In the browser console, `window.__sb` exposes `app`, `state`, `gun`, `input`, `net`, `match`, `mapData`, `presenter`, `audio` and `stats()` (`stats().gunMismatches` and `stats().knifeMismatches` count snapshots where the replayed gun or knife differed from the prediction; both should stay 0).
 - `npm run bot -- --shoot` fires 10-round bursts, pauses, and presses R between bursts when under 12 rounds; it logs when it runs out of ammunition (until its next spawn).
