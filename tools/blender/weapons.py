@@ -280,7 +280,24 @@ def main():
     length = max(p.dot(fwd) for p in pts) - min(p.dot(fwd) for p in pts)
     s = PISTOL_LENGTH / length
     pistol.data.transform(Matrix.Scale(s, 4) @ basis(fwd, up) @ Matrix.Translation(-grip))
+    # The prop is rolled in the source (its grip leans to one side under the slide, which reads as a canted gun
+    # when aimed): turn it about the barrel axis so the grip's bottom sits straight under the slide's centre,
+    # then put the grip back on the origin sideways.
+    pts = [v.co for v in pistol.data.vertices]
+    zs = [p.z for p in pts]
+    ztop, zbot = max(zs), min(zs)
+    slide = [p for p in pts if p.z > ztop - 0.02 and p.y > 0.06]
+    foot = [p for p in pts if p.z < zbot + 0.012]
+    xs, zs_ = (min(p.x for p in slide) + max(p.x for p in slide)) / 2, sum(p.z for p in slide) / len(slide)
+    xb, zb = (min(p.x for p in foot) + max(p.x for p in foot)) / 2, sum(p.z for p in foot) / len(foot)
+    roll = math.atan2(xb - xs, zs_ - zb)
+    rot = Matrix.Rotation(roll, 4, 'Y')
+    pistol.data.transform(rot)
+    a, b = rot @ Vector((xs, 0, zs_)), rot @ Vector((xb, 0, zb))
+    x0 = a.x + (b.x - a.x) * (0 - a.z) / (b.z - a.z)
+    pistol.data.transform(Matrix.Translation((-x0, 0, 0)))
     pistol.data.update()
+    log('pistol: roll corrected by', round(math.degrees(roll), 2), 'deg; slide/foot x after', round(a.x - x0, 4), round(b.x - x0, 4))
     log('pistol: source length', round(length, 4), 'scale', round(s, 5), 'grip (source)',
         tuple(round(c, 3) for c in grip), 'grip top/bottom', round(top, 3), round(bottom, 3))
     add_suppressor(pistol, *PISTOL_SUPPRESSOR)
