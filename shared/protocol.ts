@@ -1,7 +1,7 @@
 import type { Phase, RoundReason } from './rules';
 import type { InputCmd, Vec3 } from './types';
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 export const DEFAULT_PORT = 8080;
 /** Snapshots per second sent to each client. */
 export const SNAPSHOT_RATE = 30;
@@ -111,7 +111,8 @@ export interface RosterEntry {
 }
 
 export type ServerMsg =
-    | { type: 'welcome'; version: number; id: number; team: Team; map: string; time: number }
+    /** `map` is the room's map id (load maps/<map>.json and .glb before spawning); `mapName` its display name. */
+    | { type: 'welcome'; version: number; id: number; team: Team; map: string; mapName: string; time: number }
     | { type: 'snap'; time: number; ack: number; me: SelfSnap; players: PlayerSnap[] }
     | { type: 'spawn'; pos: Vec3; yaw: number }
     | ShotEvent

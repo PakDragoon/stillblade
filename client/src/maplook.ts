@@ -5,7 +5,7 @@ import type { MapData, MapLook } from '@shared/types';
  * Map look: baked light x tiling albedo, plus the sky.
  *
  * The world's lighting (HDRI sky, sun, bounce, accent lamps) is baked offline in Blender
- * (tools/blender/greybox.py) into ONE atlas that stores light only, no surface colour.
+ * (tools/blender/mapbuilder.py) into ONE atlas that stores light only, no surface colour.
  * Every map mesh instance gets a tiny unlit ShaderMaterial:
  *
  *     colour = albedo(uv0 / tile) * COLOR_0 * tint * light(uv1)
@@ -13,7 +13,7 @@ import type { MapData, MapLook } from '@shared/types';
  * so the world costs two texture fetches per pixel, ignores the realtime sun/ambient (those
  * still light players and the viewmodel) and is one draw call per surface material.
  *
- * GLB layout contract (written by greybox.py):
+ * GLB layout contract (written by tools/blender/mapbuilder.py):
  *   TEXCOORD_0  world-space planar UVs in metres  -> albedo, divided by the material's tile size
  *   TEXCOORD_1  lightmap UVs into the baked atlas
  *   COLOR_0     linear albedo multiplier (skirting, grime, variation, paint colour)
