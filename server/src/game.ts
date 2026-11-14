@@ -1,11 +1,13 @@
 import {
-    BODY_DAMAGE, BREATH_RANGE, EYE_HEIGHT, EYE_HEIGHT_CROUCHED, HEAD_DAMAGE, HEAD_ZONE,
+    BREATH_RANGE, EYE_HEIGHT, EYE_HEIGHT_CROUCHED, HEAD_ZONE,
     HULL_HALF_WIDTH, HULL_HEIGHT, HULL_HEIGHT_CROUCHED, KNIFE_BACKSTAB_DAMAGE, KNIFE_CONE_COS,
     KNIFE_DAMAGE, KNIFE_RANGE, KNIFE_SOUND_RANGE, MAX_HEALTH,
     MAX_REWIND_MS, RELOAD_SOUND_RANGE, RESPAWN_MS, SHOT_RANGE, STEP_DISTANCE, STEP_LOUD_CROUCH, STEP_LOUD_RUN, STEP_LOUD_WALK,
     STEP_RANGE, TICK_DT, TICK_RATE, VIS_HURT_SPIKE, VIS_SWING_SPIKE
 } from '../../shared/constants';
-import { GUN_RELOAD, createGunState, resetGun, shotDirection, spreadAngle, spreadSeed, stepGun } from '../../shared/gun';
+import {
+    GUN_RELOAD, aimFraction, cancelReloads, createLoadout, heldGun, heldWeapon, resetLoadout, shotDirectionFor, stepLoadout
+} from '../../shared/gun';
 import { KNIFE_SLASH, KNIFE_SWING, createKnifeState, resetKnife, stepKnife } from '../../shared/knife';
 import { createPlayerState, horizontalSpeed, stepPlayer } from '../../shared/movement';
 import {
@@ -41,8 +43,8 @@ export class Player {
     respawnAt = 0;
     lastSeq = -1;
     credits = MAX_CMD_CREDITS;
-    /** The defender gun (shared/gun.ts); reset at every spawn. */
-    readonly gun = createGunState();
+    /** The defender's weapons (shared/gun.ts, shared/weapons.ts); reset at every spawn. */
+    readonly loadout = createLoadout();
     /** Ghost knife timing, counted in commands processed for this player (shared/knife.ts). */
     readonly knife = createKnifeState();
     /** 0..1 opacity: always 1 for defenders. */
@@ -213,7 +215,7 @@ export class Game {
         p.health = MAX_HEALTH;
         p.alive = true;
         resetKnife(p.knife);
-        resetGun(p.gun);
+        resetLoadout(p.loadout);
         p.stepAccum = 0;
         p.actionTicks = 0;
         p.respawnAt = 0;
@@ -243,6 +245,9 @@ export class Game {
         cmd.use = cmd.use === true;
         cmd.fire = cmd.fire === true;
         cmd.reload = cmd.reload === true;
+        cmd.swap = cmd.swap === true;
+        cmd.aim = cmd.aim === true;
+        cmd.slot = Number.isInteger(cmd.slot) ? cmd.slot : 0; // out-of-range slots are ignored by stepLoadout
 
         // Rooted during the freeze and while planting or defusing. The client applies the same rule.
         const acting = cmd.use && canAct(p.team, this.phase, p.state, this.map, this.bomb);
@@ -270,9 +275,9 @@ export class Game {
         // and with free hands. The client runs the same steps with the same inputs.
         const armed = !acting && this.phase !== 'freeze';
         if (p.team === 'defenders') {
-            const r = stepGun(p.gun, cmd.fire, cmd.reload, armed);
+            const r = stepLoadout(p.loadout, cmd, armed);
             if (r >= 0) this.fire(p, cmd, r);
-            else if (r === GUN_RELOAD) this.emitSound(p, 'reload', 1, RELOAD_SOUND_RANGE);
+            else if (r === GUN_RELOAD) this.emitSound(p, 'reload', 1, RELOAD_SOUND_RANGE, p.loadout.slot);
         } else {
             const k = stepKnife(p.knife, cmd.fire, armed);
             if (k === KNIFE_SLASH) this.slash(p, cmd);
@@ -297,11 +302,14 @@ export class Game {
     }
 
     /** Sends a sound only to players close enough to hear it. */
-    private emitSound(source: Player, kind: SoundEvent['kind'], loud: number, range: number): void {
+    private emitSound(source: Player, kind: SoundEvent['kind'], loud: number, range: number, weapon?: number): void {
         let event: SoundEvent | undefined;
         for (const p of this.players.values()) {
             if (p === source || dist(p.state.pos, source.state.pos) > range) continue;
-            event ??= { type: 'sound', kind, id: source.id, pos: [...source.state.pos] as Vec3, loud };
+            if (!event) {
+                event = { type: 'sound', kind, id: source.id, pos: [...source.state.pos] as Vec3, loud };
+                if (weapon !== undefined) event.weapon = weapon;
+            }
             p.conn.send(event);
         }
     }
@@ -314,7 +322,7 @@ export class Game {
         // Only warmup has respawns; in a round the dead wait for the next one.
         victim.respawnAt = this.phase === 'warmup' ? this.now + RESPAWN_MS : 0;
         resetKnife(victim.knife);
-        victim.gun.reload = 0; // death cancels a reload
+        cancelReloads(victim.loadout); // death cancels a reload
         victim.actionTicks = 0;
         victim.deaths++;
         attacker.kills++;
@@ -338,12 +346,12 @@ export class Game {
         hmin[2] = feet[2] - HULL_HALF_WIDTH; hmax[2] = feet[2] + HULL_HALF_WIDTH;
     }
 
-    /** `shot` is the recoil pattern index from `stepGun`. */
+    /** `shot` is the recoil pattern index from `stepLoadout`. */
     private fire(shooter: Player, cmd: NetCmd, shot: number): void {
         const { eye, dir, hmin, hmax } = this;
         this.aimFrom(shooter, cmd);
         // The view plus recoil plus spread, exactly as the client predicted it.
-        shotDirection(cmd.yaw, cmd.pitch, shot, spreadAngle(shooter.state), spreadSeed(shooter.gun), shooter.id, dir);
+        shotDirectionFor(shooter.loadout, shooter.state, cmd.yaw, cmd.pitch, shot, shooter.id, dir);
         // Test against where the shooter saw everyone, within a bounded window.
         const viewTime = clamp(cmd.viewTime, this.now - MAX_REWIND_MS, this.now);
         let range = rayWorld(this.map.boxes, eye, dir, SHOT_RANGE);
@@ -361,12 +369,13 @@ export class Game {
         }
 
         const event: ShotEvent = {
-            type: 'shot', shooter: shooter.id,
+            type: 'shot', shooter: shooter.id, weapon: shooter.loadout.slot,
             from: [eye[0], eye[1], eye[2]],
             to: [eye[0] + dir[0] * range, eye[1] + dir[1] * range, eye[2] + dir[2] * range]
         };
         if (victim) {
-            const amount = head ? HEAD_DAMAGE : BODY_DAMAGE;
+            const def = heldWeapon(shooter.loadout);
+            const amount = head ? def.headDamage : def.bodyDamage;
             event.victim = victim.id;
             event.head = head;
             event.damage = amount;
@@ -542,12 +551,24 @@ export class Game {
             this.lineClear(a[0], viewer.eyeY, a[2], b[0], b[1] + other.height * 0.5, b[2]);
     }
 
+    /** What others see of a player's weapon: which one, and whether it is busy or aimed. */
+    private weaponView(p: Player): Pick<PlayerSnap, 'weapon' | 'reloading' | 'switching' | 'aiming'> {
+        const armed = p.alive && p.team === 'defenders';
+        return {
+            weapon: armed ? p.loadout.slot : 0,
+            reloading: armed && heldGun(p.loadout).reload > 0,
+            switching: armed && p.loadout.draw > 0,
+            aiming: armed && aimFraction(p.loadout) > 0.5
+        };
+    }
+
     private sendSnapshots(): void {
         const snaps = new Map<Player, PlayerSnap>();
         for (const p of this.players.values()) {
             snaps.set(p, {
                 id: p.id, team: p.team, pos: p.state.pos, yaw: p.yaw, pitch: p.pitch,
-                crouched: p.state.crouched, alive: p.alive, vis: p.vis, reloading: p.alive && p.gun.reload > 0
+                crouched: p.state.crouched, alive: p.alive, vis: p.vis,
+                ...this.weaponView(p)
             });
         }
         for (const p of this.players.values()) {
@@ -559,7 +580,7 @@ export class Game {
                     team: p.team,
                     action: p.actionTicks / (p.team === 'ghosts' ? PLANT_TICKS : DEFUSE_TICKS),
                     pos: p.state.pos, vel: p.state.vel, onGround: p.state.onGround, crouched: p.state.crouched,
-                    health: p.health, alive: p.alive, respawnAt: p.respawnAt, vis: p.vis, gun: p.gun, knife: p.knife
+                    health: p.health, alive: p.alive, respawnAt: p.respawnAt, vis: p.vis, loadout: p.loadout, knife: p.knife
                 },
                 players
             });

@@ -1,13 +1,15 @@
 import * as pc from 'playcanvas';
 import {
-    EYE_HEIGHT, EYE_HEIGHT_CROUCHED, HEAD_ZONE, HULL_HALF_WIDTH, HULL_HEIGHT, HULL_HEIGHT_CROUCHED, RELOAD_MS
+    EYE_HEIGHT, EYE_HEIGHT_CROUCHED, HEAD_ZONE, HULL_HALF_WIDTH, HULL_HEIGHT, HULL_HEIGHT_CROUCHED
 } from '@shared/constants';
 import type { RosterEntry, Team } from '@shared/protocol';
 import { ROUNDS_TO_WIN, type Phase, type RoundReason } from '@shared/rules';
 import type { Vec3 } from '@shared/types';
 import type { CreatePresenter, KillKind, LocalView, MatchView, RemoteView } from './presenter-api';
 import { Character, CharLook, loadCharacterModel, makeSkinnedGhostMaterial, type CharacterModel } from './characters';
-import { instantiateWeapon, loadWeaponModel, makeWeaponMaterial, type WeaponModel } from './weapons';
+import { TICK_RATE } from '@shared/constants';
+import { WEAPONS, type WeaponId } from '@shared/weapons';
+import { instantiateWeapon, loadWeaponModel, makeWeaponMaterial, WEAPON_MESH, type WeaponModel } from './weapons';
 
 const DEG = 180 / Math.PI;
 const HEAD_WIDTH = 0.4;
@@ -17,41 +19,100 @@ const TRACER_LIFE = 0.09;
 const TRACER_THICKNESS = 0.02;
 const IMPACT_COUNT = 32;
 const IMPACT_LIFE = 4;
-const RECOIL_TIME = 0.08;
 const FLASH_TIME = 0.04;
 const KILLFEED_MAX = 5;
 const KILLFEED_LIFE = 5;
 const KILLFEED_FADE = 0.5;
-/** Box stand-in gun (origin mid-receiver), used until weapons.glb has loaded or if it fails. */
-const GUN_POS = new pc.Vec3(0.15, -0.15, -0.46);
-/**
- * Model gun (origin at the pistol grip, see weapons.ts): grip position in camera space, and a small
- * inward yaw / roll so it reads as held, the suppressor angling toward the crosshair.
- */
-const GUN_MODEL_POS = new pc.Vec3(0.17, -0.32, -0.5);
-const GUN_MODEL_YAW = 6;
-const GUN_MODEL_ROLL = -6;
-const GUN_MODEL_PITCH = 4;
 /** Model knife: handle centre sits this far behind the knife pivot (the box knife's guard). */
 const KNIFE_MODEL_BACK = 0.055;
 /** Idle sway of the viewmodel: amplitude (m, degrees) and rate (rad/s). Time-based only. */
 const SWAY_POS = 0.0022;
 const SWAY_ROT = 0.45;
 const SWAY_RATE = 1.3;
-/**
- * Viewmodel reload pose, blended in by reload progress: offset (m, camera space) and Euler offset
- * (degrees: pitch, yaw, roll). Lowered, pulled in toward the centre and canted so the magazine well
- * faces the support hand, muzzle tipped slightly up.
- */
-const RELOAD_POS = [-0.05, -0.085, 0.05];
-const RELOAD_ROT = [12, 16, -28];
-/** Fractions of the reload spent dipping in and coming back up; return rate (1/s) on cancel. */
-const RELOAD_IN = 0.2;
-const RELOAD_OUT = 0.2;
+/** Share of the sway left when fully aimed down sights. */
+const AIM_SWAY = 0.2;
+/** Return rate (1/s) of the reload pose when a reload is cancelled. */
 const RELOAD_RETURN = 12;
-/** Progress at which the magazine seats (1.4 s) and the bolt closes (about 2.05 s) of the reload (sounds in audio.ts). */
-const RELOAD_SEAT_AT = 1400 / RELOAD_MS;
-const RELOAD_BOLT_AT = 2050 / RELOAD_MS;
+/** The spread ticks fade to this opacity when fully aimed (the dot stays). */
+const XHAIR_AIM_OPACITY = 0.15;
+
+/**
+ * First-person look of each defender weapon, by WeaponId (shared/weapons.ts). Positions are metres in
+ * camera space, angles degrees (pitch, yaw, roll; positive pitch tips the muzzle up). Every model's origin is
+ * its grip (weapons.ts), so a pose is where the hand holds it.
+ */
+interface VmLook {
+    /** From the hip: low right, a small inward yaw / roll so it reads as held, the suppressor toward the crosshair. */
+    hip: readonly number[];
+    /** Aimed down sights: centred, the top of the gun just under the crosshair. */
+    aim: readonly number[];
+    /** Offset at the start of a switch (draw = 1): below and rotated away, eased back to zero. */
+    draw: readonly number[];
+    /** Reload pose offset (x, y, z, pitch, yaw, roll), blended in by reload progress. */
+    reload: readonly number[];
+    /** Fractions of the reload spent going into and coming out of the reload pose. */
+    reloadIn: number;
+    reloadOut: number;
+    /**
+     * Jolts during the reload, timed to the sounds in audio.ts: [ms from the start, half-width ms, size].
+     * Size 1 lifts the gun 12 mm and tips it up 5 degrees; negative dips it.
+     */
+    jolts: readonly (readonly [number, number, number])[];
+    /** Firing kick at its peak: lift (m), push back (m), muzzle up (degrees); and its duration (s). */
+    kick: readonly number[];
+    kickTime: number;
+    /** Size of the muzzle flash and tracer relative to the rifle's. */
+    fx: number;
+}
+
+const VM_LOOKS: Record<WeaponId, VmLook> = {
+    rifle: {
+        hip: [0.17, -0.32, -0.5, 4, 6, -6],
+        aim: [-0.013, -0.226, -0.47, 0, 0, 0],
+        draw: [0.03, -0.24, 0.06, -40, 12, 25],
+        // Lowered, pulled in toward the centre and canted so the magazine well faces the support hand.
+        reload: [-0.05, -0.085, 0.05, 12, 16, -28],
+        reloadIn: 0.2, reloadOut: 0.2,
+        // The magazine seats (1.4 s) and the bolt slams home (about 2.05 s).
+        jolts: [[1400, 110, 1], [2050, 88, 0.7]],
+        kick: [0.012, 0.035, 4], kickTime: 0.08,
+        fx: 1
+    },
+    pistol: {
+        hip: [0.12, -0.175, -0.34, 2, 4, -3],
+        aim: [-0.002, -0.084, -0.3, 0, 0, 0],
+        draw: [0, -0.2, 0.05, -55, 0, 20],
+        // Tilted onto its side and brought in, magazine well toward the support hand.
+        reload: [-0.04, -0.04, 0.04, 16, 12, -38],
+        reloadIn: 0.15, reloadOut: 0.13,
+        // Magazine drops (0.18 s), new one slapped in (0.7 s), slide pulled (1.08 s) and released (1.17 s).
+        jolts: [[180, 90, -0.7], [700, 80, 1], [1080, 60, -0.6], [1170, 60, 1.3]],
+        kick: [0.016, 0.03, 9], kickTime: 0.11,
+        fx: 0.75
+    }
+};
+
+/** VM_LOOKS per slot, with the jolt times turned into fractions of that weapon's own reload. */
+interface SlotLook extends VmLook {
+    joltAt: number[];
+    joltW: number[];
+    joltSize: number[];
+}
+const SLOT_LOOKS: readonly SlotLook[] = WEAPONS.map(w => {
+    const look = VM_LOOKS[w.id];
+    const ms = (w.reloadTicks / TICK_RATE) * 1000;
+    return {
+        ...look,
+        joltAt: look.jolts.map(j => j[0] / ms),
+        joltW: look.jolts.map(j => j[1] / ms),
+        joltSize: look.jolts.map(j => j[2])
+    };
+});
+
+/** Slot index clamped into the weapon table. */
+function slotOf(weapon: number): number {
+    return weapon >= 0 && weapon < WEAPONS.length ? weapon | 0 : 0;
+}
 
 /** A smooth 0..1..0 bump of half-width `w` centred on `c`. */
 function bump(x: number, c: number, w: number): number {
@@ -256,6 +317,9 @@ const HUD_CSS = `
 #sb-vis.hidden .state { color: #8fe3a8; }
 #sb-vis.exposed .state { color: #ff5a4a; } #sb-vis.exposed .fill { background: #ff5a4a; }
 #sb-ammo { right: 22px; bottom: 14px; display: none; text-align: right; white-space: nowrap; }
+#sb-ammo .alt { margin-bottom: 7px; font: 600 12px/1.35 system-ui, sans-serif; opacity: .5;
+    font-variant-numeric: tabular-nums; }
+#sb-ammo .wpn { margin-bottom: 3px; font: 800 12px/1 system-ui, sans-serif; letter-spacing: .3em; opacity: .85; }
 #sb-ammo .mag { font: 700 52px/1 system-ui, sans-serif; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
 #sb-ammo .res { margin-left: 6px; font: 600 20px/1 system-ui, sans-serif; opacity: .7; font-variant-numeric: tabular-nums; }
 #sb-ammo.low .mag { color: #ffb43b; }
@@ -595,23 +659,41 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     // --- Viewmodels ------------------------------------------------------------------------------
     // All geometry sits at least ~0.2 m in front of the eye, well clear of the 0.05 m near plane.
     // The box versions are the fallback while weapons.glb loads (or if it fails); useWeaponModel swaps in
-    // the meshes: gun = 1 draw call + the flash, knife = 1.
+    // the meshes. `gun` is posed every frame; under it, one child per weapon slot, only the one in hand
+    // enabled: 1 draw call + the flash. Knife = 1.
     const gun = new pc.Entity('viewmodel-gun');
     camera.addChild(gun);
-    const gunBoxes = new pc.Entity('boxes');
-    gun.addChild(gunBoxes);
-    box(gunBoxes, gunMat, 0.05, 0.07, 0.26, 0, 0, 0, VM);                       // receiver
-    box(gunBoxes, gunAccentMat, 0.026, 0.026, 0.22, 0, 0.012, -0.24, VM);       // barrel
-    box(gunBoxes, gunMat, 0.036, 0.085, 0.05, 0, -0.065, -0.05, VM);            // magazine
-    const grip = box(gunBoxes, gunAccentMat, 0.04, 0.08, 0.045, 0, -0.06, 0.08, VM);
-    grip.setLocalEulerAngles(-15, 0, 0);
-    const muzzle = new pc.Entity('muzzle');
-    muzzle.setLocalPosition(0, 0.012, -0.36);
-    gun.addChild(muzzle);
-    const flash = box(muzzle, flashMat, 0.045, 0.045, 0.07, 0, 0, -0.03, VM);
-    flash.enabled = false;
-    let gunPos = GUN_POS;
-    let gunPitch = 0, gunYaw = 0, gunRoll = 0;
+    interface VmGun { root: pc.Entity; boxes: pc.Entity; muzzle: pc.Entity; flash: pc.Entity; }
+    /** A slot's viewmodel with its box stand-in; box positions are relative to the grip, like the models. */
+    const makeVmGun = (slot: number): VmGun => {
+        const root = new pc.Entity(`viewmodel-${WEAPONS[slot].id}`);
+        root.enabled = false;
+        gun.addChild(root);
+        const boxes = new pc.Entity('boxes');
+        root.addChild(boxes);
+        const muzzle = new pc.Entity('muzzle');
+        if (WEAPONS[slot].id === 'pistol') {
+            box(boxes, gunMat, 0.03, 0.032, 0.17, 0, 0.045, -0.06, VM);              // slide
+            box(boxes, gunAccentMat, 0.026, 0.026, 0.11, 0, 0.05, -0.2, VM);         // suppressor
+            box(boxes, gunAccentMat, 0.028, 0.075, 0.035, 0, -0.005, 0, VM).setLocalEulerAngles(-15, 0, 0); // grip
+            muzzle.setLocalPosition(0, 0.05, -0.26);
+        } else {
+            // Origin mid-receiver, shifted so the grip sits at the root's origin.
+            boxes.setLocalPosition(-0.02, 0.17, 0.04);
+            box(boxes, gunMat, 0.05, 0.07, 0.26, 0, 0, 0, VM);                       // receiver
+            box(boxes, gunAccentMat, 0.026, 0.026, 0.22, 0, 0.012, -0.24, VM);       // barrel
+            box(boxes, gunMat, 0.036, 0.085, 0.05, 0, -0.065, -0.05, VM);            // magazine
+            box(boxes, gunAccentMat, 0.04, 0.08, 0.045, 0, -0.06, 0.08, VM).setLocalEulerAngles(-15, 0, 0);
+            muzzle.setLocalPosition(0, 0.012, -0.36);
+        }
+        boxes.addChild(muzzle);
+        const fx = SLOT_LOOKS[slot].fx;
+        const flash = box(muzzle, flashMat, 0.045 * fx, 0.045 * fx, 0.07 * fx, 0, 0, -0.03 * fx, VM);
+        flash.enabled = false;
+        return { root, boxes, muzzle, flash };
+    };
+    const vmGuns: VmGun[] = [];
+    for (let i = 0; i < WEAPONS.length; i++) vmGuns.push(makeVmGun(i));
 
     // Knife: origin at the guard, blade along -Z.
     const knife = new pc.Entity('viewmodel-knife');
@@ -626,17 +708,19 @@ export const createPresenter: CreatePresenter = (app, camera) => {
 
     const useWeaponModel = (m: WeaponModel): void => {
         const vmMat = makeWeaponMaterial(0.4);
-        const g = instantiateWeapon(m, 'gun', vmMat, VM);
-        gun.addChild(g.entity);
-        gunBoxes.enabled = false;
-        // Tracers and the flash start at the end of the suppressor.
-        muzzle.reparent(g.muzzle!);
-        muzzle.setLocalPosition(0, 0, 0);
-        muzzle.setLocalEulerAngles(0, 0, 0);
-        flash.setLocalScale(0.05, 0.05, 0.085);
-        flash.setLocalPosition(0, 0, -0.04);
-        gunPos = GUN_MODEL_POS;
-        gunPitch = GUN_MODEL_PITCH; gunYaw = GUN_MODEL_YAW; gunRoll = GUN_MODEL_ROLL;
+        for (let i = 0; i < vmGuns.length; i++) {
+            const v = vmGuns[i];
+            const g = instantiateWeapon(m, WEAPON_MESH[WEAPONS[i].id], vmMat, VM);
+            v.root.addChild(g.entity);
+            // Tracers and the flash start at the end of the suppressor.
+            v.muzzle.reparent(g.muzzle!);
+            v.muzzle.setLocalPosition(0, 0, 0);
+            v.muzzle.setLocalEulerAngles(0, 0, 0);
+            const fx = SLOT_LOOKS[i].fx;
+            v.flash.setLocalScale(0.05 * fx, 0.05 * fx, 0.085 * fx);
+            v.flash.setLocalPosition(0, 0, -0.04 * fx);
+            v.boxes.enabled = false;
+        }
         const k = instantiateWeapon(m, 'knife', vmMat, VM);
         knife.addChild(k.entity);
         k.entity.setLocalPosition(0, 0, KNIFE_MODEL_BACK);
@@ -654,6 +738,9 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     let vmTeam: Team | null = null;
     /** Weight 0..1 of the gun's reload pose (eased back down when a reload is cancelled). */
     let reloadW = 0;
+    /** Slot drawn in first person (-1 before the first defender frame), and the slot whose kick is playing. */
+    let vmSlot = -1;
+    let kickSlot = 0;
 
     const setKnifePose = (a: number[], b: number[], t: number): void => {
         const u = 1 - t;
@@ -661,7 +748,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         knife.setLocalEulerAngles(a[3] * u + b[3] * t, a[4] * u + b[4] * t, a[5] * u + b[5] * t);
     };
 
-    const updateViewmodel = (dt: number, team: Team, reload: number): void => {
+    const updateViewmodel = (dt: number, local: LocalView): void => {
+        const team = local.team;
         if (team !== vmTeam) {
             vmTeam = team;
             recoilT = 0;
@@ -673,35 +761,60 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         gun.enabled = localAlive && defender;
         knife.enabled = localAlive && !defender;
         if (defender) {
+            // The weapon in hand changes the moment a switch starts: the old one simply disappears.
+            const slot = slotOf(local.weapon);
+            if (slot !== vmSlot) {
+                if (vmSlot >= 0) {
+                    vmGuns[vmSlot].root.enabled = false;
+                    vmGuns[vmSlot].flash.enabled = false;
+                }
+                vmSlot = slot;
+                vmGuns[slot].root.enabled = true;
+                reloadW = 0;
+                flashT = 0;
+            }
+            const look = SLOT_LOOKS[slot];
+            const kick = SLOT_LOOKS[kickSlot];
             recoilT = Math.max(0, recoilT - dt);
             flashT = Math.max(0, flashT - dt);
-            flash.enabled = flashT > 0;
-            const k = recoilT / RECOIL_TIME;
+            vmGuns[slot].flash.enabled = flashT > 0;
+            const k = recoilT / kick.kickTime;
             const e = k * k;
-            // Subtle time-based sway (the presenter has no player speed); damped while firing.
-            const s = 1 - 0.7 * k;
-            const sx = Math.sin(time * SWAY_RATE) * SWAY_POS * s;
-            const sy = Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6 * s;
-            // Reload: state-driven from the progress alone. Dip and cant in over the first 20 %, hold low,
-            // come back up over the last 20 %; a cancelled reload (progress back to 0) eases home.
-            const p = reload > 0 ? Math.min(1, reload) : 0;
+            // Reload: state-driven from the progress alone. Dip and cant in, hold, come back up; a
+            // cancelled reload (progress back to 0) eases home.
+            const p = local.reload > 0 ? Math.min(1, local.reload) : 0;
             let target = 0;
             if (p > 0) {
-                const x = p < RELOAD_IN ? p / RELOAD_IN : p > 1 - RELOAD_OUT ? (1 - p) / RELOAD_OUT : 1;
+                const x = p < look.reloadIn ? p / look.reloadIn : p > 1 - look.reloadOut ? (1 - p) / look.reloadOut : 1;
                 target = x * x * (3 - 2 * x);
             }
             reloadW = target >= reloadW ? target : reloadW + (target - reloadW) * (1 - Math.exp(-RELOAD_RETURN * dt));
             const w = reloadW;
-            // Small jolts as the magazine seats and the bolt slams home (zero when not reloading).
-            const jolt = p > 0 ? bump(p, RELOAD_SEAT_AT, 0.05) + 0.7 * bump(p, RELOAD_BOLT_AT, 0.04) : 0;
+            // Small jolts as the magazine goes in and the bolt or slide closes (zero when not reloading).
+            let jolt = 0;
+            if (p > 0) {
+                for (let i = 0; i < look.joltAt.length; i++) jolt += look.joltSize[i] * bump(p, look.joltAt[i], look.joltW[i]);
+            }
+            // Aim: blend from the hip pose to the sight line; the reload pose takes over from it.
+            const a0 = local.aim > 0 ? Math.min(1, local.aim) : 0;
+            const a = a0 * a0 * (3 - 2 * a0) * (1 - w);
+            const ha = 1 - a;
+            const hip = look.hip, aim = look.aim, rl = look.reload, dr = look.draw;
+            // Switch: rises from below, rotated, easing into place as draw falls from 1 to 0.
+            const d0 = local.draw > 0 ? Math.min(1, local.draw) : 0;
+            const d = d0 * d0;
+            // Subtle time-based sway (the presenter has no player speed); damped while firing and aiming.
+            const s = (1 - 0.7 * k) * (1 - (1 - AIM_SWAY) * a);
+            const sx = Math.sin(time * SWAY_RATE) * SWAY_POS * s;
+            const sy = Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6 * s;
             gun.setLocalPosition(
-                gunPos.x + sx + RELOAD_POS[0] * w,
-                gunPos.y + sy + 0.012 * e + RELOAD_POS[1] * w + 0.012 * jolt,
-                gunPos.z + 0.035 * e + RELOAD_POS[2] * w);
+                hip[0] * ha + aim[0] * a + sx + rl[0] * w + dr[0] * d,
+                hip[1] * ha + aim[1] * a + sy + kick.kick[0] * e + rl[1] * w + 0.012 * jolt + dr[1] * d,
+                hip[2] * ha + aim[2] * a + kick.kick[1] * e + rl[2] * w + dr[2] * d);
             gun.setLocalEulerAngles(
-                gunPitch + 4 * e + sy * 120 + RELOAD_ROT[0] * w + 5 * jolt,
-                gunYaw + Math.sin(time * SWAY_RATE * 0.7) * SWAY_ROT * s + RELOAD_ROT[1] * w,
-                gunRoll + sx * 160 + RELOAD_ROT[2] * w);
+                hip[3] * ha + aim[3] * a + kick.kick[2] * e + sy * 120 + rl[3] * w + 5 * jolt + dr[3] * d,
+                hip[4] * ha + aim[4] * a + Math.sin(time * SWAY_RATE * 0.7) * SWAY_ROT * s + rl[4] * w + dr[4] * d,
+                hip[5] * ha + aim[5] * a + sx * 160 + rl[5] * w + dr[5] * d);
             return;
         }
         if (swingT < 0) {
@@ -846,8 +959,20 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     const teamEl = infoEl.appendChild(document.createElement('span'));
     const idEl = infoEl.appendChild(document.createElement('span'));
     const pingEl = infoEl.appendChild(document.createElement('span'));
-    // Ammo counter (bottom right, defenders only): magazine big, reserve small, then a state line.
+    // Ammo counter (bottom right, defenders only): the other slots small and dim ("2 Pistol 12/36"), the
+    // weapon in hand's name, its magazine big and reserve small, then a state line.
     const ammoEl = div('sb-ammo');
+    const altEl = div('', ammoEl, 'alt');
+    const altRows: HTMLDivElement[] = [];
+    const altMag: number[] = [];
+    const altRes: number[] = [];
+    for (let i = 0; i < WEAPONS.length; i++) {
+        altRows.push(div('', altEl, ''));
+        altMag.push(-1);
+        altRes.push(-1);
+    }
+    const wpnSlot = new Slot(div('', ammoEl, 'wpn'));
+    const WPN_LABEL = WEAPONS.map((w, i) => `${i + 1} ${w.label.toUpperCase()}`);
     const magEl = span(ammoEl, 'mag');
     const resEl = span(ammoEl, 'res');
     const reloadLabel = new Slot(div('', ammoEl, 'rl'));
@@ -855,13 +980,16 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     // Spread ticks around the crosshair dot (defenders only).
     const xhairEl = div('sb-xhair');
     for (let i = 0; i < 4; i++) xhairEl.appendChild(document.createElement('i'));
-    /** CSS px per unit of tan(angle) at the screen centre; recomputed on resize. */
+    /** CSS px per unit of tan(angle) at the screen centre; recomputed on resize and when the FOV changes (aiming). */
     let pxPerTan = 0;
+    let viewH = 0;
+    let measuredFov = 0;
     const measureXhair = (): void => {
-        const h = app.graphicsDevice.canvas.clientHeight || window.innerHeight;
-        pxPerTan = (h / 2) / Math.tan((cam.fov / 2) * Math.PI / 180);
-        shownGap = -1;
+        viewH = app.graphicsDevice.canvas.clientHeight || window.innerHeight;
+        measuredFov = 0;
     };
+    const XHAIR_OPACITY: string[] = [];
+    for (let i = 0; i <= 20; i++) XHAIR_OPACITY.push((1 - (1 - XHAIR_AIM_OPACITY) * (i / 20)).toFixed(2));
     window.addEventListener('resize', measureXhair);
     const discEl = div('sb-disc');
     discEl.textContent = 'DISCONNECTED';
@@ -949,6 +1077,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     let shownAmmoKey = -1;
     let shownReloadPct = -1;
     let shownGap = -1;
+    let shownSlot = -1;
+    let shownXhairOp = -1;
     measureXhair();
 
     const updateHud = (dt: number, local: LocalView, phase: Phase): void => {
@@ -1033,6 +1163,19 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             xhairEl.style.display = armed ? 'block' : 'none';
         }
         if (!armed) return;
+        const slot = slotOf(local.weapon);
+        if (slot !== shownSlot) {
+            shownSlot = slot;
+            wpnSlot.set(WPN_LABEL[slot]);
+            for (let i = 0; i < altRows.length; i++) altRows[i].style.display = i === slot ? 'none' : '';
+        }
+        for (let i = 0; i < altRows.length; i++) {
+            const w = local.weapons[i];
+            if (i === slot || !w || (w.mag === altMag[i] && w.reserve === altRes[i])) continue;
+            altMag[i] = w.mag;
+            altRes[i] = w.reserve;
+            altRows[i].textContent = `${i + 1} ${WEAPONS[i].label} ${w.mag}/${w.reserve}`;
+        }
         const mag = local.mag, reserve = local.reserve;
         if (mag !== shownMag) { shownMag = mag; magEl.textContent = String(mag); }
         if (reserve !== shownReserve) { shownReserve = reserve; resEl.textContent = `/ ${reserve}`; }
@@ -1050,7 +1193,15 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             const pct = Math.round(Math.min(1, local.reload) * 100);
             if (pct !== shownReloadPct) { shownReloadPct = pct; reloadFill.style.width = `${pct}%`; }
         }
-        // Spread ticks: the cone's half-angle projected to CSS pixels, outside the 4 px dot.
+        // Spread ticks: the cone's half-angle projected to CSS pixels, outside the 4 px dot. Aiming narrows
+        // the FOV, so re-project when it changes; the ticks also fade while aimed.
+        if (cam.fov !== measuredFov) {
+            measuredFov = cam.fov;
+            pxPerTan = (viewH / 2) / Math.tan((measuredFov / 2) * Math.PI / 180);
+            shownGap = -1;
+        }
+        const op = Math.round(Math.min(1, Math.max(0, local.aim)) * 20);
+        if (op !== shownXhairOp) { shownXhairOp = op; xhairEl.style.opacity = XHAIR_OPACITY[op]; }
         const gap = 3 + Math.round(Math.tan(Math.max(0, local.spread)) * pxPerTan);
         if (gap !== shownGap) { shownGap = gap; xhairEl.style.setProperty('--g', `${gap}px`); }
     };
@@ -1208,7 +1359,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             ghostMat.setParameter('uTime', time);
             ghostSkinMat.setParameter('uTime', time);
             updateRemotes(dt, remotes);
-            updateViewmodel(dt, local.team, local.reload);
+            updateViewmodel(dt, local);
             updateEffects(dt);
             updateBomb(dt, match);
             updateHud(dt, local, match.phase);
@@ -1230,12 +1381,18 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             rosterVersion++;
         },
 
-        shot(from: Vec3, to: Vec3, isLocal: boolean): void {
-            if (isLocal && localAlive && vmTeam === 'defenders') {
-                recoilT = RECOIL_TIME;
+        shot(from: Vec3, to: Vec3, isLocal: boolean, weapon: number): void {
+            const slot = slotOf(weapon);
+            const fx = SLOT_LOOKS[slot].fx;
+            if (isLocal && localAlive && vmTeam === 'defenders' && vmSlot >= 0) {
+                // The kick is the firing weapon's; the flash and tracer come from the gun in hand (the same
+                // one, except a shot predicted on the very frame of a switch).
+                kickSlot = slot;
+                recoilT = SLOT_LOOKS[slot].kickTime;
                 flashT = FLASH_TIME;
-                flash.setLocalEulerAngles(0, 0, Math.random() * 90);
-                tmpA.copy(muzzle.getPosition());
+                const v = vmGuns[vmSlot];
+                v.flash.setLocalEulerAngles(0, 0, Math.random() * 90);
+                tmpA.copy(v.muzzle.getPosition());
             } else {
                 tmpA.set(from[0], from[1], from[2]);
                 // Remote shot: recoil and a flash on the shooter's gun, and the tracer from its muzzle.
@@ -1249,7 +1406,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                         nextFlash = (nextFlash + 1) % REMOTE_FLASH_COUNT;
                         f.e.setRotation(rot);
                         f.e.setPosition(mp);
-                        f.e.translateLocal(0, 0, -0.04);
+                        f.e.setLocalScale(0.06 * fx, 0.06 * fx, 0.1 * fx);
+                        f.e.translateLocal(0, 0, -0.04 * fx);
                         f.e.rotateLocal(0, 0, Math.random() * 90);
                         f.e.enabled = true;
                         f.t = REMOTE_FLASH_TIME;
@@ -1272,7 +1430,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             tr.e.enabled = true;
             tr.e.setPosition(tmpA.x + dx * 0.5, tmpA.y + dy * 0.5, tmpA.z + dz * 0.5);
             tr.e.lookAt(tmpB, Math.abs(dy) > 0.99 * len ? RIGHT : UP);
-            tr.e.setLocalScale(TRACER_THICKNESS, TRACER_THICKNESS, len);
+            tr.e.setLocalScale(TRACER_THICKNESS * fx, TRACER_THICKNESS * fx, len);
             tr.mi.setParameter('material_opacity', 0.9);
             tr.t = TRACER_LIFE;
         },
