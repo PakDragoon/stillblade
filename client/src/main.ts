@@ -1,12 +1,13 @@
 import * as pc from 'playcanvas';
 import {
-    EYE_HEIGHT, EYE_HEIGHT_CROUCHED, KNIFE_WINDUP_TICKS, MAG_SIZE, MAX_HEALTH, RELOAD_TICKS,
+    EYE_HEIGHT, EYE_HEIGHT_CROUCHED, KNIFE_WINDUP_TICKS, MAX_HEALTH,
     SHOT_RANGE, STEP_DISTANCE, STEP_LOUD_CROUCH, STEP_LOUD_RUN, STEP_LOUD_WALK, TICK_DT
 } from '@shared/constants';
 import {
-    GUN_DRY, GUN_RELOAD, copyGunState, createGunState, recoilPitch, recoilYaw, resetGun, sameGunState,
-    shotDirection, spreadAngle, spreadSeed, stepGun
+    GUN_DRY, GUN_RELOAD, aimFraction, copyLoadout, createLoadout, heldGun, heldWeapon, justSwitched, recoilPitch,
+    recoilScale, recoilYaw, resetLoadout, sameLoadout, shotDirectionFor, spreadAngle, stepLoadout
 } from '@shared/gun';
+import { WEAPONS, WEAPON_COUNT } from '@shared/weapons';
 import {
     KNIFE_SLASH, KNIFE_SWING, copyKnifeState, createKnifeState, resetKnife, sameKnifeState, stepKnife
 } from '@shared/knife';
@@ -28,9 +29,12 @@ import { Input } from './input';
 import { applyMapLook } from './maplook';
 import { Net } from './net';
 import { createPresenter } from './presenter';
-import type { LocalView, MatchView, RemoteView } from './presenter-api';
+import type { LocalView, MatchView, RemoteView, WeaponSlotView } from './presenter-api';
 
 const RAD = Math.PI / 180;
+/** Vertical field of view from the hip, in degrees; aiming down sights narrows it by the weapon's zoom. */
+const BASE_FOV = 74;
+const TAN_HALF_FOV = Math.tan((BASE_FOV / 2) * RAD);
 /** Prediction errors larger than this are teleports (respawn), not drift: snap instead of smoothing. */
 const SNAP_DISTANCE = 2;
 
@@ -93,7 +97,7 @@ app.root.addChild(sun);
 
 const camera = new pc.Entity('camera');
 camera.addComponent('camera', {
-    fov: 74, nearClip: 0.05, farClip: 200, clearColor: new pc.Color(0.53, 0.62, 0.72)
+    fov: BASE_FOV, nearClip: 0.05, farClip: 200, clearColor: new pc.Color(0.53, 0.62, 0.72)
 });
 app.root.addChild(camera);
 
@@ -249,13 +253,15 @@ async function start(): Promise<void> {
     /** Visual-only offset that hides prediction corrections by blending them out over a few frames. */
     const errorOffset: Vec3 = [0, 0, 0];
     let seq = 0;
-    /** Predicted defender gun, reconciled and replayed with movement. */
-    const gun = createGunState();
-    const gunBefore = createGunState();
-    /** Snapshots whose replayed gun state differed from what we had predicted (should stay 0). */
+    /** Predicted defender weapons (both guns, switch, aim, trigger), reconciled and replayed with movement. */
+    const loadout = createLoadout();
+    const loadoutBefore = createLoadout();
+    /** Snapshots whose replayed weapon state (any field of the loadout) differed from the prediction (should stay 0). */
     let gunMismatches = 0;
     /** Recoil camera kick (radians) at the previous and current tick, interpolated like position. */
     let kickPitchPrev = 0, kickYawPrev = 0, kickPitch = 0, kickYaw = 0;
+    /** Aim-down-sights progress 0..1 at the previous and current tick, interpolated for the field of view. */
+    let aimPrev = 0, aimCurr = 0;
     /** Predicted knife timing (ghosts), stepped like the server does (shared/knife.ts). */
     const knife = createKnifeState();
     const knifeBefore = createKnifeState();
@@ -297,8 +303,8 @@ async function start(): Promise<void> {
             curr.vel[0] = me.vel[0]; curr.vel[1] = me.vel[1]; curr.vel[2] = me.vel[2];
             curr.onGround = me.onGround;
             curr.crouched = me.crouched;
-            copyGunState(gunBefore, gun);
-            copyGunState(gun, me.gun);
+            copyLoadout(loadoutBefore, loadout);
+            copyLoadout(loadout, me.loadout);
             copyKnifeState(knifeBefore, knife);
             copyKnifeState(knife, me.knife);
             const defender = me.team === 'defenders';
@@ -306,10 +312,10 @@ async function start(): Promise<void> {
                 const c = pending[i];
                 stepPlayer(curr, c, TICK_DT, boxes);
                 if (!c.live) continue;
-                if (defender) stepGun(gun, c.fire, c.reload, c.armed);
+                if (defender) stepLoadout(loadout, c, c.armed);
                 else stepKnife(knife, c.fire, c.armed);
             }
-            if (defender && !sameGunState(gun, gunBefore)) gunMismatches++;
+            if (defender && !sameLoadout(loadout, loadoutBefore)) gunMismatches++;
             if (!defender && !sameKnifeState(knife, knifeBefore)) knifeMismatches++;
 
             const ex = bx - curr.pos[0], ey = by - curr.pos[1], ez = bz - curr.pos[2];
@@ -330,18 +336,19 @@ async function start(): Promise<void> {
             alive = true;
             health = MAX_HEALTH;
             resetKnife(knife);
-            resetGun(gun);
+            resetLoadout(loadout);
             kickPitchPrev = kickYawPrev = kickPitch = kickYaw = 0;
+            aimPrev = aimCurr = 0;
             stepAccum = 0;
         },
         shot(ev: ShotEvent): void {
             // Our own tracer was drawn the moment we fired; the server only tells us what it hit.
             if (ev.shooter !== net.id) {
-                presenter.shot(ev.from, ev.to, false);
-                audio.gunshot(ev.from, false);
+                presenter.shot(ev.from, ev.to, false, ev.weapon ?? 0);
+                audio.gunshot(ev.from, false, ev.weapon ?? 0);
                 audio.impact(ev.to);
             }
-            if (ev.killed && ev.victim !== undefined) presenter.killFeed(ev.shooter, ev.victim, ev.head ? 'headshot' : 'shot');
+            if (ev.killed && ev.victim !== undefined) presenter.killFeed(ev.shooter, ev.victim, ev.head ? 'headshot' : 'shot', WEAPONS[ev.weapon]?.label);
         },
         slash(ev: SlashEvent): void {
             const hit = ev.victim !== undefined;
@@ -352,7 +359,7 @@ async function start(): Promise<void> {
         },
         sound(ev: SoundEvent): void {
             if (ev.kind === 'step') audio.step(ev.pos, ev.loud, false);
-            else if (ev.kind === 'reload') audio.reload(ev.pos, false);
+            else if (ev.kind === 'reload') audio.reload(ev.pos, false, ev.weapon ?? 0);
             else audio.knifeWindup(ev.pos, false);
         },
         round(msg: RoundMsg): void {
@@ -390,7 +397,7 @@ async function start(): Promise<void> {
         damage(msg): void {
             presenter.damaged(msg.amount, msg.dir);
             audio.hurt();
-            if (msg.killed) presenter.died(rosterNames.get(msg.by ?? -1) ?? 'Someone', msg.kind, msg.dist ?? 0);
+            if (msg.killed) presenter.died(rosterNames.get(msg.by ?? -1) ?? 'Someone', msg.kind, msg.dist ?? 0, msg.weapon !== undefined ? WEAPONS[msg.weapon]?.label : undefined);
         },
         hitConfirm(msg): void {
             presenter.hitConfirm(msg.kind === 'head', msg.kind === 'kill');
@@ -401,9 +408,12 @@ async function start(): Promise<void> {
 
     const local: LocalView = {
         id: 0, team: 'ghosts', health: MAX_HEALTH, alive: false, respawnIn: 0, connected: false, ping: 0, firing: false, vis: 0,
-        canAct: false, action: 0, showScores: false, mag: MAG_SIZE, magSize: MAG_SIZE, reserve: 0, reload: 0, spread: 0,
+        canAct: false, action: 0, showScores: false, weapon: 0, weapons: [] as WeaponSlotView[],
+        mag: WEAPONS[0].magSize, magSize: WEAPONS[0].magSize, reserve: 0, reload: 0, spread: 0, draw: 0, aim: 0,
         yaw: 0, spectating: null, spectateId: -1, overview: false
     };
+    const slotViews = local.weapons as WeaponSlotView[];
+    for (let i = 0; i < WEAPON_COUNT; i++) slotViews.push({ mag: 0, reserve: 0 });
     const listener: ListenerView = { pos: [0, 0, 0], yaw: 0, pitch: 0, team: 'ghosts', alive: false };
     let accumulator = 0;
     let eye = EYE_HEIGHT;
@@ -492,9 +502,11 @@ async function start(): Promise<void> {
         const cmd: PendingCmd = {
             seq: seq++, forward: 0, right: 0, yaw: 0, jump: false, walk: false, crouch: false,
             pitch: Math.fround(input.pitch), fire: input.fire, use: input.use, reload: input.reload,
+            slot: 0, swap: false, aim: false,
             viewTime: net.renderTime(), live: alive, armed: false
         };
         input.sample(cmd);
+        input.sampleWeapons(cmd, loadout.slot, WEAPON_COUNT);
         // Rooted during the freeze and while planting or defusing: the server applies the same rule,
         // and zeroing the command here keeps replays of it consistent.
         const acting = alive && cmd.use && canAct(net.team, match.phase, curr, mapData, match.bombPos);
@@ -508,6 +520,7 @@ async function start(): Promise<void> {
         if (pending.length > 120) pending.shift(); // server silent for 2 s: stop hoarding
         kickPitchPrev = kickPitch;
         kickYawPrev = kickYaw;
+        aimPrev = aimCurr;
         if (alive) {
             const px = curr.pos[0], pz = curr.pos[2];
             stepPlayer(curr, cmd, TICK_DT, boxes);
@@ -521,21 +534,22 @@ async function start(): Promise<void> {
             // Attack timing follows the same rules as the server, counted in our own commands,
             // so the two never disagree about when a shot or swing happens.
             if (net.team === 'defenders') {
-                // The same gun step the server runs for this command (shared/gun.ts).
-                const r = stepGun(gun, cmd.fire, cmd.reload, cmd.armed);
+                // The same weapon step the server runs for this command (shared/gun.ts).
+                const r = stepLoadout(loadout, cmd, cmd.armed);
+                if (justSwitched(loadout)) audio.weaponSwitch(loadout.slot);
                 if (r >= 0) {
                     eyePos[0] = curr.pos[0];
                     eyePos[1] = curr.pos[1] + (curr.crouched ? EYE_HEIGHT_CROUCHED : EYE_HEIGHT);
                     eyePos[2] = curr.pos[2];
-                    shotDirection(cmd.yaw, cmd.pitch, r, spreadAngle(curr), spreadSeed(gun), net.id, aim);
+                    shotDirectionFor(loadout, curr, cmd.yaw, cmd.pitch, r, net.id, aim);
                     const dist = rayWorld(boxes, eyePos, aim, SHOT_RANGE);
                     shotEnd[0] = eyePos[0] + aim[0] * dist;
                     shotEnd[1] = eyePos[1] + aim[1] * dist;
                     shotEnd[2] = eyePos[2] + aim[2] * dist;
-                    presenter.shot(eyePos, shotEnd, true);
-                    audio.gunshot(eyePos, true);
+                    presenter.shot(eyePos, shotEnd, true, loadout.slot);
+                    audio.gunshot(eyePos, true, loadout.slot);
                     audio.impact(shotEnd);
-                } else if (r === GUN_RELOAD) audio.reload(curr.pos, true);
+                } else if (r === GUN_RELOAD) audio.reload(curr.pos, true, loadout.slot);
                 else if (r === GUN_DRY) audio.dryFire();
             } else {
                 // The same knife step the server runs for this command (shared/knife.ts).
@@ -550,12 +564,16 @@ async function start(): Promise<void> {
         // The camera shows the recoil the next shot will carry, so the crosshair is honest. Taken
         // after any reconciliation, so it always follows the corrected gun state.
         const kicking = alive && net.team === 'defenders';
-        kickPitch = kicking ? recoilPitch(gun.burst) : 0;
-        kickYaw = kicking ? recoilYaw(gun.burst) : 0;
+        const held = heldWeapon(loadout), scale = recoilScale(loadout);
+        kickPitch = kicking ? recoilPitch(held, heldGun(loadout).burst) * scale : 0;
+        kickYaw = kicking ? recoilYaw(held, heldGun(loadout).burst) * scale : 0;
+        aimCurr = kicking ? aimFraction(loadout) : 0;
         net.send(cmd);
     };
 
     app.on('update', (dt: number) => {
+        // A panel, the pause menu or the chat box owns the keyboard and mouse: no weapon keys, buttons or wheel reach the game.
+        if (ui.cursorNeeded !== input.suspended) { input.suspended = ui.cursorNeeded; if (input.suspended) input.releaseAll(); }
         // Fixed-rate simulation, rendered with interpolation so motion is smooth at any frame rate.
         accumulator += Math.min(dt, 0.25);
         while (accumulator >= TICK_DT) {
@@ -577,6 +595,13 @@ async function start(): Promise<void> {
         const kp = kickPitchPrev + (kickPitch - kickPitchPrev) * a;
         const ky = kickYawPrev + (kickYaw - kickYawPrev) * a;
         camera.setEulerAngles(Math.max(-90, Math.min(90, (input.pitch + kp) / RAD)), (input.yaw + ky) / RAD, 0);
+        // Aiming down sights narrows the view by the held weapon's zoom, and slows mouse look to match.
+        const held = heldWeapon(loadout);
+        const aimNow = aimPrev + (aimCurr - aimPrev) * a;
+        const zoom = 1 + (held.adsZoom - 1) * aimNow;
+        const fov = zoom === 1 ? BASE_FOV : (2 * Math.atan(TAN_HALF_FOV / zoom)) / RAD;
+        if (camera.camera!.fov !== fov) camera.camera!.fov = fov;
+        input.lookScale = 1 / zoom;
 
         local.id = net.id;
         local.team = net.team;
@@ -591,10 +616,19 @@ async function start(): Promise<void> {
         local.ping = net.ping;
         local.firing = alive && input.fire;
         local.vis = vis;
+        const gun = heldGun(loadout);
+        local.weapon = loadout.slot;
+        for (let i = 0; i < WEAPON_COUNT; i++) {
+            slotViews[i].mag = loadout.guns[i].mag;
+            slotViews[i].reserve = loadout.guns[i].reserve;
+        }
         local.mag = gun.mag;
+        local.magSize = held.magSize;
         local.reserve = gun.reserve;
-        local.reload = gun.reload > 0 ? 1 - gun.reload / RELOAD_TICKS : 0;
-        local.spread = spreadAngle(curr);
+        local.reload = gun.reload > 0 ? 1 - gun.reload / held.reloadTicks : 0;
+        local.spread = spreadAngle(curr, held, aimFraction(loadout));
+        local.draw = loadout.draw / held.drawTicks;
+        local.aim = aimNow;
         const remotes = net.interpolate();
         // Dead in a round: follow a living teammate in first person, or look at the whole map.
         let followed: RemoteView | null = null;
@@ -653,10 +687,11 @@ async function start(): Promise<void> {
     Object.assign(window, {
         __sb: {
             app, state: curr, input, net, mapData, mapList, audio, presenter, match,
-            gun, knife,
+            loadout, knife,
             stats: () => ({
                 fps, resScale, alive, health, vis, pending: pending.length, error: Math.hypot(...errorOffset),
-                gun: { ...gun }, gunMismatches, knife: { ...knife }, knifeMismatches
+                loadout: structuredClone(loadout), gun: { ...heldGun(loadout) }, gunMismatches,
+                knife: { ...knife }, knifeMismatches
             })
         }
     });

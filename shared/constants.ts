@@ -28,37 +28,15 @@ export const JUMP_SPEED = 7.0;
 /** Tallest ledge walked up without jumping. */
 export const STEP_HEIGHT = 0.35;
 
-// Combat (placeholder rifle for everyone until ghost mechanics arrive in Milestone 3).
+// Combat. Per-weapon numbers (damage, fire rate, magazine, reload, recoil, spread, aim) are in
+// the table in shared/weapons.ts; the rules that use them are in shared/gun.ts.
 export const MAX_HEALTH = 100;
-export const BODY_DAMAGE = 34;
-export const HEAD_DAMAGE = 100;
 /** Top slice of the hull that counts as the head. */
 export const HEAD_ZONE = 0.28;
-export const FIRE_INTERVAL_MS = 100;
-/** Fire rate is counted in the shooter's own commands so client and server always agree on it. */
-export const FIRE_INTERVAL_TICKS = Math.round((FIRE_INTERVAL_MS / 1000) * TICK_RATE);
 export const SHOT_RANGE = 120;
 export const RESPAWN_MS = 3000;
-
-// Defender gun: ammunition, reload, recoil and spread (rules in shared/gun.ts). Timings are in the
-// shooter's own commands, like the fire rate. Every gun counter travels in one byte: keep them <= 255.
-export const MAG_SIZE = 30;
-/** Spare rounds carried at spawn; refilled every round (and every warmup respawn). */
-export const RESERVE_AMMO = 90;
-export const RELOAD_MS = 2200;
-export const RELOAD_TICKS = Math.round((RELOAD_MS / 1000) * TICK_RATE);
-/** Pulling the trigger on an empty gun with no reserve clicks at most this often. */
+/** Pulling the trigger on an empty weapon with no reserve clicks at most this often (commands). */
 export const DRY_FIRE_TICKS = 15;
-/** Commands without a shot before recoil starts to recover (longer than the fire interval). */
-export const RECOIL_RECOVER_TICKS = 9;
-/** Once recovering, one shot of the recoil pattern is undone every this many commands. */
-export const RECOIL_DECAY_TICKS = 2;
-/** Spread is a cone half-angle in radians: smallest crouched and still, wider moving and in the air. */
-export const SPREAD_STILL = 0.004;
-export const SPREAD_CROUCHED = 0.002;
-/** Added at full running speed, in proportion to horizontal speed. */
-export const SPREAD_MOVING = 0.035;
-export const SPREAD_AIR = 0.06;
 /** Reload sounds carry this far (heard like a walking footstep, a bit further). */
 export const RELOAD_SOUND_RANGE = 10;
 

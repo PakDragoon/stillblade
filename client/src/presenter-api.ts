@@ -19,8 +19,20 @@ export interface RemoteView {
      * about 0.35 at a run, with brief spikes (to 0.6-0.8) when swinging a knife or taking damage.
      */
     vis: number;
-    /** A defender in the middle of a reload (about 2.2 s); always false for ghosts. */
+    /** A defender in the middle of a reload (rifle 2.2 s, pistol 1.4 s); always false for ghosts. */
     reloading: boolean;
+    /** Slot of the weapon a defender holds: an index into WEAPONS (shared/weapons.ts). 0 for ghosts. */
+    weapon: number;
+    /** A defender drawing a weapon it just switched to (0.25 to 0.4 s). */
+    switching: boolean;
+    /** A defender aiming down sights. */
+    aiming: boolean;
+}
+
+/** One carried weapon's ammunition, for the HUD's indicator of the other slots. */
+export interface WeaponSlotView {
+    mag: number;
+    reserve: number;
 }
 
 export interface LocalView {
@@ -43,7 +55,14 @@ export interface LocalView {
     action: number;
     /** True while the scoreboard key (Tab) is held. */
     showScores: boolean;
-    /** Defender gun (ignore for ghosts): rounds in the magazine, magazine capacity, spare rounds. */
+    /**
+     * Slot in hand (index into WEAPONS, shared/weapons.ts, which has each weapon's id, label, magazine
+     * size and timings). Defenders only; changes the moment a switch starts. Ignore for ghosts.
+     */
+    weapon: number;
+    /** Every carried weapon by slot, including the one in hand. Reused between frames. */
+    weapons: readonly WeaponSlotView[];
+    /** Weapon in hand (ignore for ghosts): rounds in the magazine, magazine capacity, spare rounds. */
     mag: number;
     magSize: number;
     reserve: number;
@@ -62,6 +81,16 @@ export interface LocalView {
     spectateId: number;
     /** Dead with no living teammate to follow: the fixed overview of the map is shown. */
     overview: boolean;
+    /**
+     * Switch in progress: 1 on the frame the weapon was selected, falling to 0 when it can fire;
+     * exactly 0 when not switching. The weapon in `weapon` is the one being raised.
+     */
+    draw: number;
+    /**
+     * Aim down sights 0 (hip) to 1 (fully aimed), smooth between ticks. The game core already narrows the
+     * camera's field of view by it; the presenter brings the weapon to the eye line and may shrink the crosshair.
+     */
+    aim: number;
 }
 
 export interface CrosshairConfig {
@@ -102,8 +131,11 @@ export interface Presenter {
     frame(dt: number, local: LocalView, remotes: readonly RemoteView[], match: MatchView): void;
     /** The list of players changed (joins, leaves, kills, team swap). Used for the scoreboard and for names. */
     roster(players: readonly RosterEntry[]): void;
-    /** A gun was fired from `from` to its end point `to` (world space). Vectors are only valid during the call. */
-    shot(from: Vec3, to: Vec3, isLocal: boolean): void;
+    /**
+     * A gun was fired from `from` to its end point `to` (world space) by the weapon in slot `weapon`
+     * (index into WEAPONS). Vectors are only valid during the call.
+     */
+    shot(from: Vec3, to: Vec3, isLocal: boolean, weapon: number): void;
     /** The local player (a ghost) started a knife swing; it lands `windupSeconds` later. */
     knifeSwing(windupSeconds: number): void;
     /** The local player's attack hit someone. */
@@ -114,10 +146,10 @@ export interface Presenter {
      */
     damaged(amount: number, bearing: number): void;
     /** The local player was killed: shown as a recap line under the death message. `distance` in metres. */
-    died(killerName: string, kind: KillKind, distance: number): void;
+    died(killerName: string, kind: KillKind, distance: number, weapon?: string): void;
     /** Player crosshair choice (settings). */
     setCrosshair(c: CrosshairConfig): void;
-    killFeed(killerId: number, victimId: number, kind: KillKind): void;
+    killFeed(killerId: number, victimId: number, kind: KillKind, weapon?: string): void;
 }
 
 export type CreatePresenter = (app: pc.Application, camera: pc.Entity) => Presenter;

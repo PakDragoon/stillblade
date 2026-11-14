@@ -1,14 +1,13 @@
-import {
-    DRY_FIRE_TICKS, FIRE_INTERVAL_TICKS, MAG_SIZE, RECOIL_DECAY_TICKS, RECOIL_RECOVER_TICKS, RELOAD_TICKS,
-    RESERVE_AMMO, RUN_SPEED, SPREAD_AIR, SPREAD_CROUCHED, SPREAD_MOVING, SPREAD_STILL
-} from './constants';
+import { DRY_FIRE_TICKS, RUN_SPEED } from './constants';
 import { horizontalSpeed } from './movement';
 import { viewDir } from './raycast';
 import type { PlayerState, Vec3 } from './types';
+import { WEAPONS, WEAPON_COUNT, type WeaponDef } from './weapons';
 
 /**
- * The defenders' gun. Every field is a small integer counted in the shooter's own commands, so it
- * travels exactly in the snapshot and the client can predict it and replay it like movement.
+ * One defender weapon's state. Every field is a small integer counted in the shooter's own
+ * commands, so it travels exactly in the snapshot and the client can predict it and replay it like
+ * movement. Its numbers (magazine size, timings, pattern) come from its `WeaponDef`.
  */
 export interface GunState {
     /** Rounds in the magazine. */
@@ -24,10 +23,46 @@ export interface GunState {
     /** Commands since the last shot, capped at 255. */
     sinceShot: number;
     /**
-     * Shots fired since the spawn, wrapping at 256. Seeds the spread of the next shot: the server
-     * counts it, so a client cannot choose its spread by choosing its command numbers.
+     * Shots fired from this weapon since the spawn, wrapping at 256. Seeds the spread of the next
+     * shot: the server counts it, so a client cannot choose its spread by choosing its command numbers.
      */
     shots: number;
+}
+
+/**
+ * Everything a defender carries: one `GunState` per slot of `WEAPONS`, which one is in hand, the
+ * switch and aim timers, and the trigger edge. Small integers only, sent exactly in the snapshot,
+ * stepped once per processed command by `stepLoadout` on the server and in the client's prediction
+ * and replay.
+ */
+export interface LoadoutState {
+    /** Slot in hand (index into `WEAPONS`); changes the moment a switch starts. */
+    slot: number;
+    /** The slot held before the last switch: where Q goes. */
+    prev: number;
+    /** Commands left until the weapon in hand can fire or reload; 0 when ready. */
+    draw: number;
+    /** Aim-down-sights progress in commands, 0 (hip) to the weapon's `adsTicks` (fully aimed). */
+    aim: number;
+    /**
+     * 1 once the trigger has done something (a shot, a dry click, a reload on empty) and is still
+     * held; 0 once released. A semi-automatic weapon fires only while this is 0, so every shot needs
+     * a new press. Part of the stepped state, never of wall-clock input.
+     */
+    trigger: number;
+    readonly guns: GunState[];
+}
+
+/** The fields of a command `stepLoadout` reads. `NetCmd` has them all. */
+export interface LoadoutInput {
+    fire: boolean;
+    reload: boolean;
+    /** 0: no request; n: select slot n - 1 (key n). */
+    slot: number;
+    /** Q: back to the previous weapon. Ignored when `slot` asks for something. */
+    swap: boolean;
+    /** Aim down sights held. */
+    aim: boolean;
 }
 
 /** What `stepGun` did this command. A shot returns its recoil pattern index instead (0 or more). */
@@ -37,14 +72,14 @@ export const GUN_DRY = -3;
 
 const SINCE_SHOT_CAP = 255;
 
-export function createGunState(): GunState {
-    return { mag: MAG_SIZE, reserve: RESERVE_AMMO, reload: 0, cooldown: 0, burst: 0, sinceShot: SINCE_SHOT_CAP, shots: 0 };
+export function createGunState(def: WeaponDef = WEAPONS[0]): GunState {
+    return { mag: def.magSize, reserve: def.reserve, reload: 0, cooldown: 0, burst: 0, sinceShot: SINCE_SHOT_CAP, shots: 0 };
 }
 
-/** Full magazine and reserve, nothing in progress: every spawn (so every round start). */
-export function resetGun(g: GunState): void {
-    g.mag = MAG_SIZE;
-    g.reserve = RESERVE_AMMO;
+/** Full magazine and reserve, nothing in progress. */
+export function resetGun(g: GunState, def: WeaponDef): void {
+    g.mag = def.magSize;
+    g.reserve = def.reserve;
     g.reload = 0;
     g.cooldown = 0;
     g.burst = 0;
@@ -67,96 +102,178 @@ export function sameGunState(a: GunState, b: GunState): boolean {
         a.cooldown === b.cooldown && a.burst === b.burst && a.sinceShot === b.sinceShot && a.shots === b.shots;
 }
 
-function canReload(g: GunState): boolean {
-    return g.reload === 0 && g.mag < MAG_SIZE && g.reserve > 0;
+function canReload(g: GunState, def: WeaponDef): boolean {
+    return g.reload === 0 && g.mag < def.magSize && g.reserve > 0;
 }
 
 /**
- * Advances the gun by one of its owner's commands. Run for every command a living defender
- * simulates, by the server and by the client's prediction and replay alike.
- * `armed` is false while the trigger cannot act (round freeze, hands busy planting or defusing);
- * timers still run then. Returns the recoil pattern index of a shot fired this command, or one
- * of GUN_IDLE, GUN_RELOAD (a reload started) and GUN_DRY (an empty click). After a shot,
- * `spreadSeed(g)` is the seed for that shot's spread.
+ * Advances one weapon by one of its owner's commands. `stepLoadout` calls it for every slot on
+ * every command a living defender simulates (the weapons not in hand with everything false, so
+ * their timers and recoil recovery still run). `armed` is false while the trigger cannot act
+ * (round freeze, hands busy defusing, weapon still being drawn); timers still run then. `fire` is
+ * the trigger as this weapon sees it (a semi-automatic's spent trigger is already filtered out).
+ * Returns the recoil pattern index of a shot fired this command, or one of GUN_IDLE, GUN_RELOAD
+ * (a reload started) and GUN_DRY (an empty click).
  */
-export function stepGun(g: GunState, fire: boolean, reload: boolean, armed: boolean): number {
+export function stepGun(g: GunState, def: WeaponDef, fire: boolean, reload: boolean, armed: boolean): number {
     if (g.sinceShot < SINCE_SHOT_CAP) {
         g.sinceShot++;
         // Recoil recovers one pattern step at a time once the shooter pauses. The whole pattern is
-        // undone long before the counter reaches its cap.
-        if (g.burst > 0 && g.sinceShot >= RECOIL_RECOVER_TICKS &&
-            (g.sinceShot - RECOIL_RECOVER_TICKS) % RECOIL_DECAY_TICKS === 0) g.burst--;
+        // undone long before the counter reaches its cap (a test checks every weapon).
+        if (g.burst > 0 && g.sinceShot >= def.recoilRecoverTicks &&
+            (g.sinceShot - def.recoilRecoverTicks) % def.recoilDecayTicks === 0) g.burst--;
     }
     if (g.cooldown > 0) g.cooldown--;
 
     if (g.reload > 0) {
         // Firing is impossible until the reload completes; it may fire on the completing command.
         if (--g.reload > 0) return GUN_IDLE;
-        const take = Math.min(MAG_SIZE - g.mag, g.reserve);
+        const take = Math.min(def.magSize - g.mag, g.reserve);
         g.mag += take;
         g.reserve -= take;
-    } else if (reload && armed && canReload(g)) {
-        g.reload = RELOAD_TICKS;
+    } else if (reload && armed && canReload(g, def)) {
+        g.reload = def.reloadTicks;
         return GUN_RELOAD;
     }
 
     if (!fire || !armed || g.cooldown > 0) return GUN_IDLE;
     if (g.mag > 0) {
         g.mag--;
-        g.cooldown = FIRE_INTERVAL_TICKS;
+        g.cooldown = def.fireInterval;
         const index = g.burst;
-        if (g.burst < RECOIL_SHOTS - 1) g.burst++;
+        if (g.burst < def.patternDeg.length - 1) g.burst++;
         g.sinceShot = 0;
         g.shots = (g.shots + 1) & 0xff;
         return index;
     }
-    if (canReload(g)) {
-        g.reload = RELOAD_TICKS; // empty magazine: pulling the trigger reloads
+    if (canReload(g, def)) {
+        g.reload = def.reloadTicks; // empty magazine: pulling the trigger reloads
         return GUN_RELOAD;
     }
     g.cooldown = DRY_FIRE_TICKS;
     return GUN_DRY;
 }
 
-const DEG = Math.PI / 180;
+/** Where Q goes before any switch: the second slot. */
+const FIRST_PREV = WEAPON_COUNT > 1 ? 1 : 0;
+
+export function createLoadout(): LoadoutState {
+    return { slot: 0, prev: FIRST_PREV, draw: 0, aim: 0, trigger: 0, guns: WEAPONS.map(d => createGunState(d)) };
+}
+
+/** Every weapon full, the first slot in hand and ready: every spawn (so every round start). */
+export function resetLoadout(l: LoadoutState): void {
+    l.slot = 0;
+    l.prev = FIRST_PREV;
+    l.draw = 0;
+    l.aim = 0;
+    l.trigger = 0;
+    for (let i = 0; i < WEAPON_COUNT; i++) resetGun(l.guns[i], WEAPONS[i]);
+}
+
+/** Death: reloads in progress give nothing. */
+export function cancelReloads(l: LoadoutState): void {
+    for (let i = 0; i < WEAPON_COUNT; i++) l.guns[i].reload = 0;
+}
+
+export function copyLoadout(dst: LoadoutState, src: LoadoutState): void {
+    dst.slot = src.slot;
+    dst.prev = src.prev;
+    dst.draw = src.draw;
+    dst.aim = src.aim;
+    dst.trigger = src.trigger;
+    for (let i = 0; i < WEAPON_COUNT; i++) copyGunState(dst.guns[i], src.guns[i]);
+}
+
+export function sameLoadout(a: LoadoutState, b: LoadoutState): boolean {
+    if (a.slot !== b.slot || a.prev !== b.prev || a.draw !== b.draw || a.aim !== b.aim || a.trigger !== b.trigger) return false;
+    for (let i = 0; i < WEAPON_COUNT; i++) if (!sameGunState(a.guns[i], b.guns[i])) return false;
+    return true;
+}
+
+/** The weapon in hand. */
+export const heldWeapon = (l: LoadoutState): WeaponDef => WEAPONS[l.slot];
+export const heldGun = (l: LoadoutState): GunState => l.guns[l.slot];
+
+/** True only on the command a switch started (for its sound and motion). */
+export const justSwitched = (l: LoadoutState): boolean => l.draw > 0 && l.draw === WEAPONS[l.slot].drawTicks;
 
 /**
- * Where each shot of a burst lands relative to the view, in degrees [pitch up, yaw left]. Shot n
- * of an uninterrupted burst uses row n. It climbs for the first shots, then wanders right, left
- * and right again: a fixed pattern a player can learn to pull against.
+ * Advances everything a defender carries by one processed command: weapon selection, the switch,
+ * aim down sights, the trigger edge, then every weapon. Run for every command a living defender
+ * simulates, by the server and by the client's prediction and replay alike, with the same inputs.
+ * `armed` is false during the freeze and while defusing. Returns what the weapon in hand did (see
+ * `stepGun`); after a shot, `shotDirectionFor` gives where it went.
  */
-const PATTERN_DEG: readonly (readonly [number, number])[] = [
-    [0.00, 0.00], [0.30, 0.04], [0.70, -0.04], [1.15, 0.08], [1.65, -0.06],
-    [2.15, 0.10], [2.60, 0.02], [3.00, -0.10], [3.35, -0.25], [3.60, -0.45],
-    [3.80, -0.70], [3.95, -0.95], [4.05, -1.20], [4.15, -1.40], [4.20, -1.50],
-    [4.25, -1.35], [4.30, -1.00], [4.35, -0.55], [4.40, -0.05], [4.45, 0.45],
-    [4.50, 0.90], [4.55, 1.20], [4.55, 1.35], [4.60, 1.25], [4.60, 0.95],
-    [4.65, 0.55], [4.65, 0.15], [4.70, -0.20], [4.70, -0.45], [4.75, -0.60]
-];
-/** The pattern in radians, as flat [pitch, yaw] pairs. */
-const PATTERN = new Float64Array(PATTERN_DEG.length * 2);
-for (let i = 0; i < PATTERN_DEG.length; i++) {
-    PATTERN[i * 2] = PATTERN_DEG[i][0] * DEG;
-    PATTERN[i * 2 + 1] = PATTERN_DEG[i][1] * DEG;
-}
-/** Rows in the recoil pattern; a burst longer than this repeats the last row. */
-export const RECOIL_SHOTS = PATTERN_DEG.length;
+export function stepLoadout(l: LoadoutState, c: LoadoutInput, armed: boolean): number {
+    let want = l.slot;
+    if (c.slot > 0 && c.slot <= WEAPON_COUNT) want = c.slot - 1;
+    else if (c.swap) want = l.prev;
+    if (want !== l.slot) {
+        l.guns[l.slot].reload = 0; // switching cancels a reload, and a cancelled reload gives nothing
+        l.prev = l.slot;
+        l.slot = want;
+        l.draw = WEAPONS[want].drawTicks;
+        // Aim keeps easing out at the usual rate, measured in the new weapon's steps.
+        if (l.aim > WEAPONS[want].adsTicks) l.aim = WEAPONS[want].adsTicks;
+    } else if (l.draw > 0) l.draw--;
 
-const patternRow = (index: number): number => Math.max(0, Math.min(PATTERN_DEG.length - 1, index | 0)) * 2;
+    const def = WEAPONS[l.slot];
+    const gun = l.guns[l.slot];
+    const ready = l.draw === 0;
+    if (c.aim && ready && gun.reload === 0) {
+        if (l.aim < def.adsTicks) l.aim++;
+    } else if (l.aim > 0) l.aim--;
 
-/** Recoil pattern offset in radians for a shot index (see `stepGun`). */
-export function recoilPitch(index: number): number {
-    return PATTERN[patternRow(index)];
-}
-export function recoilYaw(index: number): number {
-    return PATTERN[patternRow(index) + 1];
+    const fire = c.fire && (def.auto || l.trigger === 0);
+    let result = GUN_IDLE;
+    for (let i = 0; i < WEAPON_COUNT; i++) {
+        if (i === l.slot) result = stepGun(gun, def, fire, c.reload, armed && ready);
+        else stepGun(l.guns[i], WEAPONS[i], false, false, false);
+    }
+    if (!c.fire) l.trigger = 0;
+    else if (fire && result !== GUN_IDLE) l.trigger = 1;
+    return result;
 }
 
-/** Spread cone half-angle (radians) for a shooter in this state. */
-export function spreadAngle(s: PlayerState): number {
-    if (!s.onGround) return SPREAD_AIR;
-    const moving = Math.min(horizontalSpeed(s) / RUN_SPEED, 1) * SPREAD_MOVING;
-    return (s.crouched ? SPREAD_CROUCHED : SPREAD_STILL) + moving;
+/** Aim-down-sights progress 0..1 of the weapon in hand. */
+export function aimFraction(l: LoadoutState): number {
+    return l.aim / WEAPONS[l.slot].adsTicks;
+}
+
+/** Recoil multiplier for the weapon in hand: 1 from the hip, `adsRecoil` fully aimed. */
+export function recoilScale(l: LoadoutState): number {
+    return 1 - aimFraction(l) * (1 - WEAPONS[l.slot].adsRecoil);
+}
+
+const DEG = Math.PI / 180;
+/** Each weapon's pattern in radians, as flat [pitch, yaw] pairs. */
+const PATTERNS = WEAPONS.map(d => {
+    const p = new Float64Array(d.patternDeg.length * 2);
+    for (let i = 0; i < d.patternDeg.length; i++) {
+        p[i * 2] = d.patternDeg[i][0] * DEG;
+        p[i * 2 + 1] = d.patternDeg[i][1] * DEG;
+    }
+    return p;
+});
+
+const patternRow = (def: WeaponDef, index: number): number =>
+    Math.max(0, Math.min(def.patternDeg.length - 1, index | 0)) * 2;
+
+/** Recoil pattern offset in radians for a shot index (see `stepGun`), before any aim scaling. */
+export function recoilPitch(def: WeaponDef, index: number): number {
+    return PATTERNS[WEAPONS.indexOf(def)][patternRow(def, index)];
+}
+export function recoilYaw(def: WeaponDef, index: number): number {
+    return PATTERNS[WEAPONS.indexOf(def)][patternRow(def, index) + 1];
+}
+
+/** Spread cone half-angle (radians) for a shooter in this state with this weapon, `aim` 0..1. */
+export function spreadAngle(s: PlayerState, def: WeaponDef, aim = 0): number {
+    let base: number;
+    if (!s.onGround) base = def.spreadAir;
+    else base = (s.crouched ? def.spreadCrouched : def.spreadStill) + Math.min(horizontalSpeed(s) / RUN_SPEED, 1) * def.spreadMoving;
+    return base * (1 - aim * (1 - def.adsSpread));
 }
 
 /** 32-bit integer hash (lowbias32); integer-only so every JavaScript engine gives the same bits. */
@@ -168,9 +285,12 @@ function hash32(x: number): number {
     return (x ^ (x >>> 16)) >>> 0;
 }
 
-/** Spread seed of the shot `stepGun` just fired: the shooter's shot count, which the server keeps. */
-export function spreadSeed(g: GunState): number {
-    return g.shots;
+/**
+ * Spread seed of the shot `stepLoadout` just fired: the weapon's shot count, which the server
+ * keeps, plus the slot so the two weapons do not repeat each other.
+ */
+export function spreadSeed(l: LoadoutState): number {
+    return l.guns[l.slot].shots + l.slot * 256;
 }
 
 /**
@@ -194,13 +314,27 @@ const PITCH_LIMIT = Math.PI / 2;
 const scratch: [number, number] = [0, 0];
 
 /**
- * The direction a shot actually travels: the view, plus the recoil pattern for this shot of the
- * burst, plus spread. The server traces this; the client draws its predicted tracer along it.
+ * The direction a shot travels: the view, plus the weapon's recoil pattern row for this shot of
+ * the burst times `recoil`, plus spread.
  */
 export function shotDirection(
-    yaw: number, pitch: number, index: number, spread: number, seed: number, shooter: number, out: Vec3
+    yaw: number, pitch: number, def: WeaponDef, index: number, recoil: number, spread: number, seed: number,
+    shooter: number, out: Vec3
 ): Vec3 {
     spreadOffset(seed, shooter, spread, scratch);
-    const p = pitch + recoilPitch(index) + scratch[0];
-    return viewDir(yaw + recoilYaw(index) + scratch[1], p < -PITCH_LIMIT ? -PITCH_LIMIT : p > PITCH_LIMIT ? PITCH_LIMIT : p, out);
+    const p = pitch + recoilPitch(def, index) * recoil + scratch[0];
+    return viewDir(yaw + recoilYaw(def, index) * recoil + scratch[1],
+        p < -PITCH_LIMIT ? -PITCH_LIMIT : p > PITCH_LIMIT ? PITCH_LIMIT : p, out);
+}
+
+/**
+ * Where the shot `stepLoadout` just fired (pattern index `index`) went, for a shooter in state `s`
+ * looking along `yaw`/`pitch`. The server traces this; the client draws its predicted tracer along it.
+ */
+export function shotDirectionFor(
+    l: LoadoutState, s: PlayerState, yaw: number, pitch: number, index: number, shooter: number, out: Vec3
+): Vec3 {
+    const def = WEAPONS[l.slot];
+    return shotDirection(yaw, pitch, def, index, recoilScale(l), spreadAngle(s, def, aimFraction(l)),
+        spreadSeed(l), shooter, out);
 }

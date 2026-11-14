@@ -32,6 +32,9 @@ interface Sample {
     alive: boolean;
     vis: number;
     reloading: boolean;
+    weapon: number;
+    switching: boolean;
+    aiming: boolean;
 }
 
 interface Remote {
@@ -226,17 +229,22 @@ export class Net {
         if (!r) {
             r = {
                 team: p.team, samples: [], seen: 0,
-                view: { id: p.id, team: p.team, pos: [0, 0, 0], yaw: 0, pitch: 0, crouched: false, alive: false, vis: 0, reloading: false }
+                view: { id: p.id, team: p.team, pos: [0, 0, 0], yaw: 0, pitch: 0, crouched: false, alive: false, vis: 0, reloading: false,
+                    weapon: 0, switching: false, aiming: false }
             };
             this.remotes.set(p.id, r);
         }
         r.seen = this.snapCount;
         r.team = r.view.team = p.team; // sides swap at halftime
         // Recycle the oldest sample rather than allocating one per snapshot.
-        const s = r.samples.length >= MAX_SAMPLES ? r.samples.shift()! : { time: 0, pos: [0, 0, 0] as Vec3, yaw: 0, pitch: 0, crouched: false, alive: false, vis: 0, reloading: false };
+        const s = r.samples.length >= MAX_SAMPLES ? r.samples.shift()! : {
+            time: 0, pos: [0, 0, 0] as Vec3, yaw: 0, pitch: 0, crouched: false, alive: false, vis: 0, reloading: false,
+            weapon: 0, switching: false, aiming: false
+        };
         s.time = time;
         s.pos[0] = p.pos[0]; s.pos[1] = p.pos[1]; s.pos[2] = p.pos[2];
         s.yaw = p.yaw; s.pitch = p.pitch; s.crouched = p.crouched; s.alive = p.alive; s.vis = p.vis; s.reloading = p.reloading;
+        s.weapon = p.weapon; s.switching = p.switching; s.aiming = p.aiming;
         r.samples.push(s);
     }
 
@@ -264,6 +272,9 @@ export class Net {
             const near = k < 0.5 ? a : b;
             v.crouched = near.crouched;
             v.reloading = near.reloading;
+            v.weapon = near.weapon;
+            v.switching = near.switching;
+            v.aiming = near.aiming;
             v.alive = near.alive;
             views.push(v);
         }

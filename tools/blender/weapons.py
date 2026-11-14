@@ -6,30 +6,36 @@ Stillblade weapon pipeline: CC0 source models -> client/public/models/weapons.gl
 
 Source: "Character Soldier" by Quaternius (CC0 1.0, poly.pizza model PpLF4rt4ah), already downloaded for the
 character work into tools/blender/source-art/characters/quaternius-soldier/CharacterSoldier.glb (see
-client/public/models/CREDITS.md). It carries a set of hand-held props; two are used:
-  - "SMG"     : compact SMG with an integral suppressor (1,006 triangles, 4 flat-colour materials)
+client/public/models/CREDITS.md). It carries a set of hand-held props; three are used:
+  - "SMG"     : compact SMG with an integral suppressor (1,006 triangles, 4 flat-colour materials): the rifle
+  - "Pistol"  : semi-automatic pistol (990 triangles, 3 flat-colour materials); it has no suppressor, so a
+                12-sided cylinder is added at the muzzle (defenders' guns are all silenced)
   - "Knife_1" : combat knife with a serrated spine (687 triangles, 4 flat-colour materials)
 
 What it does:
   1. Imports the source GLB with the armature in its rest pose and bakes each prop's world transform.
   2. Re-orients each prop into the shipped axis convention (below), puts the origin at the grip, and scales it
-     to real-world size (gun 0.66 m including the suppressor, knife 0.30 m).
+     to real-world size (gun 0.66 m including the suppressor, pistol 0.20 m plus a 0.11 m suppressor,
+     knife 0.30 m).
   3. Bakes the material colours into a vertex-colour attribute (a dark tactical palette), welds, decimates
      the knife to <= 400 triangles, removes UVs, and gives both meshes ONE shared vertex-colour material.
-  4. Adds an empty "gun_muzzle" (child of "gun") at the centre of the suppressor's front face.
-  5. Exports a GLB with three nodes: gun (mesh), gun_muzzle (empty), knife (mesh).
+  4. Adds empties "gun_muzzle" / "pistol_muzzle" (children of "gun" / "pistol") at the centre of each
+     suppressor's front face.
+  5. Exports a GLB with five nodes: gun (mesh), gun_muzzle (empty), pistol (mesh), pistol_muzzle (empty),
+     knife (mesh).
 
 Axis convention (glTF / engine space, for both meshes), origin = centre of the hand's grip:
   -Z forward (gun: muzzle direction; knife: blade tip direction)
   +Y up      (gun: sights side, magazine and grip point to -Y; knife: spine side, cutting edge to -Y)
   +X right
-The gun origin is the middle of the pistol grip (where the fist closes); the knife origin is the middle of the
-handle. client/src/weapons.ts and tools/blender/characters.py (hand sockets) both rely on this.
+The gun and pistol origins are the middle of the grip (where the fist closes), so both sit in the character's
+one "socket_gun" with an identity transform; the knife origin is the middle of the handle. client/src/weapons.ts and tools/blender/characters.py (hand sockets) both rely on this.
 """
 import math
 import os
 import sys
 
+import bmesh
 import bpy
 from mathutils import Matrix, Vector
 
@@ -39,6 +45,8 @@ DEFAULT_SRC = os.path.join(HERE, 'source-art', 'characters', 'quaternius-soldier
 DEFAULT_OUT = os.path.join(ROOT, 'client', 'public', 'models', 'weapons.glb')
 
 GUN_LENGTH = 0.66
+PISTOL_LENGTH = 0.20
+PISTOL_SUPPRESSOR = (0.11, 0.015)            # length, radius (m)
 KNIFE_LENGTH = 0.30
 KNIFE_MAX_TRIS = 400
 
@@ -48,6 +56,12 @@ GUN_PALETTE = {
     'DarkGrey': (0.045, 0.048, 0.052, 1.0),  # receiver
     'Grey2': (0.13, 0.135, 0.14, 1.0),       # small parts
     'Grey': (0.075, 0.078, 0.082, 1.0),      # magazine, trim
+}
+PISTOL_PALETTE = {
+    'Black': (0.018, 0.018, 0.02, 1.0),     # added suppressor
+    'DarkGrey': (0.045, 0.048, 0.052, 1.0),  # frame
+    'Grey': (0.075, 0.078, 0.082, 1.0),      # slide
+    'Wood': (0.03, 0.03, 0.032, 1.0),        # grip panels (black polymer, not wood)
 }
 KNIFE_PALETTE = {
     'LightGrey': (0.42, 0.43, 0.45, 1.0),    # blade
@@ -63,6 +77,9 @@ KNIFE_PALETTE = {
 #   Knife_1: blade along -Y (tip at y = -0.965), handle y in [-0.03, 0.444], spine toward -X.
 GUN_AXES = (Vector((-1, 0, 0)), Vector((0, -1, 0)))     # (forward, up) in source space
 GUN_GRIP_X = (-0.78, -0.64)
+#   Pistol: same axes as the SMG (muzzle at x = -1.385, sights toward -Y); its grip is the "Wood" material,
+#   hanging toward +Y from the frame (y = 0.0) to y = 0.26.
+PISTOL_AXES = (Vector((-1, 0, 0)), Vector((0, -1, 0)))
 KNIFE_AXES = (Vector((0, -1, 0)), Vector((-1, 0, 0)))
 KNIFE_HANDLE_Y = (-0.03, 0.444)
 
@@ -159,6 +176,51 @@ def decimate(obj, max_tris):
             bpy.ops.object.modifier_apply(modifier=m.name)
 
 
+def front_face(obj):
+    """Forward-most face of a mesh in the shipped frame: (centre x, front y, centre z, height)."""
+    pts = [v.co for v in obj.data.vertices]
+    ymax = max(p.y for p in pts)
+    front = [p for p in pts if p.y > ymax - 0.004]
+    lo, hi = min(p.z for p in front), max(p.z for p in front)
+    return (min(p.x for p in front) + max(p.x for p in front)) / 2, ymax, (lo + hi) / 2, hi - lo
+
+
+def add_muzzle(obj, name):
+    """Empty child of `obj` at the centre of its front face (where tracers and flashes start)."""
+    mx, ymax, mz, _ = front_face(obj)
+    e = bpy.data.objects.new(name, None)
+    bpy.context.scene.collection.objects.link(e)
+    e.parent = obj
+    e.location = (mx, ymax, mz)
+    return e
+
+
+def add_suppressor(obj, length, radius):
+    """
+    Joins a 12-sided cylinder onto the front of `obj` (shipped frame, Y forward), centred on the forward-most
+    face (the barrel tip), with a material named "Black" (baked like the others).
+    """
+    mx, ymax, bore_z, _ = front_face(obj)
+    r = radius
+    me = bpy.data.meshes.new('suppressor')
+    bm = bmesh.new()
+    bmesh.ops.create_cone(bm, cap_ends=True, cap_tris=False, segments=12, radius1=r, radius2=r, depth=length)
+    # The cone is built along Z: turn it to +Y and push it out in front of the slide (slight overlap).
+    bmesh.ops.rotate(bm, verts=bm.verts, cent=(0, 0, 0), matrix=Matrix.Rotation(math.radians(-90), 3, 'X'))
+    bmesh.ops.translate(bm, verts=bm.verts, vec=(mx, ymax + length / 2 - 0.004, bore_z))
+    bm.to_mesh(me)
+    bm.free()
+    me.materials.append(bpy.data.materials.new('Black'))
+    sup = bpy.data.objects.new('suppressor', me)
+    bpy.context.scene.collection.objects.link(sup)
+    for o in bpy.context.scene.objects:
+        o.select_set(o in (obj, sup))
+    bpy.context.view_layer.objects.active = obj
+    with bpy.context.temp_override(active_object=obj, selected_editable_objects=[obj, sup]):
+        bpy.ops.object.join()
+    log('pistol suppressor radius', round(r, 4), 'length', length, 'bore z', round(bore_z, 4))
+
+
 def main():
     src, out = args()
     log('source', src)
@@ -169,9 +231,10 @@ def main():
     bpy.context.view_layer.update()
 
     gun = isolate('SMG')
+    pistol = isolate('Pistol')
     knife = isolate('Knife_1')
     for o in list(bpy.data.objects):
-        if o not in (gun, knife):
+        if o not in (gun, pistol, knife):
             bpy.data.objects.remove(o)
 
     # --- Gun --------------------------------------------------------------------------------------
@@ -192,6 +255,53 @@ def main():
     log('gun: source length', round(length, 4), 'scale', round(s, 5), 'grip (source)', tuple(round(c, 3) for c in grip),
         'grip top/bottom/receiver', round(top, 3), round(bottom, 3), round(receiver_bottom, 3))
 
+    # --- Pistol ---------------------------------------------------------------------------------
+    me = pistol.data
+    names = [m.name if m else '' for m in me.materials]
+    idx = sorted({vi for p in me.polygons if names[p.material_index].startswith('Wood') for vi in p.vertices})
+    grip_pts = [me.vertices[i].co.copy() for i in idx]
+    pts = [v.co.copy() for v in me.vertices]
+    fwd, up = PISTOL_AXES
+    ups = [p.dot(up) for p in grip_pts]
+    top, bottom = max(ups), min(ups)
+    # A third of the way down the grip, centred in the grip's cross-section at that height. The grip is a
+    # few long quads (no vertices midway) and raked back, so interpolate between its top and bottom ends.
+    span = top - bottom
+    h = top - span * 0.35
+    ends = []
+    for lo_, hi_ in ((top - span * 0.25, top), (bottom, bottom + span * 0.25)):
+        e = [p.x for p in grip_pts if lo_ <= p.dot(up) <= hi_]
+        ends.append((min(e) + max(e)) / 2)
+    # Sideways, centre on the slide (front half), not the grip panels: they sit off to one side.
+    xmin = min(p.x for p in pts)
+    slide = [p for p in pts if p.x < xmin + (max(p.x for p in pts) - xmin) * 0.4]
+    grip = Vector((ends[0] + (ends[1] - ends[0]) * 0.35, -h,
+                   (min(p.z for p in slide) + max(p.z for p in slide)) / 2))
+    length = max(p.dot(fwd) for p in pts) - min(p.dot(fwd) for p in pts)
+    s = PISTOL_LENGTH / length
+    pistol.data.transform(Matrix.Scale(s, 4) @ basis(fwd, up) @ Matrix.Translation(-grip))
+    # The prop is rolled in the source (its grip leans to one side under the slide, which reads as a canted gun
+    # when aimed): turn it about the barrel axis so the grip's bottom sits straight under the slide's centre,
+    # then put the grip back on the origin sideways.
+    pts = [v.co for v in pistol.data.vertices]
+    zs = [p.z for p in pts]
+    ztop, zbot = max(zs), min(zs)
+    slide = [p for p in pts if p.z > ztop - 0.02 and p.y > 0.06]
+    foot = [p for p in pts if p.z < zbot + 0.012]
+    xs, zs_ = (min(p.x for p in slide) + max(p.x for p in slide)) / 2, sum(p.z for p in slide) / len(slide)
+    xb, zb = (min(p.x for p in foot) + max(p.x for p in foot)) / 2, sum(p.z for p in foot) / len(foot)
+    roll = math.atan2(xb - xs, zs_ - zb)
+    rot = Matrix.Rotation(roll, 4, 'Y')
+    pistol.data.transform(rot)
+    a, b = rot @ Vector((xs, 0, zs_)), rot @ Vector((xb, 0, zb))
+    x0 = a.x + (b.x - a.x) * (0 - a.z) / (b.z - a.z)
+    pistol.data.transform(Matrix.Translation((-x0, 0, 0)))
+    pistol.data.update()
+    log('pistol: roll corrected by', round(math.degrees(roll), 2), 'deg; slide/foot x after', round(a.x - x0, 4), round(b.x - x0, 4))
+    log('pistol: source length', round(length, 4), 'scale', round(s, 5), 'grip (source)',
+        tuple(round(c, 3) for c in grip), 'grip top/bottom', round(top, 3), round(bottom, 3))
+    add_suppressor(pistol, *PISTOL_SUPPRESSOR)
+
     # --- Knife ----------------------------------------------------------------------------------
     pts = [v.co.copy() for v in knife.data.vertices]
     fwd, up = KNIFE_AXES
@@ -209,8 +319,9 @@ def main():
 
     # --- Colours, weld, budget, one material ---------------------------------------------------
     bake_colours(gun, GUN_PALETTE)
+    bake_colours(pistol, PISTOL_PALETTE)
     bake_colours(knife, KNIFE_PALETTE)
-    for o in (gun, knife):
+    for o in (gun, pistol, knife):
         weld(o)
     decimate(knife, KNIFE_MAX_TRIS)
 
@@ -223,32 +334,27 @@ def main():
     nt.links.new(ca.outputs['Color'], bsdf.inputs['Base Color'])
     bsdf.inputs['Roughness'].default_value = 0.55
     bsdf.inputs['Metallic'].default_value = 0.0
-    for o, name in ((gun, 'gun'), (knife, 'knife')):
+    for o, name in ((gun, 'gun'), (pistol, 'pistol'), (knife, 'knife')):
         o.name = name
         o.data.name = name
         o.data.materials.append(mat)
         o.data.set_sharp_from_angle(angle=math.radians(40))
 
-    # --- Muzzle: centre of the front face of the suppressor ------------------------------------
-    pts = [v.co for v in gun.data.vertices]
-    ymax = max(p.y for p in pts)
-    front = [p for p in pts if p.y > ymax - 0.004]
-    mx = (min(p.x for p in front) + max(p.x for p in front)) / 2
-    mz = (min(p.z for p in front) + max(p.z for p in front)) / 2
-    muzzle = bpy.data.objects.new('gun_muzzle', None)
-    bpy.context.scene.collection.objects.link(muzzle)
-    muzzle.parent = gun
-    muzzle.location = (mx, ymax, mz)
+    # --- Muzzles: centre of the front face of each suppressor ----------------------------------
+    muzzle = add_muzzle(gun, 'gun_muzzle')
+    pmuzzle = add_muzzle(pistol, 'pistol_muzzle')
 
     # --- Report ---------------------------------------------------------------------------------
-    for o in (gun, knife):
+    for o in (gun, pistol, knife):
         p = [v.co for v in o.data.vertices]
         lo = Vector((min(v.x for v in p), min(v.y for v in p), min(v.z for v in p)))
         hi = Vector((max(v.x for v in p), max(v.y for v in p), max(v.z for v in p)))
         log(o.name, 'tris', tris(o.data), 'verts', len(o.data.vertices),
             'bounds (Blender X right, Y forward, Z up) lo', tuple(round(c, 3) for c in lo), 'hi', tuple(round(c, 3) for c in hi))
-    log('gun_muzzle (Blender)', tuple(round(c, 4) for c in muzzle.location),
-        '-> glTF', (round(mx, 4), round(mz, 4), round(-ymax, 4)))
+    for m in (muzzle, pmuzzle):
+        x, y, z = m.location
+        log(m.name, '(Blender)', tuple(round(c, 4) for c in m.location), '-> glTF',
+            (round(x, 4), round(z, 4), round(-y, 4)))
     # Gun landmarks for the support hand (characters.py): front of the magazine, under the receiver.
     gp = [v.co for v in gun.data.vertices]
     mag = [v for v in gp if v.z < -0.03 and v.y > 0.05]

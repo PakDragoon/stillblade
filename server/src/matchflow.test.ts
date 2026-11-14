@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BREATH_RANGE, KNIFE_RANGE, TICK_RATE } from '../../shared/constants';
 import { CHAT_MAX_CHARS, type ChatMsg, type DamageMsg, type NetCmd, type ServerMsg, type Team } from '../../shared/protocol';
 import {
-    FREEZE_MS, IDLE_MS, MATCH_OVER_MS, OVER_MS, PLANT_TICKS, ROUNDS_TO_WIN, ROUND_MS
+    FREEZE_MS, GRACE_MS, IDLE_ROUNDS, MATCH_OVER_MS, OVER_MS, PLANT_TICKS, ROUNDS_TO_WIN, ROUND_MS
 } from '../../shared/rules';
 import { cleanChat } from '../../shared/chat';
 import { mvpScore, pickMvp } from '../../shared/stats';
@@ -39,7 +39,7 @@ class Client {
     cmd(over: Partial<NetCmd> = {}): void {
         this.game.handleCmd(this.id, {
             seq: this.seq++, forward: 0, right: 0, yaw: this.yaw, pitch: 0, jump: false, walk: false, crouch: false,
-            fire: false, use: false, reload: false, viewTime: this.game.now, ...over
+            fire: false, use: false, reload: false, slot: 0, swap: false, aim: false, viewTime: this.game.now, ...over
         });
     }
     ready(ready = true): void { this.game.handleMessage(this.id, { type: 'ready', ready }); }
@@ -379,40 +379,165 @@ describe('chat', () => {
 });
 
 describe('idle handling', () => {
-    it('moves a player with no input changes to spectate after 90 s of a live round, and brings them back on any input', () => {
+    /** Everyone keeps moving their view except `still`, who sends the same command every tick. */
+    const except = (still: Client) => (c: Client): Partial<NetCmd> => (c === still ? {} : { pitch: (c.seq % 2) * 0.001 });
+
+    it('never removes a ghost that stands perfectly still for a whole live round', () => {
+        const r = room(makeMap(), ['G', 'D']);
+        const [g] = r.clients;
+        r.live();
+        r.run(2, except(g)); // g's commands settle: from here nothing about them changes
+        r.run(ticks(ROUND_MS) - 10, except(g));
+        expect(r.P(g).alive).toBe(true);
+        expect(r.P(g).idle).toBe(false);
+        r.run(20, except(g));
+        // The round ends by the clock and the defenders win it as normal; the ghost was never touched.
+        expect(g.last('round')).toMatchObject({ phase: 'over', winner: 'defenders', reason: 'time' });
+        expect(r.P(g).stats.deaths).toBe(0);
+    });
+
+    it('marks a player idle only after two whole rounds with no input change, effective at the next round start', () => {
+        expect(IDLE_ROUNDS).toBe(2);
         const r = room(makeMap(), ['G1', 'D1', 'G2', 'D2']);
         const [g1, d1, g2, d2] = r.clients;
-        r.live();
-        expect(IDLE_MS).toBe(90_000);
-        // g1 holds perfectly still; everyone else keeps moving their view.
-        r.run(ticks(IDLE_MS) - 120, c => (c === g1 ? {} : { pitch: (c.seq % 2) * 0.001 }));
+        const quiet = except(g1);
+        const winRound = (): void => {
+            while (r.game.phase !== 'live') r.run(1, quiet);
+            r.run(2, c => (c === d1 || c === d2 ? { fire: true } : quiet(c)));
+            r.run(1, quiet);
+        };
+        r.live(); // round 1: everyone, g1 included, moved during the freeze
+        winRound();
+        r.run(ticks(OVER_MS) + 2, quiet);
+        winRound(); // round 2: g1 quiet from the freeze on
+        expect(r.P(g1).idle).toBe(false); // one quiet round is not enough
+        r.run(ticks(OVER_MS) + 2, quiet);
         expect(r.P(g1).alive).toBe(true);
-        r.run(ticks(3000), c => (c === g1 ? {} : { pitch: (c.seq % 2) * 0.001 }));
-        expect(r.P(g1).alive).toBe(false);
-        expect(r.P(g1).idle).toBe(true);
-        expect(g1.all('notice').at(-1)!.text).toMatch(/spectating/);
-        expect(r.P(g1).stats.deaths).toBe(0); // not a death
-        expect(g1.last('roster').players.find(p => p.id === g1.id)!.idle).toBe(true);
-        expect(r.game.phase).toBe('live'); // the others are still playing
-        // Any input change returns them, at the next round.
+        winRound(); // round 3: quiet again
+        expect(r.P(g1).idle).toBe(true); // flagged when the second quiet round ends
+        expect(g1.all('notice').at(-1)!.text).toMatch(/2 rounds/);
+        expect(r.P(g2).idle).toBe(false);
+        r.run(ticks(OVER_MS) + 2, quiet);
+        expect(r.game.phase).toBe('freeze');
+        expect(r.P(g1).alive).toBe(false); // sits this round out
+        expect(r.P(g2).alive).toBe(true);
+        // Any input change clears it; they are spawned at the following round start, not mid-round.
         g1.cmd({ yaw: 1 });
         expect(r.P(g1).idle).toBe(false);
         expect(r.P(g1).alive).toBe(false);
-        r.run(2, c => (c === d1 || c === d2 ? { fire: true } : null)); // end the round
-        r.run(ticks(OVER_MS) + 2);
-        expect(r.game.phase).toBe('freeze');
+        winRound();
+        r.run(ticks(OVER_MS) + 2, quiet);
         expect(r.P(g1).alive).toBe(true);
-        void g2;
+        void d2;
     });
 
-    it('does not run the idle clock in warmup, freeze or between rounds', () => {
-        const r = room();
-        r.run(ticks(IDLE_MS + 5000), () => ({}));
-        expect(r.clients.every(c => r.P(c).alive && !r.P(c).idle)).toBe(true);
+    it('does not count a round a player joined in the middle of', () => {
+        const r = room(makeMap(), ['G', 'D']);
         r.live();
-        r.run(ticks(IDLE_MS - 5000), () => ({}));
-        expect(r.clients.every(c => !r.P(c).idle)).toBe(true);
-        void ROUND_MS;
+        const late = r.join('Late');
+        r.run(ticks(OVER_MS));
+        expect(r.P(late).quietRounds).toBe(0);
+        expect(r.P(late).inRound).toBe(false);
+    });
+});
+
+describe('holding a match when a team empties', () => {
+    const wiggle = (c: Client): Partial<NetCmd> => ({ pitch: (c.seq % 2) * 0.001 });
+
+    it('keeps score, stats and sides, and resumes with the next round without asking for ready', () => {
+        const r = room(makeMap(), ['G', 'D', 'G2']);
+        const [, d, g2] = r.clients;
+        r.live();
+        r.run(14, c => (c === d ? { fire: true } : wiggle(c))); // round 1 to the defenders
+        expect(r.game.score[1]).toBe(1);
+        const kills = r.P(d).stats.kills;
+        expect(kills).toBeGreaterThanOrEqual(1);
+        r.run(ticks(OVER_MS) + 2);
+        expect(r.game.phase).toBe('freeze');
+        r.game.leave(d.id); // the whole defender team is gone
+        r.run(3);
+        expect(r.game.phase).toBe('warmup');
+        expect(r.game.score[1]).toBe(1); // held, not wiped
+        expect(r.game.roundsPlayed).toBe(1);
+        r.run(ticks(30_000));
+        expect(r.game.phase).toBe('warmup');
+        const back = r.join('Someone');
+        expect(back.team()).toBe('defenders');
+        r.run(3);
+        expect(r.game.phase).toBe('freeze');
+        expect(r.game.roundsPlayed).toBe(1);
+        expect(g2.last('round')).toMatchObject({ round: 2, score: { ghosts: 0, defenders: 1 } });
+    });
+
+    it('does not count warmup fighting while the match is held', () => {
+        const r = room(makeMap(), ['G', 'D', 'G2']);
+        const [g, d] = r.clients;
+        r.live();
+        r.run(2, c => (c === d ? { fire: true } : wiggle(c)));
+        r.run(ticks(OVER_MS) + 2);
+        r.game.leave(g.id);
+        r.game.leave(r.clients[2].id);
+        r.run(3);
+        expect(r.game.phase).toBe('warmup');
+        expect(r.P(d).stats.kills).toBe(1);
+    });
+
+    it('resets to a fresh lobby once the grace period has passed', () => {
+        const r = room(makeMap(), ['G', 'D']);
+        const [g, d] = r.clients;
+        r.live();
+        r.run(2, c => (c === d ? { fire: true } : wiggle(c)));
+        expect(r.game.score[1]).toBe(1);
+        r.game.leave(d.id);
+        r.run(ticks(OVER_MS + GRACE_MS) + 30, wiggle); // the hold starts when the round-over pause ends
+        expect(r.game.score[1]).toBe(0);
+        expect(r.game.roundsPlayed).toBe(0);
+        expect(r.P(g).stats.kills + r.P(g).stats.deaths).toBe(0);
+        r.join('New'); // a fresh lobby needs the usual ready-up
+        r.run(30, wiggle);
+        expect(r.game.phase).toBe('warmup');
+    });
+
+    it('gives a returning player their statistics and side back by name within the grace period', () => {
+        const r = room(makeMap(), ['Ann', 'Bob', 'Cy']);
+        const bob = r.clients[1];
+        r.live();
+        r.P(bob).stats.kills = 4;
+        r.P(bob).stats.damage = 250;
+        const team = bob.team();
+        r.game.leave(bob.id);
+        r.run(ticks(20_000));
+        const back = r.join('Bob');
+        expect(r.P(back).stats).toMatchObject({ kills: 4, damage: 250 });
+        expect(back.team()).toBe(team);
+    });
+
+    it('restores nothing when two players share the name, or after the grace period', () => {
+        const r = room(makeMap(), ['Ann', 'Eve', 'Eve']);
+        r.live();
+        for (const c of r.clients.slice(1)) r.P(c).stats.kills = 3;
+        for (const c of r.clients.slice(1)) r.game.leave(c.id);
+        const back = r.join('Eve');
+        expect(r.P(back).stats.kills).toBe(0); // two Eves left: which one is this?
+
+        const r2 = room(makeMap(), ['Ann', 'Bob', 'Cy']);
+        const bob = r2.clients[1];
+        r2.live();
+        r2.P(bob).stats.kills = 4;
+        r2.game.leave(bob.id);
+        r2.run(ticks(GRACE_MS) + 30);
+        expect(r2.P(r2.join('Bob')).stats.kills).toBe(0);
+
+        // A name that is already connected is never given someone else's numbers.
+        const r3 = room(makeMap(), ['Ann', 'Bob', 'Cy']);
+        const b3 = r3.clients[1];
+        r3.live();
+        r3.P(b3).stats.kills = 4;
+        r3.game.leave(b3.id);
+        const first = r3.join('Bob');
+        const second = r3.join('Bob');
+        expect(r3.P(first).stats.kills).toBe(4);
+        expect(r3.P(second).stats.kills).toBe(0);
     });
 });
 

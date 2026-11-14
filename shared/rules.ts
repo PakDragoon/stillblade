@@ -18,7 +18,10 @@ export const BOMB_MS = 35_000;
 export const OVER_MS = 5000;
 /** The result screen is held this long after the deciding round, then a fresh match begins. */
 export const MATCH_OVER_MS = 20_000;
-/** A player with no input change for this long during live rounds is moved to spectate-only. */
+/** Complete rounds in a row (freeze to round end) without one input change before a player sits out. */
+export const IDLE_ROUNDS = 2;
+/** A match that lost a whole team is held this long, waiting for players to return, before the room resets. */
+export const GRACE_MS = 60_000;
 export const IDLE_MS = 90_000;
 /** Hold times, counted in the player's own commands (60 per second). */
 export const PLANT_TICKS = 180;
