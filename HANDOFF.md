@@ -10,7 +10,8 @@ The game is playable end to end on a local machine: menu, rooms, rounds, bomb, s
 
 ### Verified
 
-- 54 automated tests pass (`npm test`): movement and collision, the wire format, and the server rules (damage, lag compensation, visibility, information culling, footsteps, knife, rounds, bomb, halftime swap, match end).
+- 76 automated tests pass (`npm test`): movement and collision, the wire format, the gun rules (`shared/gun.test.ts`), and the server rules (damage, lag compensation, visibility, information culling, footsteps, knife, ammo and reload, recoil and spread, rounds, bomb, halftime swap, match end).
+- **Gun ammo, reload and recoil (branch `claude/gunplay-reload-recoil-af745a`)**, live against bots at `?lag=150`: prediction error stayed 0 and the predicted gun never disagreed with the server (`window.__sb.stats().gunMismatches` = 0) through full-auto fire, an automatic reload on empty, an R reload, and firing until both magazine and reserve were empty. The HUD counter (`#sb-ammo`) showed the same magazine and reserve as the server snapshot at every check. A ghost observer saw a `--shoot` bot's reloads (`reloading` flag) and the bot kept firing across reloads. The browser pane was hidden, so frames were driven by firing PlayCanvas `update` from script: nothing was looked at.
 - CI on GitHub passed for the Milestone 5 commit.
 - Live in a browser against a bot: joining, round freeze and release, client prediction with zero error at 150 ms simulated lag, a ghost bot appearing only when in line of sight, footsteps arriving only within range, a defender bot killing the local player and the round ending with the score updating.
 - A ten-player room costs the server about 0.05 ms per tick (`npx tsx tools/bench.ts`).
@@ -19,13 +20,16 @@ The game is playable end to end on a local machine: menu, rooms, rounds, bomb, s
 
 1. **Audio by ear.** All sounds are synthesised in code (`client/src/audio.ts`). Levels, direction and wall muffling were measured, never listened to. Footsteps measured as only weakly directional. Whether a defender can locate a ghost by sound is the core of the game and is unknown.
 2. **Ghost shimmer in a real match.** Seen at visibility 0, 0.35 and 0.7 in a test scene only, never against the textured map. Whether a running ghost at 35% is fair to spot is unknown.
-3. **Mouse aiming and movement feel.** Automation cannot capture the pointer; all input in testing was keyboard events.
+3. **Mouse aiming and movement feel.** Automation cannot capture the pointer; all input in testing was keyboard events. This now includes **recoil feel**: whether the pattern is learnable and pull-down feels right, and whether the camera kick reads well, are unknown. The ammo HUD, spread crosshair, first-person reload motion, remote reload pose and the reload/dry-fire sounds were built but never seen or heard (`RELOAD_ROT` in `presenter.ts` and `RELOAD_DIP` in `characters.ts` are guesses).
 4. **A live plant and defuse.** Covered by server tests only.
 5. **Frame rate on an integrated GPU.** The only machine tested held 75 FPS before the art pass; nothing was measured after it, because the test browser was throttled in the background. The adaptive-resolution step-down has never triggered in a real slow case.
 6. **Animation in real time.** Foot sliding and blending were only seen as still frames.
 7. **Deployment.** The Dockerfile, the Caddy/compose stack and the GitHub Pages workflow have never been run. See `DEPLOY.md`.
 
 ## Known problems
+
+- **Phase edges and the gun.** The client decides "armed" (not frozen, hands free) from its own view of the round phase, which arrives late under lag. A trigger held across the freeze-to-live edge can fire on the server before the client predicts it; the snapshot corrects the gun state (one `gunMismatches` tick), but that shot's tracer and sound are not shown locally. Same as before this change for firing; never seen in testing.
+- **A reload sound plays to the end** even if the reload is cancelled by death, because one sound event schedules the whole sequence.
 
 - **Spawn-to-spawn sightline.** A defender at its spawn can shoot straight down the left lane (x ≈ -4) and hit a ghost at the ghost spawn about 34 m away. A scripted bot firing level killed the local player twice this way. Needs a wall or cover near the spawns: edit the box list in `tools/blender/greybox.py` and rebuild.
 - **Stale dev modules.** After many rapid file edits Vite has served an old copy of a client file. If the HUD looks frozen or a function is "not a function", restart `npm run dev`.
@@ -60,15 +64,16 @@ This starts the game server (ws://localhost:8080) and the web client (http://loc
 
 - `npm run bot` adds a scripted player (walks in, then strafes). `npm run bot -- --shoot` makes it hold fire. To play as a defender alone, start the bot before opening the page.
 - URL options: `?auto=1` skips the menu, `?name=`, `?room=`, `?lag=150` (simulated round-trip latency), `?res=0.7` (pin render resolution), `?server=ws://host:port`.
-- Keys: WASD move, mouse look, left click attack (F also attacks, useful without pointer lock), E plant or defuse, Tab scoreboard, Space jump, Shift quiet walk, C crouch.
+- Keys: WASD move, mouse look, left click attack (F also attacks, useful without pointer lock), R reload, E plant or defuse, Tab scoreboard, Space jump, Shift quiet walk, C crouch.
 - `npm test`, `npm run typecheck`, `npm run build`.
-- In the browser console, `window.__sb` exposes `app`, `state`, `input`, `net`, `match`, `mapData`, `presenter`, `audio` and `stats()`.
+- In the browser console, `window.__sb` exposes `app`, `state`, `gun`, `input`, `net`, `match`, `mapData`, `presenter`, `audio` and `stats()` (`stats().gunMismatches` counts snapshots where the replayed gun differed from the prediction; it should stay 0).
+- `npm run bot -- --shoot` fires 10-round bursts, pauses, and presses R between bursts when under 12 rounds; it logs when it runs out of ammunition (until its next spawn).
 
 ## How it is put together
 
 | Path | What it is |
 |---|---|
-| `shared/` | Code run by both client and server. `movement.ts` + `collision.ts`: deterministic box-hull movement. `rules.ts`: round phases, timings, plant/defuse eligibility. `visibility.ts`: ghost visibility curve. `protocol.ts`: message types and the binary wire format. `constants.ts`: every tuning number. |
+| `shared/` | Code run by both client and server. `movement.ts` + `collision.ts`: deterministic box-hull movement. `gun.ts`: ammunition, reload, recoil pattern and spread. `rules.ts`: round phases, timings, plant/defuse eligibility. `visibility.ts`: ghost visibility curve. `protocol.ts`: message types and the binary wire format. `constants.ts`: every tuning number. |
 | `server/src/game.ts` | The authoritative match. No socket code, so it is tested directly (`game.test.ts`). |
 | `server/src/main.ts` | WebSocket transport, rooms, rate limits, `/health`. |
 | `client/src/main.ts` | Game loop: fixed 60 Hz simulation, prediction and reconciliation, menu, adaptive resolution. |
@@ -83,7 +88,8 @@ This starts the game server (ws://localhost:8080) and the web client (http://loc
 ### Rules that keep it working
 
 - **Client and server must simulate identically.** Movement, the movement lock and attack timing live in `shared/` and are counted in the player's own commands (`seq`), not wall-clock time. Change a rule in one place and both sides follow; never reimplement one on only one side.
-- **The wire format must be exact for anything the client predicts with.** The local player's state travels as float64, and the client rounds its view angles with `Math.fround` before using them. Breaking this makes prediction drift.
+- **The wire format must be exact for anything the client predicts with.** The local player's state travels as float64, and the client rounds its view angles with `Math.fround` before using them. Breaking this makes prediction drift. The gun state (magazine, reserve, reload ticks left, cooldown, burst index, commands since the last shot) travels as one byte each, so every gun counter must stay at or below 255 (a test checks the tuning).
+- **The gun is stepped by `stepGun` on every command a living defender simulates**, on the server and in the client's prediction and replay; the client keeps per-command `live`/`armed` flags so the replay steps exactly what was predicted. Spread comes from an integer hash of the command `seq` and the shooter id, never `Math.random`. Recoil is drawn as an offset added to the camera on top of the view angles; it is never written into `input.yaw`/`input.pitch`, so commands keep carrying the player's own aim and the server adds the same pattern.
 - **Collision is axis-aligned boxes only.** Anything a player can stand on, hide behind or be blocked by must be a box in the list in `greybox.py`. Ramps, round or rotated solids need new collision code first.
 - **The map is generated, not hand-edited.** `npm run map:greybox` (about 7 minutes; append `-- -- --no-bake` to skip the bake) rewrites the GLB, the collision JSON, the lightmap and the textures. Hand edits to `client/public/maps/greybox.glb` are overwritten. Decoration that needs no collision can be added as visual-only geometry in the script.
 - **Never send a defender a ghost it cannot perceive.** `Game.knowsAbout` in `server/src/game.ts` is the anti-wallhack rule: a ghost is sent only if in line of sight with visibility above 0.01, or within breathing range (8 m). Sound events are sent only within earshot.
@@ -94,7 +100,7 @@ This starts the game server (ws://localhost:8080) and the web client (http://loc
 
 - Speeds: run 5.2 m/s, quiet walk 2.6, crouch 2.0; jump clears a 1 m crate.
 - Ghost visibility: 0 still, about 0.10 crouch-walking, 0.17 walking, 0.35 running; spikes to 0.6 on a swing or while planting, 0.8 when hit.
-- Gun: 34 body, 100 head, 10 shots per second. Knife: 0.2 s windup, 2 m reach, 55 front, 100 from behind.
+- Gun: 34 body, 100 head, 10 shots per second. 30-round magazine, 90 reserve, both refilled at every spawn (so every round). Reload 2.2 s (132 commands), started by R with a partial magazine and some reserve, or by firing on empty; firing is blocked meanwhile; death and round reset cancel it, movement does not. Empty with no reserve: a dry click at most every 15 commands. Recoil: a fixed 30-row pattern (`PATTERN_DEG` in `shared/gun.ts`) climbing to about 4.75 degrees, then drifting right, left, right; it starts recovering 9 commands after the last shot, one row every 2 commands. Spread (cone half-angle): 0.002 rad crouched and still, 0.004 standing still, plus up to 0.035 at full run speed, 0.06 in the air. Reload sound carries 10 m. Knife: 0.2 s windup, 2 m reach, 55 front, 100 from behind.
 - Footsteps carry 18 m running, about 5 m walking, about 3 m crouched. Breathing 8 m.
 - Round: 4 s freeze, 120 s live, 35 s bomb, 3 s to plant, 5 s to defuse, first to 6, sides swap after round 5.
 
