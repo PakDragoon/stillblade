@@ -1,14 +1,11 @@
-import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { TICK_RATE } from '../../shared/constants';
 import { DEFAULT_PORT, decodeClient, encodeServer } from '../../shared/protocol';
-import type { MapData } from '../../shared/types';
-import { Game } from './game';
+import { defaultMapId, loadMaps } from './maps';
+import { Rooms, cleanRoomId } from './rooms';
 
-const MAP = 'greybox';
 // Not PORT: dev tooling sets that for the web client, and the two must not collide.
 const port = Number(process.env.SB_SERVER_PORT) || DEFAULT_PORT;
 const mapsDir = process.env.SB_MAPS_DIR ?? fileURLToPath(new URL('../../client/public/maps', import.meta.url));
@@ -27,10 +24,12 @@ const MSG_BURST = TICK_RATE * 2;
 const MAX_DROPPED = TICK_RATE * 20;
 const HEARTBEAT_MS = 15_000;
 
-const map = JSON.parse(readFileSync(join(mapsDir, `${MAP}.json`), 'utf8')) as MapData;
-
+/** Every map in the maps folder; a room is created on one of them (`?map=`, else the default). */
+const maps = loadMaps(mapsDir);
 /** Each room is an independent match. Rooms are created on first join and dropped when empty. */
-const rooms = new Map<string, Game>();
+const rooms = new Rooms(maps, defaultMapId(maps, process.env.SB_DEFAULT_MAP), {
+    maxRooms: MAX_ROOMS, maxPlayersPerRoom: MAX_PLAYERS_PER_ROOM
+});
 const perIp = new Map<string, number>();
 const alive = new WeakSet<WebSocket>();
 let ticks = 0;
@@ -38,10 +37,8 @@ let ticks = 0;
 // Plain HTTP on the same port for uptime checks and load balancers.
 const http = createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/health') {
-        let players = 0;
-        for (const game of rooms.values()) players += game.players.size;
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-        res.end(JSON.stringify({ ok: true, rooms: rooms.size, players }));
+        res.end(JSON.stringify({ ok: true, rooms: rooms.rooms.size, players: rooms.playerCount() }));
         return;
     }
     res.writeHead(404).end();
@@ -57,26 +54,19 @@ wss.on('connection', (ws, req) => {
     const open = perIp.get(ip) ?? 0;
     if (open >= MAX_CONNECTIONS_PER_IP) { ws.close(1013, 'Too many connections'); return; }
 
-    // ws://host:port/?room=CODE&name=NICK
+    // ws://host:port/?room=CODE&name=NICK&map=ID (the map only matters to whoever creates the room)
     const query = new URL(req.url ?? '/', 'ws://localhost').searchParams;
-    const roomId = (query.get('room') ?? '').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 24) || 'public';
-    let game = rooms.get(roomId);
-    if (!game) {
-        if (rooms.size >= MAX_ROOMS) { ws.close(1013, 'Server full'); return; }
-        game = new Game(map);
-        // A new room starts at the current tick time so its clock is never behind the loop's.
-        game.now = ticks * TICK_MS;
-        rooms.set(roomId, game);
-    }
-    if (game.players.size >= MAX_PLAYERS_PER_ROOM) { ws.close(1013, 'Room full'); return; }
+    const roomId = cleanRoomId(query.get('room'));
+    const joined = rooms.join(roomId, query.get('map'), {
+        send: msg => { if (ws.readyState === ws.OPEN) ws.send(encodeServer(msg)); }
+    }, query.get('name') ?? '', ticks * TICK_MS);
+    if (!joined.ok) { ws.close(joined.reason === 'Unknown map' ? 1008 : 1013, joined.reason); return; }
 
     perIp.set(ip, open + 1);
     alive.add(ws);
-    const room = game;
-    const id = room.join({
-        send: msg => { if (ws.readyState === ws.OPEN) ws.send(encodeServer(msg)); }
-    }, query.get('name') ?? '');
-    console.log(`[${roomId}] player ${id} joined (${room.players.size} in room, ${rooms.size} rooms)`);
+    const room = joined.game;
+    const id = joined.id;
+    console.log(`[${roomId}] player ${id} joined ${room.map.name} (${room.players.size} in room, ${rooms.rooms.size} rooms)`);
 
     // Token bucket: refills at the tick rate, so an honest client never runs dry.
     let tokens = MSG_BURST;
@@ -100,11 +90,10 @@ wss.on('connection', (ws, req) => {
     });
     ws.on('pong', () => alive.add(ws));
     ws.on('close', () => {
-        room.leave(id);
-        if (room.players.size === 0) rooms.delete(roomId);
+        rooms.leave(roomId, id);
         const left = (perIp.get(ip) ?? 1) - 1;
         if (left > 0) perIp.set(ip, left); else perIp.delete(ip);
-        console.log(`[${roomId}] player ${id} left (${room.players.size} in room, ${rooms.size} rooms)`);
+        console.log(`[${roomId}] player ${id} left (${room.players.size} in room, ${rooms.rooms.size} rooms)`);
     });
     ws.on('error', () => ws.terminate());
 });
@@ -125,7 +114,7 @@ const loop = setInterval(() => {
     if (elapsed - ticks * TICK_MS > 250) ticks = Math.floor(elapsed / TICK_MS); // stalled: skip ahead
     while (ticks * TICK_MS <= elapsed) {
         const now = ticks++ * TICK_MS;
-        for (const game of rooms.values()) game.tick(now);
+        rooms.tick(now);
     }
 }, 4);
 
@@ -142,7 +131,7 @@ process.on('SIGINT', shutdown);
 
 http.listen(port, () => {
     console.log(
-        `Stillblade server: map "${map.name}", ${TICK_RATE} Hz, port ${port}, ` +
+        `Stillblade server: maps ${[...maps.keys()].join(', ')} (default ${rooms.defaultMap}), ${TICK_RATE} Hz, port ${port}, ` +
         `origins ${allowedOrigins.length ? allowedOrigins.join(' ') : 'any'}`
     );
 });

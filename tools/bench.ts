@@ -1,17 +1,20 @@
-// Measures what one full room costs the server: `npx tsx tools/bench.ts`.
+// Measures what one full room costs the server: `npx tsx tools/bench.ts [map id]`.
 // Ten players all running, strafing and attacking for a simulated minute, snapshots encoded as
-// they would be on the wire.
-import { readFileSync } from 'node:fs';
+// they would be on the wire. The map defaults to the server's default map.
+import { fileURLToPath } from 'node:url';
 import { TICK_RATE } from '../shared/constants';
 import { encodeServer, type NetCmd } from '../shared/protocol';
-import type { MapData } from '../shared/types';
 import { Game } from '../server/src/game';
+import { defaultMapId, loadMaps } from '../server/src/maps';
 
 const PLAYERS = 10;
 const SECONDS = 60;
 const TICK_MS = 1000 / TICK_RATE;
 
-const map = JSON.parse(readFileSync(new URL('../client/public/maps/greybox.json', import.meta.url), 'utf8')) as MapData;
+const maps = loadMaps(fileURLToPath(new URL('../client/public/maps', import.meta.url)));
+const mapId = process.argv[2] ?? defaultMapId(maps);
+const map = maps.get(mapId);
+if (!map) throw new Error(`unknown map ${mapId} (have: ${[...maps.keys()].join(', ')})`);
 const game = new Game(map, { rounds: false }); // warmup keeps everyone alive and moving
 
 let bytes = 0;
@@ -45,6 +48,6 @@ for (let t = 1; t <= totalTicks; t++) {
 const elapsed = performance.now() - started;
 
 const perTick = elapsed / totalTicks;
-console.log(`${PLAYERS} players, ${SECONDS} s simulated in ${elapsed.toFixed(0)} ms`);
+console.log(`map ${map.name}: ${PLAYERS} players, ${SECONDS} s simulated in ${elapsed.toFixed(0)} ms`);
 console.log(`average ${perTick.toFixed(3)} ms per tick (${((perTick / TICK_MS) * 100).toFixed(2)}% of one core), worst tick ${worst.toFixed(2)} ms`);
 console.log(`outbound ${(bytes / SECONDS / PLAYERS / 1024).toFixed(2)} KB/s per player, ${(messages / SECONDS / PLAYERS).toFixed(0)} messages/s per player`);
