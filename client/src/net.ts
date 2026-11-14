@@ -35,6 +35,15 @@ interface Remote {
     seen: number;
 }
 
+/** What the server told this client on joining: which map to load before simulating anything. */
+export interface Welcome {
+    id: number;
+    team: Team;
+    /** Map id: maps/<map>.json and maps/<map>.glb. */
+    map: string;
+    mapName: string;
+}
+
 const MAX_SAMPLES = 24;
 const PING_SLOTS = 256;
 
@@ -48,6 +57,10 @@ function lerpAngle(a: number, b: number, t: number): number {
 /**
  * Connection to the game server: sends commands, receives snapshots, and keeps an interpolation
  * buffer for every other player. `lagMs` adds artificial round-trip latency for testing.
+ *
+ * Joining is two-step because the room decides the map: `welcome` resolves with the room's map
+ * (or rejects with the server's reason if it refused the connection); everything after the welcome
+ * is held until `start(handlers)` is called, once that map is loaded.
  */
 export class Net {
     id = 0;
@@ -57,23 +70,58 @@ export class Net {
     ping = 0;
     readonly views: RemoteView[] = [];
 
+    readonly welcome: Promise<Welcome>;
+
     private ws: WebSocket;
+    private handlers: NetHandlers | null = null;
+    private readonly held: ServerMsg[] = [];
+    private welcomed = false;
+    private resolveWelcome!: (w: Welcome) => void;
+    private rejectWelcome!: (err: Error) => void;
     private readonly remotes = new Map<number, Remote>();
     private readonly sentAt = new Float64Array(PING_SLOTS);
     /** Server clock minus local clock, as of the freshest snapshot seen. */
     private clockOffset = -Infinity;
     private snapCount = 0;
 
-    constructor(url: string, private readonly lagMs: number, private readonly handlers: NetHandlers) {
+    constructor(url: string, private readonly lagMs: number) {
+        this.welcome = new Promise<Welcome>((resolve, reject) => {
+            this.resolveWelcome = resolve;
+            this.rejectWelcome = reject;
+        });
         this.ws = new WebSocket(url);
         this.ws.binaryType = 'arraybuffer';
         this.ws.onopen = () => { this.connected = true; };
-        this.ws.onclose = () => { this.connected = false; };
+        this.ws.onclose = e => {
+            this.connected = false;
+            if (!this.welcomed) this.rejectWelcome(new Error(e.reason || 'Could not reach the game server'));
+        };
         this.ws.onmessage = e => {
             const msg = decodeServer(e.data as string | ArrayBuffer);
-            if (this.lagMs > 0) setTimeout(() => this.receive(msg), this.lagMs / 2);
-            else this.receive(msg);
+            if (this.lagMs > 0) setTimeout(() => this.deliver(msg), this.lagMs / 2);
+            else this.deliver(msg);
         };
+    }
+
+    /** Begins handling game messages, starting with any that arrived while the map was loading. */
+    start(handlers: NetHandlers): void {
+        this.handlers = handlers;
+        for (const msg of this.held) this.receive(msg);
+        this.held.length = 0;
+    }
+
+    private deliver(msg: ServerMsg): void {
+        if (msg.type === 'welcome') {
+            if (msg.version !== PROTOCOL_VERSION) console.warn('Server protocol version differs; reload the page.');
+            this.id = msg.id;
+            this.team = msg.team;
+            this.welcomed = true;
+            this.resolveWelcome({ id: msg.id, team: msg.team, map: msg.map, mapName: msg.mapName ?? msg.map });
+        } else if (this.handlers) {
+            this.receive(msg);
+        } else {
+            this.held.push(msg);
+        }
     }
 
     send(cmd: NetCmd): void {
@@ -95,11 +143,9 @@ export class Net {
     }
 
     private receive(msg: ServerMsg): void {
+        const handlers = this.handlers!;
         switch (msg.type) {
             case 'welcome':
-                if (msg.version !== PROTOCOL_VERSION) console.warn('Server protocol version differs; reload the page.');
-                this.id = msg.id;
-                this.team = msg.team;
                 break;
             case 'snap': {
                 const now = performance.now();
@@ -114,26 +160,26 @@ export class Net {
                 this.snapCount++;
                 for (const p of msg.players) this.addSample(p, msg.time);
                 for (const [id, r] of this.remotes) if (r.seen !== this.snapCount) this.remotes.delete(id);
-                this.handlers.snapshot(msg.me, msg.ack);
+                handlers.snapshot(msg.me, msg.ack);
                 break;
             }
             case 'spawn':
-                this.handlers.spawn(msg.pos, msg.yaw);
+                handlers.spawn(msg.pos, msg.yaw);
                 break;
             case 'shot':
-                this.handlers.shot(msg);
+                handlers.shot(msg);
                 break;
             case 'slash':
-                this.handlers.slash(msg);
+                handlers.slash(msg);
                 break;
             case 'sound':
-                this.handlers.sound(msg);
+                handlers.sound(msg);
                 break;
             case 'round':
-                this.handlers.round(msg);
+                handlers.round(msg);
                 break;
             case 'roster':
-                this.handlers.roster(msg.players);
+                handlers.roster(msg.players);
                 break;
         }
     }

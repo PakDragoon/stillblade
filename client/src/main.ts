@@ -12,9 +12,10 @@ import {
     DEFAULT_PORT, type NetCmd, type RosterEntry, type RoundMsg, type SelfSnap, type ShotEvent, type SlashEvent,
     type SoundEvent
 } from '@shared/protocol';
+import { DEFAULT_MAP, isMapId, type MapListEntry } from '@shared/maps';
 import { canAct, movementLocked } from '@shared/rules';
 import { rayWorld } from '@shared/raycast';
-import type { MapData, Vec3 } from '@shared/types';
+import type { Box, MapData, Vec3 } from '@shared/types';
 import { createAudio } from './audio';
 import type { BombView, ListenerView } from './audio-api';
 import { Input } from './input';
@@ -23,7 +24,6 @@ import { Net } from './net';
 import { createPresenter } from './presenter';
 import type { LocalView, MatchView } from './presenter-api';
 
-const MAP = 'greybox';
 const RAD = Math.PI / 180;
 /** Prediction errors larger than this are teleports (respawn), not drift: snap instead of smoothing. */
 const SNAP_DISTANCE = 2;
@@ -57,14 +57,27 @@ const status = document.getElementById('status')!;
 const menu = document.getElementById('menu') as HTMLFormElement;
 const nameInput = document.getElementById('name') as HTMLInputElement;
 const roomInput = document.getElementById('room') as HTMLInputElement;
+const mapSelect = document.getElementById('map') as HTMLSelectElement;
 
-/** Shows the name and room form and resolves when the player presses Play. `?auto=1` skips it. */
-function askToJoin(onGesture: () => void): Promise<{ name: string; room: string }> {
+interface JoinChoice { name: string; room: string; map: string }
+
+/**
+ * Shows the name, room and map form and resolves when the player presses Play. `?auto=1` skips it.
+ * The map is a request: it is used if the room is new, otherwise the room's own map wins.
+ */
+function askToJoin(maps: MapListEntry[], onGesture: () => void): Promise<JoinChoice> {
     let saved = '';
     try { saved = localStorage.getItem('sb-name') ?? ''; } catch { /* storage unavailable: no remembered name */ }
     nameInput.value = params.get('name') ?? saved;
     roomInput.value = params.get('room') ?? '';
-    const read = () => ({ name: nameInput.value.trim(), room: roomInput.value.trim() });
+    for (const m of maps) mapSelect.add(new Option(m.name, m.id));
+    const wanted = params.get('map') ?? '';
+    mapSelect.value = maps.some(m => m.id === wanted) ? wanted : maps.some(m => m.id === DEFAULT_MAP) ? DEFAULT_MAP : maps[0]?.id ?? '';
+    const read = (): JoinChoice => ({
+        name: nameInput.value.trim(), room: roomInput.value.trim(),
+        // An id from the URL that is not in the list still goes to the server, which says no clearly.
+        map: params.has('auto') && wanted ? wanted : mapSelect.value
+    });
     if (params.has('auto')) return Promise.resolve(read());
     menu.hidden = false;
     status.textContent = '';
@@ -91,7 +104,7 @@ app.graphicsDevice.maxPixelRatio = 1;
 window.addEventListener('resize', () => app.resizeCanvas());
 
 // The world is drawn unlit from its baked lightmap; these realtime lights only light the players and
-// the first-person weapon, matched to the bake (tools/blender/greybox.py): the sun at 47.9 deg elevation
+// the first-person weapon, matched to the bake (tools/blender/mapbuilder.py): the sun at 47.9 deg elevation
 // toward engine (0.554, 0.742, 0.377) (the light shines along its -Y: pitch 90 - 47.9, yaw 55.8), warm,
 // and an ambient close to the baked sky fill on vertical surfaces.
 const SUN_ELEVATION_DEG = 47.9;
@@ -118,31 +131,61 @@ function loadContainer(url: string): Promise<pc.Asset> {
     });
 }
 
-async function start(): Promise<void> {
+/** The maps this build ships (client/public/maps/index.json, written by the map builder). */
+async function fetchMapList(): Promise<MapListEntry[]> {
+    try {
+        const r = await fetch(`${ASSETS}maps/index.json`);
+        if (r.ok) {
+            const d = await r.json() as { maps?: MapListEntry[] };
+            if (Array.isArray(d.maps) && d.maps.length > 0) return d.maps;
+        }
+    } catch { /* fall through to the default */ }
+    return [{ id: DEFAULT_MAP, name: DEFAULT_MAP }];
+}
+
+/** Loads a map's collision/gameplay data and its baked visuals, and adds it to the scene. */
+async function loadMap(id: string): Promise<MapData> {
+    if (!isMapId(id)) throw new Error(`Bad map id ${JSON.stringify(id)}`);
     const [mapData, mapAsset] = await Promise.all([
-        fetch(`${ASSETS}maps/${MAP}.json`).then(r => {
+        fetch(`${ASSETS}maps/${id}.json`).then(r => {
             if (!r.ok) throw new Error(`Failed to load map data: ${r.status}`);
             return r.json() as Promise<MapData>;
         }),
-        loadContainer(`${ASSETS}maps/${MAP}.glb`)
+        loadContainer(`${ASSETS}maps/${id}.glb`)
     ]);
     const mapEntity = (mapAsset.resource as pc.ContainerResource).instantiateRenderEntity();
     app.root.addChild(mapEntity);
     // Baked maps draw unlit (albedo x baked light): no realtime lighting cost on the world at all.
     if (mapData.look) await applyMapLook(app, mapEntity, camera, mapData, `${ASSETS}maps/`);
+    return mapData;
+}
 
-    const boxes = mapData.boxes;
+async function start(): Promise<void> {
+    const mapList = await fetchMapList();
     const input = new Input(canvas);
     const presenter = createPresenter(app, camera);
+    // Audio needs the map's boxes for occlusion; the array is filled once the room's map is known.
+    const boxes: Box[] = [];
     const audio = createAudio(boxes);
 
-    const camSpawn = mapData.spawns.ghosts[0];
-    camera.setPosition(camSpawn.pos[0], camSpawn.pos[1] + EYE_HEIGHT, camSpawn.pos[2]);
-    const { name, room } = await askToJoin(() => { audio.unlock(); input.lock(); });
+    const { name, room, map } = await askToJoin(mapList, () => { audio.unlock(); input.lock(); });
     const query = new URLSearchParams();
     if (room) query.set('room', room);
     if (name) query.set('name', name);
+    if (map) query.set('map', map);
     const serverUrl = `${serverBase}/?${query}`;
+
+    // The room decides the map: connect, learn it from the welcome, load it, then start simulating.
+    status.textContent = 'Connecting…';
+    const net = new Net(serverUrl, lagMs);
+    const welcome = await net.welcome.catch((err: unknown) => {
+        throw new Error(`Could not join: ${err instanceof Error ? err.message : String(err)}`);
+    });
+    status.textContent = `Loading ${welcome.mapName}…`;
+    const mapData = await loadMap(welcome.map);
+    boxes.push(...mapData.boxes);
+    const camSpawn = mapData.spawns.ghosts[0];
+    camera.setPosition(camSpawn.pos[0], camSpawn.pos[1] + EYE_HEIGHT, camSpawn.pos[2]);
 
     // Predicted local player: `curr` is the latest simulated tick, `prev` the one before it.
     const curr = createPlayerState(mapData.spawns.ghosts[0].pos);
@@ -181,7 +224,7 @@ async function start(): Promise<void> {
     const aim: Vec3 = [0, 0, 0];
     const shotEnd: Vec3 = [0, 0, 0];
 
-    const net = new Net(serverUrl, lagMs, {
+    net.start({
         snapshot(me: SelfSnap, ack: number): void {
             health = me.health;
             alive = me.alive;
@@ -467,7 +510,7 @@ async function start(): Promise<void> {
     // Handle for automated checks and console debugging.
     Object.assign(window, {
         __sb: {
-            app, state: curr, input, net, mapData, audio, presenter, match,
+            app, state: curr, input, net, mapData, mapList, audio, presenter, match,
             gun,
             stats: () => ({
                 fps, resScale, alive, health, vis, pending: pending.length, error: Math.hypot(...errorOffset),

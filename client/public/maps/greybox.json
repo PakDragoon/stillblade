@@ -1,5 +1,6 @@
 {
   "name": "greybox",
+  "displayName": "Test Map 1",
   "bounds": {
     "min": [
       -15.5,
@@ -235,6 +236,20 @@
         2.0,
         3.0,
         15.25
+      ]
+    },
+    {
+      "name": "wall_defender_cover",
+      "category": "inner_wall",
+      "min": [
+        -4.8,
+        0.0,
+        -18.25
+      ],
+      "max": [
+        4.8,
+        3.0,
+        -17.75
       ]
     },
     {

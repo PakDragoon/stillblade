@@ -190,7 +190,10 @@ export class Game {
         const clean = name.replace(/[^\p{L}\p{N} _.-]/gu, '').trim().slice(0, 16);
         const player = new Player(id, group, team, clean || `Player ${id}`, conn);
         this.players.set(id, player);
-        conn.send({ type: 'welcome', version: PROTOCOL_VERSION, id, team, map: this.map.name, time: this.now });
+        conn.send({
+            type: 'welcome', version: PROTOCOL_VERSION, id, team, map: this.map.name,
+            mapName: this.map.displayName ?? this.map.name, time: this.now
+        });
         conn.send(this.roundMsg());
         // Mid-round arrivals wait for the next round rather than appearing behind someone.
         if (this.phase === 'warmup') this.spawn(player);
