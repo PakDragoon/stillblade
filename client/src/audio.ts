@@ -14,9 +14,10 @@
  *   master(Gain 0.8) -> DynamicsCompressor (gentle limiter) -> destination
  */
 import {
-    BREATH_RANGE, EYE_HEIGHT, GHOST_MAX_VIS, KNIFE_SOUND_RANGE, RELOAD_SOUND_RANGE, STEP_RANGE
+    BREATH_RANGE, EYE_HEIGHT, GHOST_MAX_VIS, KNIFE_SOUND_RANGE, RELOAD_SOUND_RANGE, STEP_RANGE, TICK_RATE
 } from '@shared/constants';
 import { rayWorld } from '@shared/raycast';
+import { WEAPONS, type WeaponId } from '@shared/weapons';
 import type { Box, Vec3 } from '@shared/types';
 import type { AudioEngine, BombView, CreateAudio, CueKind, ListenerView } from './audio-api';
 import type { RemoteView } from './presenter-api';
@@ -393,6 +394,83 @@ const synthReload: Synth = (v, t) => {
     clunk(v, bolt + 0.17, 230, 0.45);
 };
 
+/**
+ * Suppressed pistol shot: like the rifle's but sharper, shorter and higher (a smaller charge through a smaller
+ * can), with a more prominent slide: it cycles sooner and slams back a moment later.
+ */
+const synthPistol: Synth = (v, t) => {
+    const pft = v.gain(v.input);
+    v.noise(v.bank.white, t, 0.06, v.filter('bandpass', 2100 * jitter(0.06), 1.3, pft));
+    env(pft.gain, t, 0.0007, 0.95, 0.04);
+
+    const thwip = v.gain(v.input);
+    v.noise(v.bank.white, t, 0.03, v.filter('bandpass', 6800, 1.6, thwip));
+    env(thwip.gain, t, 0.0004, 0.55, 0.016);
+
+    const thump = v.gain(v.input);
+    const o = v.osc('sine', 210, t, 0.06, thump);
+    o.frequency.exponentialRampToValueAtTime(75, t + 0.035);
+    env(thump.gain, t, 0.0015, 0.55, 0.04);
+
+    const back = t + 0.03;
+    const click = v.gain(v.input);
+    v.noise(v.bank.white, back, 0.025, v.filter('bandpass', 3600, 4, click));
+    env(click.gain, back, 0.0004, 0.45, 0.012);
+    metalClick(v, back + 0.03, 4400, 0.3);
+};
+
+/**
+ * Pistol reload (~1.4 s, all scheduled from `t`; the viewmodel jolts in presenter.ts use the same times):
+ * magazine release and drop at 0.15 s, new magazine slid in and seated at 0.7 s, slide pulled back at
+ * 1.0 s and released home at 1.17 s.
+ */
+const synthPistolReload: Synth = (v, t) => {
+    const out = t + 0.15 + Math.random() * 0.02;
+    metalClick(v, out, 3900, 0.45);
+    scrape(v, out + 0.015, 0.06, 1800, 1100, 0.14);
+    const seat = t + 0.7 + Math.random() * 0.02;
+    scrape(v, seat - 0.05, 0.05, 1100, 1900, 0.12);
+    clunk(v, seat, 260, 0.45);
+    metalClick(v, seat + 0.01, 3200, 0.5);
+    const rack = t + 1.0;
+    scrape(v, rack, 0.07, 2000, 3800, 0.2);
+    metalClick(v, rack + 0.075, 4200, 0.35);
+    const home = t + 1.17;
+    metalClick(v, home, 3300, 0.65);
+    clunk(v, home, 300, 0.35);
+};
+
+/**
+ * Weapon switch, scheduled over the draw time (x, seconds): a cloth rustle as the old one is put away, then the
+ * new one coming up. flag = pistol: a leather holster squeak and a light click; otherwise the sling's
+ * heavier clunk and a louder click as the rifle settles.
+ */
+const synthSwitch: Synth = (v, t, draw, pistol) => {
+    const d = draw > 0.05 ? draw : 0.3;
+    const cloth = v.gain(v.input);
+    const band = v.filter('bandpass', 700, 0.7, cloth);
+    band.frequency.setValueAtTime(600, t);
+    band.frequency.linearRampToValueAtTime(1600, t + d * 0.45);
+    v.noise(v.bank.pink, t, d * 0.6, band);
+    cloth.gain.setValueAtTime(0, t);
+    cloth.gain.linearRampToValueAtTime(0.5, t + d * 0.2);
+    cloth.gain.linearRampToValueAtTime(0, t + d * 0.55);
+    if (pistol) {
+        const squeak = v.gain(v.input);
+        const bp = v.filter('bandpass', 1300, 5, squeak);
+        bp.frequency.setValueAtTime(1300, t + d * 0.25);
+        bp.frequency.linearRampToValueAtTime(1700, t + d * 0.5);
+        v.noise(v.bank.pink, t + d * 0.25, d * 0.3, bp);
+        squeak.gain.setValueAtTime(0, t + d * 0.25);
+        squeak.gain.linearRampToValueAtTime(0.35, t + d * 0.35);
+        squeak.gain.linearRampToValueAtTime(0, t + d * 0.55);
+        metalClick(v, t + d * 0.8, 4000, 0.4);
+    } else {
+        clunk(v, t + d * 0.55, 170, 0.35);
+        metalClick(v, t + d * 0.8, 3200, 0.5);
+    }
+};
+
 /** Dry fire: a lone hammer click, crisp and small. */
 const synthDry: Synth = (v, t) => {
     metalClick(v, t, 4200, 0.7);
@@ -637,6 +715,17 @@ const RELOAD_CFG: ShotCfg = { range: RELOAD_SOUND_RANGE, ref: 1, hrtf: true, occ
 const CUE_CFG: ShotCfg = { range: 1, ref: 1, hrtf: false, occLift: 0 };
 /** Scratch config for footsteps, whose range depends on loudness. */
 const stepCfg: ShotCfg = { ...STEP_CFG };
+
+/** Each weapon's shot and reload sounds, by id, then per slot of the weapon table. */
+const WEAPON_SOUNDS: Record<WeaponId, { shot: Synth; reload: Synth }> = {
+    rifle: { shot: synthGun, reload: synthReload },
+    pistol: { shot: synthPistol, reload: synthPistolReload }
+};
+const SLOT_SOUNDS = WEAPONS.map(w => WEAPON_SOUNDS[w.id]);
+
+function slotOf(weapon: number): number {
+    return weapon >= 0 && weapon < WEAPONS.length ? weapon | 0 : 0;
+}
 
 export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => {
     let ctx: AudioContext | null = null;
@@ -996,19 +1085,24 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
             oneShot(pos, stepCfg, 1, synthStep, l, false);
         },
 
-        gunshot(pos: Vec3, isLocal: boolean, _weapon: number): void {
-            oneShot(isLocal ? null : pos, GUN_CFG, isLocal ? 0.7 : 1, synthGun, 0, false);
+        gunshot(pos: Vec3, isLocal: boolean, weapon: number): void {
+            oneShot(isLocal ? null : pos, GUN_CFG, isLocal ? 0.7 : 1, SLOT_SOUNDS[slotOf(weapon)].shot, 0, false);
         },
 
-        weaponSwitch(_weapon: number): void { /* presentation pass */ },
-        reload(pos: Vec3, isLocal: boolean, _weapon: number): void {
+        weaponSwitch(weapon: number): void {
+            const s = slotOf(weapon);
+            oneShot(null, CUE_CFG, 0.4, synthSwitch, WEAPONS[s].drawTicks / TICK_RATE, WEAPONS[s].id === 'pistol');
+        },
+
+        reload(pos: Vec3, isLocal: boolean, weapon: number): void {
+            const synth = SLOT_SOUNDS[slotOf(weapon)].reload;
             if (isLocal) {
-                oneShot(null, RELOAD_CFG, 0.45, synthReload, 0, false);
+                oneShot(null, RELOAD_CFG, 0.45, synth, 0, false);
                 return;
             }
             // The event carries the feet position: the magazine is worked at about hand height.
             reloadPos[0] = pos[0]; reloadPos[1] = pos[1] + RELOAD_LIFT; reloadPos[2] = pos[2];
-            oneShot(reloadPos, RELOAD_CFG, 1, synthReload, 0, false);
+            oneShot(reloadPos, RELOAD_CFG, 1, synth, 0, false);
         },
 
         dryFire(): void {
