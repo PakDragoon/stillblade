@@ -73,7 +73,7 @@ def render(m, g, out_dir):
     def ty(y):
         return int((Y1 - y) * PX)
 
-    levels = sorted(set(round(b["mx"][2], 3) for b in m.boxes if b["category"] == "floor"))
+    levels = sorted(set(round(b["mx"][2], 3) for b in m.boxes if b["category"] in m.floor_categories))
     reach = getattr(m, "_reach", None)
     paths = []
     for lv in levels:
@@ -83,13 +83,13 @@ def render(m, g, out_dir):
         for gy in range(int(Y0) // 2 * 2, int(Y1) + 2, 2):
             c.rect(0, ty(gy), W - 1, ty(gy), (232, 232, 230))
         for b in m.boxes:
-            if b["category"] == "floor" and abs(b["mx"][2] - lv) < 1e-3:
+            if b["category"] in m.floor_categories and abs(b["mx"][2] - lv) < 1e-3:
                 c.rect(tx(b["mn"][0]), ty(b["mx"][1]), tx(b["mx"][0]), ty(b["mn"][1]), (205, 205, 200))
         for name, (x0, y0), (x1, y1), z in m.sites:
             if abs(z - lv) < 0.5:
                 c.blend_rect(tx(x0), ty(y1), tx(x1), ty(y0), (230, 60, 50) if name == "A" else (60, 90, 230), 0.35)
         for b in m.boxes:
-            if b["category"] == "floor":
+            if b["category"] in m.floor_categories:
                 continue
             if b["mn"][2] < lv + mapkit.HULL_H and b["mx"][2] > lv + 0.05:
                 col = CAT_COLOURS.get(b["category"], (80, 80, 80))

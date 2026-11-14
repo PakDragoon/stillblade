@@ -31,7 +31,6 @@ m.noise_amp = {"floor": 0.16, "wall_outer": 0.10, "wall_inner": 0.08}
 m.wall_surfaces = {"wall_outer", "wall_inner"}
 m.lightmap_size = 3072
 m.samples = 1024
-m.check_spawn_sightlines = False   # TEMP: the known spawn sightline is fixed in the next step
 
 
 def box(name, category, mn, mx):
@@ -71,6 +70,11 @@ box("wall_mid_B", "inner_wall", (4.75, 10.0, 0), (5.25, 15.0, INNER_H))
 
 # Ghost spawn cover wall (blocks direct mid sightline into spawn)
 box("wall_ghost_cover", "inner_wall", (-2.0, -15.25, 0), (2.0, -14.75, 3.0))
+
+# Defender spawn cover wall: without it a defender at spawn could shoot down mid along x = -4
+# (beside the left lane wall) into the ghost spawn 40 m away. 1.45 m in front of the spawn line,
+# 1.5 m clear of the stairs; defenders leave spawn around either end.
+box("wall_defender_cover", "inner_wall", (-4.8, 17.75, 0), (4.8, 18.25, 3.0))
 
 # Raised platform overlooking mid (defender side), 5 x 4 m, 1.2 m high
 PLAT_H = 1.2

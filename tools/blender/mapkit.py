@@ -169,6 +169,7 @@ class MapDef:
         self.site_h = 2.5
         self.flights = []        # dicts: name, steps (box names, bottom to top), z0, z1
         self.structure_categories = {"stairs", "platform"}   # pieces of one walkable structure
+        self.floor_categories = {"floor"}    # categories whose tops are floor levels
         self.lights = []         # dicts: type POINT / AREA / SPOT, pos, colour, power, ...
         self.decals = []         # dicts: corners (4 x xyz), axis, sign, off, colour
         self.sample_spots = []   # (label, point, axis, sign) printed after the bake
@@ -181,6 +182,9 @@ class MapDef:
 
     # ---- geometry --------------------------------------------------------------------------
     def box(self, name, category, mn, mx, tint=None, hide=()):
+        """A collision box, drawn with its category's surface. `hide` lists faces that can never be
+        seen ("top", "bottom", "+x", ...), or ("all",) for a solid drawn only by visual-only boxes
+        inside it (racks, vehicles)."""
         mn = tuple(float(v) for v in mn)
         mx = tuple(float(v) for v in mx)
         if not all(a < b for a, b in zip(mn, mx)):
@@ -589,10 +593,10 @@ def verify(m, log=print):
 
     # Narrow gaps: at every floor level, solids reaching into walking height must touch or leave
     # >= MIN_WALKWAY between them (no slots a player squeezes into, no false openings).
-    levels = sorted(set(round(b["mx"][2], 3) for b in boxes if b["category"] == "floor"))
+    levels = sorted(set(round(b["mx"][2], 3) for b in boxes if b["category"] in m.floor_categories))
     narrow = []
     for lv in levels:
-        band = [b for b in boxes if b["category"] != "floor"
+        band = [b for b in boxes if b["category"] not in m.floor_categories
                 and b["mn"][2] < lv + HULL_H - 1e-6 and b["mx"][2] > lv + 0.05]
         grid = Grid2D([(b["mn"], b["mx"]) for b in band], 2.0)
         for i, a in enumerate(band):
@@ -724,7 +728,7 @@ def verify(m, log=print):
         for j, b in enumerate(eyes["defenders"]):
             if g.index.segment_clear(a, b):
                 seen_pairs.append((i, j, round(math.dist(a, b), 1)))
-    if seen_pairs and getattr(m, "check_spawn_sightlines", True):
+    if seen_pairs:
         errors.append("ghost spawn eyes see defender spawn eyes (ghost, defender, metres): %s" % seen_pairs)
     log("%s spawn sightlines: %d of %d ghost->defender eye pairs clear"
         % (tag, len(seen_pairs), len(eyes["ghosts"]) * len(eyes["defenders"])))

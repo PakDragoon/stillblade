@@ -123,8 +123,9 @@ class Build:
         for v in m.visuals:
             self.items.append(dict(name=v["name"], key=v["surface"], mn=v["mn"], mx=v["mx"],
                                    tint=v["tint"], hide=()))
-        self.levels = sorted(set(round(b["mx"][2], 4) for b in m.boxes if b["category"] == "floor"))
-        floor_boxes = [b for b in m.boxes if b["category"] == "floor"]
+        # Invisible collision volumes (hide "all") are neither drawn nor occluders.
+        self.items = [it for it in self.items if "all" not in it["hide"]]
+        floor_boxes = [b for b in m.boxes if b["category"] in m.floor_categories]
         # Floor levels each item stands on (for skirting bands): floors whose top lies inside the
         # item's height range and whose footprint is within 0.7 m of it.
         for it in self.items:

@@ -15,9 +15,12 @@ export interface Spawn {
     yaw: number;
 }
 
-/** Produced by tools/blender/greybox.py alongside the .glb of the same name. */
+/** Produced by the map builder (tools/blender/build_map.py) alongside the .glb of the same name. */
 export interface MapData {
+    /** File id: maps/<name>.json and maps/<name>.glb. */
     name: string;
+    /** Shown to players, e.g. "Test Map 1". */
+    displayName?: string;
     bounds: { min: Vec3; max: Vec3 };
     boxes: Box[];
     spawns: { ghosts: Spawn[]; defenders: Spawn[] };
@@ -28,7 +31,7 @@ export interface MapData {
     look?: MapLook;
 }
 
-/** Written by tools/blender/greybox.py; consumed by client/src/maplook.ts. File names are next to the map. */
+/** Written by tools/blender/mapbuilder.py; consumed by client/src/maplook.ts. File names are next to the map. */
 export interface MapLook {
     /** Baked light atlas (light only, no surface colour), sampled with TEXCOORD_1. */
     lightmap: string;
