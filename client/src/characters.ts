@@ -1,6 +1,7 @@
 import * as pc from 'playcanvas';
+import { WEAPONS } from '@shared/weapons';
 import type { RemoteView } from './presenter-api';
-import { instantiateWeapon, type WeaponModel } from './weapons';
+import { instantiateWeapon, WEAPON_MESH, type WeaponModel } from './weapons';
 
 /**
  * Animated remote-player characters.
@@ -25,10 +26,12 @@ import { instantiateWeapon, type WeaponModel } from './weapons';
  *   - Ally ghost: the same shader, steady violet, fixed opacity.
  *
  * Weapons (weapons.ts) hang from the "socket_gun" / "socket_knife" nodes on the right wrist bone:
- *   - Defenders carry the gun (same vertex-colour material as the body) and hold it with the "aim" pose on
- *     the upper layer at full weight; a remote shot plays "shoot" (a recoil that ends on the aim pose).
- *     After the animation is applied, the spine is bent by the aim pitch; while RemoteView.reloading the same
- *     bones also dip the gun to a low hold (procedural, no clip).
+ *   - Defenders carry every weapon in the table (shared/weapons.ts; same vertex-colour material as the body),
+ *     all in socket_gun with only the one in hand (RemoteView.weapon) enabled, and hold it with the "aim" pose
+ *     on the upper layer at full weight; a remote shot plays "shoot" (a recoil that ends on the aim pose).
+ *     After the animation is applied, the spine is bent by the aim pitch; the same bones also dip the gun to a
+ *     low hold while RemoteView.reloading, dip it briefly while switching, and bring the head down to the gun
+ *     while aiming (procedural, no clips).
  *   - Ghosts carry the knife, drawn with the body's own material and per-instance parameters, so it is
  *     exactly as visible as the body (and disabled with it when the player is culled).
  * Each character is therefore at most two draw calls: the skinned body and one weapon.
@@ -93,6 +96,12 @@ const PITCH_LIMIT = 1.1;
 // per bone (negative tips forward/down), blended in and out over RELOAD_BLEND seconds. No clip, no asset.
 const RELOAD_DIP = [-0.05, -0.12, -0.15, -0.45, -0.45];
 const RELOAD_BLEND = 0.2;
+// Switching (RemoteView.switching, 0.25 to 0.4 s): a shorter, shallower dip, quick in and out.
+const SWITCH_DIP = [-0.03, -0.06, -0.05, -0.3, -0.3];
+const SWITCH_BLEND = 0.08;
+// Aiming down sights: arms up a touch, head tipped down toward the sights. Small: the hold is already aimed.
+const AIM_RAISE = [0, 0.02, -0.14, 0.05, 0.05];
+const AIM_BLEND = 0.12;
 const DEG_PER_RAD = 180 / Math.PI;
 
 // ---------------------------------------------------------------------------------------------
@@ -240,6 +249,15 @@ function upperMask(root: pc.Entity): Record<string, { children: boolean }> | nul
     return mask;
 }
 
+/** Moves a 0..1 weight `step` toward 1 while `on`, toward 0 otherwise. */
+function blendTo(w: number, on: boolean, step: number): number {
+    return on ? Math.min(1, w + step) : Math.max(0, w - step);
+}
+
+function smooth(x: number): number {
+    return x * x * (3 - 2 * x);
+}
+
 export class Character {
     readonly entity: pc.Entity;
     readonly meshInstances: pc.MeshInstance[] = [];
@@ -265,15 +283,22 @@ export class Character {
     private armed = false;
     private tint: Float32Array | null = null;
     private fixedVis = 1;
-    private gun: pc.Entity | null = null;
-    private gunMuzzle: pc.GraphNode | null = null;
+    /** One instance per weapon slot (only the held one enabled), and their muzzles. */
+    private readonly guns: pc.Entity[] = [];
+    private readonly gunMuzzles: (pc.GraphNode | null)[] = [];
+    /** Slot in hand. */
+    private slot = 0;
     private knife: pc.Entity | null = null;
     private knifeMi: pc.MeshInstance | null = null;
     private readonly pitchBones: pc.GraphNode[] = [];
     private readonly pitchShare: number[] = [];
     private readonly reloadDip: number[] = [];
-    /** Weight 0..1 of the reload dip. */
+    private readonly switchDip: number[] = [];
+    private readonly aimRaise: number[] = [];
+    /** Weights 0..1 of the reload dip, the switch dip and the aim raise. */
     private reloadW = 0;
+    private switchW = 0;
+    private aimW = 0;
     private readonly qa = new pc.Quat();
     private readonly qb = new pc.Quat();
 
@@ -320,20 +345,25 @@ export class Character {
             this.pitchBones.push(b);
             this.pitchShare.push(PITCH_SHARE[i]);
             this.reloadDip.push(RELOAD_DIP[i]);
+            this.switchDip.push(SWITCH_DIP[i]);
+            this.aimRaise.push(AIM_RAISE[i]);
         }
         this.state = S_IDLE;
     }
 
-    /** Puts the gun and knife into the hand sockets (once; the model may load after the character). */
+    /** Puts the guns and knife into the hand sockets (once; the model may load after the character). */
     setWeapons(w: WeaponModel): void {
-        if (this.gun || this.knife) return;
+        if (this.guns.length > 0 || this.knife) return;
         const gs = this.entity.findByName('socket_gun');
         const ks = this.entity.findByName('socket_knife');
         if (gs) {
-            const g = instantiateWeapon(w, 'gun', this.model.defenderMat);
-            gs.addChild(g.entity);
-            this.gun = g.entity;
-            this.gunMuzzle = g.muzzle;
+            // Every gun's origin is its grip, so all share the socket; still one draw call, as only one is enabled.
+            for (let i = 0; i < WEAPONS.length; i++) {
+                const g = instantiateWeapon(w, WEAPON_MESH[WEAPONS[i].id], this.model.defenderMat);
+                gs.addChild(g.entity);
+                this.guns.push(g.entity);
+                this.gunMuzzles.push(g.muzzle);
+            }
         }
         if (ks) {
             const k = instantiateWeapon(w, 'knife', this.model.ghostMat);
@@ -363,7 +393,7 @@ export class Character {
 
     private applyWeaponLook(): void {
         const ghost = this.look === CharLook.EnemyGhost || this.look === CharLook.AllyGhost;
-        if (this.gun) this.gun.enabled = this.look === CharLook.Defender;
+        for (let i = 0; i < this.guns.length; i++) this.guns[i].enabled = this.look === CharLook.Defender && i === this.slot;
         if (this.knife && this.knifeMi) {
             this.knife.enabled = ghost;
             // Same material and parameters as the body: the knife is never more visible than its owner.
@@ -399,28 +429,31 @@ export class Character {
         return true;
     }
 
-    /** World position of the gun's muzzle, or null without a gun in hand. Valid until the next change. */
+    /** World position of the held gun's muzzle, or null without a gun in hand. Valid until the next change. */
     muzzle(): pc.Vec3 | null {
-        return this.armed && this.gun && this.gunMuzzle ? this.gunMuzzle.getPosition() : null;
+        const m = this.armed ? this.gunMuzzles[this.slot] : null;
+        return m ? m.getPosition() : null;
     }
 
-    /** World rotation of the gun (its -Z is the barrel), or null. */
+    /** World rotation of the held gun (its -Z is the barrel), or null. */
     gunRotation(): pc.Quat | null {
-        return this.armed && this.gun ? this.gun.getRotation() : null;
+        const g = this.armed ? this.guns[this.slot] : undefined;
+        return g ? g.getRotation() : null;
     }
 
     /**
-     * Bend the spine by the aim pitch, plus the reload dip at weight `rw`. Must run after the animation
-     * has been applied this frame.
+     * Bend the spine by the aim pitch, plus the reload dip, switch dip and aim raise at weights `rw`, `sw`,
+     * `aw`. Must run after the animation has been applied this frame.
      */
-    private applyPitch(pitch: number, rw: number): void {
+    private applyPitch(pitch: number, rw: number, sw: number, aw: number): void {
         const p = pitch > PITCH_LIMIT ? PITCH_LIMIT : pitch < -PITCH_LIMIT ? -PITCH_LIMIT : pitch;
-        if (p > -1e-3 && p < 1e-3 && rw <= 0) return;
+        if (p > -1e-3 && p < 1e-3 && rw <= 0 && sw <= 0 && aw <= 0) return;
         const right = this.entity.parent ? this.entity.parent.right : this.entity.right;
         for (let i = 0; i < this.pitchBones.length; i++) {
             const b = this.pitchBones[i];
+            const a = p * this.pitchShare[i] + rw * this.reloadDip[i] + sw * this.switchDip[i] + aw * this.aimRaise[i];
             // Positive angle about +right tips -Z (forward) up: positive pitch looks up.
-            this.qa.setFromAxisAngle(right, (p * this.pitchShare[i] + rw * this.reloadDip[i]) * DEG_PER_RAD);
+            this.qa.setFromAxisAngle(right, a * DEG_PER_RAD);
             this.qb.copy(b.getRotation());
             this.qa.mul(this.qb);
             b.setRotation(this.qa);
@@ -437,6 +470,8 @@ export class Character {
         this.spikeT = -1;
         this.prevVis = 0;
         this.reloadW = 0;
+        this.switchW = 0;
+        this.aimW = 0;
         this.holdPose();
         this.go(S_IDLE, 0);
     }
@@ -485,6 +520,8 @@ export class Character {
                 this.deadT = 0;
                 if (this.upper) { this.upper.weight = 0; this.upperT = -1; }
                 this.reloadW = 0;
+                this.switchW = 0;
+                this.aimW = 0;
                 this.anim.speed = 1;
                 this.go(S_DEATH, 0.1);
             } else {
@@ -542,11 +579,16 @@ export class Character {
             }
         }
         if (this.armed) {
-            const step = dt / RELOAD_BLEND;
-            const rw = v.reloading ? Math.min(1, this.reloadW + step) : Math.max(0, this.reloadW - step);
-            this.reloadW = rw;
-            // Smoothstep so the dip starts and ends gently.
-            this.applyPitch(v.pitch, rw * rw * (3 - 2 * rw));
+            const slot = v.weapon >= 0 && v.weapon < this.guns.length ? v.weapon : 0;
+            if (slot !== this.slot) {
+                this.slot = slot;
+                this.applyWeaponLook();
+            }
+            this.reloadW = blendTo(this.reloadW, v.reloading, dt / RELOAD_BLEND);
+            this.switchW = blendTo(this.switchW, v.switching, dt / SWITCH_BLEND);
+            this.aimW = blendTo(this.aimW, v.aiming && !v.reloading, dt / AIM_BLEND);
+            // Smoothstep so each starts and ends gently.
+            this.applyPitch(v.pitch, smooth(this.reloadW), smooth(this.switchW), smooth(this.aimW));
         }
         return true;
     }
