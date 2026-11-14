@@ -552,7 +552,7 @@ describe('damage events', () => {
         const d = dmgs(ghost)[0];
         // The defender is at -Z of the ghost: bearing 0 faces -Z.
         expect(d.dir).toBeCloseTo(0, 5);
-        expect(d).toMatchObject({ amount: 34, kind: 'shot' });
+        expect(d).toMatchObject({ amount: 34, kind: 'shot', weapon: 0 }); // the rifle's slot
         expect(d.killed).toBeUndefined();
         expect(defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'body' });
         r.run(ticks(3000)); // recoil recovers in commands, so keep sending them

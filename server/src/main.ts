@@ -88,11 +88,11 @@ wss.on('connection', (ws, req) => {
         }
     });
     ws.on('pong', () => alive.add(ws));
-    ws.on('close', () => {
+    ws.on('close', (code, reason) => {
         rooms.leave(roomId, id);
         const left = (perIp.get(ip) ?? 1) - 1;
         if (left > 0) perIp.set(ip, left); else perIp.delete(ip);
-        console.log(`[${roomId}] player ${id} left (${room.players.size} in room, ${rooms.rooms.size} rooms)`);
+        console.log(`[${roomId}] player ${id} left, close ${code} ${reason.toString()} (${room.players.size} in room, ${rooms.rooms.size} rooms)`);
     });
     ws.on('error', () => ws.terminate());
 });

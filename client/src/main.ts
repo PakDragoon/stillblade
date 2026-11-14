@@ -227,7 +227,8 @@ async function start(): Promise<void> {
     boxes.push(...mapData.boxes);
     radar.setMap(mapData);
     // A dropped connection gets one automatic reconnect to the same room, then asks.
-    net.onClose = () => {
+    net.onClose = (code, reason) => {
+        console.warn(`connection closed: ${code} ${reason}`);
         let tried = false;
         try { tried = sessionStorage.getItem('sb-rejoin-tried') === '1'; } catch { /* treat as untried */ }
         if (tried) {
