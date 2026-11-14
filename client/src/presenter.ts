@@ -1,12 +1,14 @@
 import * as pc from 'playcanvas';
 import {
-    EYE_HEIGHT, EYE_HEIGHT_CROUCHED, HEAD_ZONE, HULL_HALF_WIDTH, HULL_HEIGHT, HULL_HEIGHT_CROUCHED, RELOAD_MS
+    EYE_HEIGHT, EYE_HEIGHT_CROUCHED, HEAD_ZONE, HULL_HALF_WIDTH, HULL_HEIGHT, HULL_HEIGHT_CROUCHED
 } from '@shared/constants';
 import type { RosterEntry, Team } from '@shared/protocol';
 import { ROUNDS_TO_WIN, type Phase, type RoundReason } from '@shared/rules';
 import type { Vec3 } from '@shared/types';
 import type { CreatePresenter, KillKind, LocalView, MatchView, RemoteView } from './presenter-api';
 import { Character, CharLook, loadCharacterModel, makeSkinnedGhostMaterial, type CharacterModel } from './characters';
+import { TICK_RATE } from '@shared/constants';
+import { WEAPONS } from '@shared/weapons';
 import { instantiateWeapon, loadWeaponModel, makeWeaponMaterial, type WeaponModel } from './weapons';
 
 const DEG = 180 / Math.PI;
@@ -50,6 +52,7 @@ const RELOAD_IN = 0.2;
 const RELOAD_OUT = 0.2;
 const RELOAD_RETURN = 12;
 /** Progress at which the magazine seats (1.4 s) and the bolt closes (about 2.05 s) of the reload (sounds in audio.ts). */
+const RELOAD_MS = (WEAPONS[0].reloadTicks / TICK_RATE) * 1000;
 const RELOAD_SEAT_AT = 1400 / RELOAD_MS;
 const RELOAD_BOLT_AT = 2050 / RELOAD_MS;
 

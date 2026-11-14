@@ -996,11 +996,12 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
             oneShot(pos, stepCfg, 1, synthStep, l, false);
         },
 
-        gunshot(pos: Vec3, isLocal: boolean): void {
+        gunshot(pos: Vec3, isLocal: boolean, _weapon: number): void {
             oneShot(isLocal ? null : pos, GUN_CFG, isLocal ? 0.7 : 1, synthGun, 0, false);
         },
 
-        reload(pos: Vec3, isLocal: boolean): void {
+        weaponSwitch(_weapon: number): void { /* presentation pass */ },
+        reload(pos: Vec3, isLocal: boolean, _weapon: number): void {
             if (isLocal) {
                 oneShot(null, RELOAD_CFG, 0.45, synthReload, 0, false);
                 return;

@@ -1,9 +1,10 @@
 import type { Phase, RoundReason } from './rules';
-import type { GunState } from './gun';
+import type { GunState, LoadoutState } from './gun';
 import type { KnifeState } from './knife';
 import type { InputCmd, Vec3 } from './types';
+import { WEAPON_COUNT } from './weapons';
 
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 export const DEFAULT_PORT = 8080;
 /** Snapshots per second sent to each client. */
 export const SNAPSHOT_RATE = 30;
@@ -21,6 +22,12 @@ export interface NetCmd extends InputCmd {
     use: boolean;
     /** Reload key (R) pressed; acted on only if the magazine is not full and there is reserve. */
     reload: boolean;
+    /** Weapon select: 0 for none, n for slot n - 1 (keys 1, 2; the mouse wheel picks one too). */
+    slot: number;
+    /** Q: back to the previous weapon (ignored when `slot` is set). */
+    swap: boolean;
+    /** Aim down sights held (right mouse). */
+    aim: boolean;
     /** Server time (ms) at which this client was drawing other players: the lag-compensation target. */
     viewTime: number;
 }
@@ -37,6 +44,12 @@ export interface PlayerSnap {
     vis: number;
     /** A defender in the middle of a reload (for its animation). */
     reloading: boolean;
+    /** Weapon slot in a defender's hands (index into WEAPONS); 0 for ghosts. */
+    weapon: number;
+    /** A defender drawing the weapon it just switched to. */
+    switching: boolean;
+    /** A defender aiming down sights (more than half way in). */
+    aiming: boolean;
 }
 
 export interface SelfSnap {
@@ -54,8 +67,8 @@ export interface SelfSnap {
     alive: boolean;
     /** Server time (ms) of the next respawn; meaningful only while dead. */
     respawnAt: number;
-    /** The defender gun, predicted by the client: sent exactly (all small integers). */
-    gun: GunState;
+    /** The defender's weapons, predicted by the client: sent exactly (all small integers). */
+    loadout: LoadoutState;
     /** The ghost knife timing, predicted by the client: sent exactly (small integers). */
     knife: KnifeState;
 }
@@ -63,6 +76,8 @@ export interface SelfSnap {
 export interface ShotEvent {
     type: 'shot';
     shooter: number;
+    /** Slot of the weapon that fired (index into WEAPONS), for its sound and tracer. */
+    weapon: number;
     from: Vec3;
     to: Vec3;
     /** Present when a player was hit. */
@@ -91,6 +106,8 @@ export interface SoundEvent {
     pos: Vec3;
     /** 0..1 loudness at the source. */
     loud: number;
+    /** For 'reload': the slot of the weapon being reloaded. */
+    weapon?: number;
 }
 
 /** The state of the round. Sent whenever it changes and to every player who joins. */
@@ -145,9 +162,14 @@ export type ClientMsg = { type: 'cmd'; cmd: NetCmd };
 
 const CMD_TAG = 1;
 const SNAP_TAG = 2;
-const CMD_BYTES = 24;
-const SNAP_HEAD_BYTES = 85;
-const SNAP_PLAYER_BYTES = 19;
+const CMD_BYTES = 25;
+/** Self state up to the loadout, then 5 loadout bytes, 7 per weapon, 2 knife, 1 player count. */
+const SNAP_LOADOUT = 75;
+const SNAP_GUNS = SNAP_LOADOUT + 5;
+const SNAP_KNIFE = SNAP_GUNS + 7 * WEAPON_COUNT;
+const SNAP_COUNT = SNAP_KNIFE + 2;
+const SNAP_HEAD_BYTES = SNAP_COUNT + 1;
+const SNAP_PLAYER_BYTES = 20;
 const ANGLE_SCALE = 32767 / Math.PI;
 
 export type Wire = string | Uint8Array<ArrayBuffer>;
@@ -163,8 +185,10 @@ function encodeCmd(c: NetCmd): Uint8Array<ArrayBuffer> {
     v.setInt8(6, Math.round(c.right * 127));
     v.setFloat32(7, c.yaw, true);
     v.setFloat32(11, c.pitch, true);
-    v.setUint8(15, (c.jump ? 1 : 0) | (c.walk ? 2 : 0) | (c.crouch ? 4 : 0) | (c.fire ? 8 : 0) | (c.use ? 16 : 0) | (c.reload ? 32 : 0));
+    v.setUint8(15, (c.jump ? 1 : 0) | (c.walk ? 2 : 0) | (c.crouch ? 4 : 0) | (c.fire ? 8 : 0) | (c.use ? 16 : 0) |
+        (c.reload ? 32 : 0) | (c.swap ? 64 : 0) | (c.aim ? 128 : 0));
     v.setFloat64(16, c.viewTime, true);
+    v.setUint8(24, c.slot);
     return out;
 }
 
@@ -178,7 +202,9 @@ function decodeCmd(v: DataView): NetCmd {
         pitch: v.getFloat32(11, true),
         jump: (flags & 1) !== 0, walk: (flags & 2) !== 0, crouch: (flags & 4) !== 0,
         fire: (flags & 8) !== 0, use: (flags & 16) !== 0, reload: (flags & 32) !== 0,
-        viewTime: v.getFloat64(16, true)
+        swap: (flags & 64) !== 0, aim: (flags & 128) !== 0,
+        viewTime: v.getFloat64(16, true),
+        slot: v.getUint8(24)
     };
 }
 
@@ -198,34 +224,59 @@ function encodeSnap(m: Extract<ServerMsg, { type: 'snap' }>): Uint8Array<ArrayBu
         v.setFloat64(43 + k * 8, me.vel[k], true);
     }
     v.setFloat64(67, me.respawnAt, true);
-    const g = me.gun;
-    v.setUint8(75, g.mag);
-    v.setUint8(76, g.reserve);
-    v.setUint8(77, g.reload);
-    v.setUint8(78, g.cooldown);
-    v.setUint8(79, g.burst);
-    v.setUint8(80, g.sinceShot);
-    v.setUint8(81, g.shots);
-    v.setUint8(82, me.knife.cooldown);
-    v.setUint8(83, me.knife.windup);
-    v.setUint8(84, m.players.length);
+    const l = me.loadout;
+    v.setUint8(SNAP_LOADOUT, l.slot);
+    v.setUint8(SNAP_LOADOUT + 1, l.prev);
+    v.setUint8(SNAP_LOADOUT + 2, l.draw);
+    v.setUint8(SNAP_LOADOUT + 3, l.aim);
+    v.setUint8(SNAP_LOADOUT + 4, l.trigger);
+    for (let i = 0; i < WEAPON_COUNT; i++) {
+        const g = l.guns[i], o = SNAP_GUNS + 7 * i;
+        v.setUint8(o, g.mag);
+        v.setUint8(o + 1, g.reserve);
+        v.setUint8(o + 2, g.reload);
+        v.setUint8(o + 3, g.cooldown);
+        v.setUint8(o + 4, g.burst);
+        v.setUint8(o + 5, g.sinceShot);
+        v.setUint8(o + 6, g.shots);
+    }
+    v.setUint8(SNAP_KNIFE, me.knife.cooldown);
+    v.setUint8(SNAP_KNIFE + 1, me.knife.windup);
+    v.setUint8(SNAP_COUNT, m.players.length);
     let o = SNAP_HEAD_BYTES;
     for (const p of m.players) {
         v.setUint16(o, p.id, true);
-        v.setUint8(o + 2, (p.team === 'ghosts' ? 1 : 0) | (p.crouched ? 2 : 0) | (p.alive ? 4 : 0) | (p.reloading ? 8 : 0));
+        v.setUint8(o + 2, (p.team === 'ghosts' ? 1 : 0) | (p.crouched ? 2 : 0) | (p.alive ? 4 : 0) | (p.reloading ? 8 : 0) |
+            (p.switching ? 16 : 0) | (p.aiming ? 32 : 0));
         v.setUint8(o + 3, Math.round(unit(p.vis) * 255));
         for (let k = 0; k < 3; k++) v.setFloat32(o + 4 + k * 4, p.pos[k], true);
         // Yaw accumulates without bound on the client; wrap it into one turn before packing.
         v.setInt16(o + 16, Math.round(Math.atan2(Math.sin(p.yaw), Math.cos(p.yaw)) * ANGLE_SCALE), true);
         v.setInt8(o + 18, Math.round(Math.max(-1, Math.min(1, p.pitch / (Math.PI / 2))) * 127));
+        v.setUint8(o + 19, p.weapon);
         o += SNAP_PLAYER_BYTES;
     }
     return out;
 }
 
+function decodeLoadout(v: DataView): LoadoutState {
+    const guns: GunState[] = [];
+    for (let i = 0; i < WEAPON_COUNT; i++) {
+        const o = SNAP_GUNS + 7 * i;
+        guns.push({
+            mag: v.getUint8(o), reserve: v.getUint8(o + 1), reload: v.getUint8(o + 2), cooldown: v.getUint8(o + 3),
+            burst: v.getUint8(o + 4), sinceShot: v.getUint8(o + 5), shots: v.getUint8(o + 6)
+        });
+    }
+    return {
+        slot: v.getUint8(SNAP_LOADOUT), prev: v.getUint8(SNAP_LOADOUT + 1), draw: v.getUint8(SNAP_LOADOUT + 2),
+        aim: v.getUint8(SNAP_LOADOUT + 3), trigger: v.getUint8(SNAP_LOADOUT + 4), guns
+    };
+}
+
 function decodeSnap(v: DataView): ServerMsg {
     const flags = v.getUint8(13);
-    const count = v.getUint8(84);
+    const count = v.getUint8(SNAP_COUNT);
     if (v.byteLength < SNAP_HEAD_BYTES + count * SNAP_PLAYER_BYTES) throw new Error('truncated snapshot');
     const players: PlayerSnap[] = [];
     let o = SNAP_HEAD_BYTES;
@@ -237,6 +288,9 @@ function decodeSnap(v: DataView): ServerMsg {
             crouched: (f & 2) !== 0,
             alive: (f & 4) !== 0,
             reloading: (f & 8) !== 0,
+            switching: (f & 16) !== 0,
+            aiming: (f & 32) !== 0,
+            weapon: v.getUint8(o + 19),
             vis: v.getUint8(o + 3) / 255,
             pos: [v.getFloat32(o + 4, true), v.getFloat32(o + 8, true), v.getFloat32(o + 12, true)],
             yaw: v.getInt16(o + 16, true) / ANGLE_SCALE,
@@ -259,12 +313,8 @@ function decodeSnap(v: DataView): ServerMsg {
             pos: [v.getFloat64(19, true), v.getFloat64(27, true), v.getFloat64(35, true)],
             vel: [v.getFloat64(43, true), v.getFloat64(51, true), v.getFloat64(59, true)],
             respawnAt: v.getFloat64(67, true),
-            gun: {
-                mag: v.getUint8(75), reserve: v.getUint8(76), reload: v.getUint8(77),
-                cooldown: v.getUint8(78), burst: v.getUint8(79), sinceShot: v.getUint8(80),
-                shots: v.getUint8(81)
-            },
-            knife: { cooldown: v.getUint8(82), windup: v.getUint8(83) }
+            loadout: decodeLoadout(v),
+            knife: { cooldown: v.getUint8(SNAP_KNIFE), windup: v.getUint8(SNAP_KNIFE + 1) }
         },
         players
     };
