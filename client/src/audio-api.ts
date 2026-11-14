@@ -47,6 +47,13 @@ export interface AudioEngine {
     step(pos: Vec3, loud: number, isLocal: boolean): void;
     /** A silenced gunshot at the shooter's position. */
     gunshot(pos: Vec3, isLocal: boolean): void;
+    /**
+     * A defender started a reload at `pos`: one call covers the whole ~2.2 s sequence (magazine out,
+     * magazine in, bolt), scheduled from the moment of the call.
+     */
+    reload(pos: Vec3, isLocal: boolean): void;
+    /** The local player pulled the trigger on an empty gun with no spare rounds (non-positional click). */
+    dryFire(): void;
     /** A bullet striking a surface at `pos`. */
     impact(pos: Vec3): void;
     /** A knife being drawn back: the warning a defender gets before a slash. */

@@ -19,6 +19,8 @@ export interface RemoteView {
      * about 0.35 at a run, with brief spikes (to 0.6-0.8) when swinging a knife or taking damage.
      */
     vis: number;
+    /** A defender in the middle of a reload (about 2.2 s); always false for ghosts. */
+    reloading: boolean;
 }
 
 export interface LocalView {
@@ -41,6 +43,17 @@ export interface LocalView {
     action: number;
     /** True while the scoreboard key (Tab) is held. */
     showScores: boolean;
+    /** Defender gun (ignore for ghosts): rounds in the magazine, magazine capacity, spare rounds. */
+    mag: number;
+    magSize: number;
+    reserve: number;
+    /**
+     * Reload progress 0..1 while reloading (0 at the start, nearing 1 as rounds go in); exactly 0 when
+     * not reloading. Predicted, so it can jump back to 0 if the reload is cancelled (death, round reset).
+     */
+    reload: number;
+    /** Current spread cone half-angle in radians (where shots may land around the crosshair centre). */
+    spread: number;
 }
 
 /** The state of the match for this frame. */

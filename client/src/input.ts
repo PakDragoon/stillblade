@@ -48,6 +48,11 @@ export class Input {
         return this.keys.has('KeyE');
     }
 
+    /** R: reload. */
+    get reload(): boolean {
+        return this.keys.has('KeyR');
+    }
+
     /** Tab: scoreboard. */
     get scores(): boolean {
         return this.keys.has('Tab');

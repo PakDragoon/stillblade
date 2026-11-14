@@ -1,6 +1,6 @@
 import * as pc from 'playcanvas';
 import {
-    EYE_HEIGHT, EYE_HEIGHT_CROUCHED, HEAD_ZONE, HULL_HALF_WIDTH, HULL_HEIGHT, HULL_HEIGHT_CROUCHED
+    EYE_HEIGHT, EYE_HEIGHT_CROUCHED, HEAD_ZONE, HULL_HALF_WIDTH, HULL_HEIGHT, HULL_HEIGHT_CROUCHED, RELOAD_MS
 } from '@shared/constants';
 import type { RosterEntry, Team } from '@shared/protocol';
 import { ROUNDS_TO_WIN, type Phase, type RoundReason } from '@shared/rules';
@@ -38,6 +38,29 @@ const KNIFE_MODEL_BACK = 0.055;
 const SWAY_POS = 0.0022;
 const SWAY_ROT = 0.45;
 const SWAY_RATE = 1.3;
+/**
+ * Viewmodel reload pose, blended in by reload progress: offset (m, camera space) and Euler offset
+ * (degrees: pitch, yaw, roll). Lowered, pulled in toward the centre and canted so the magazine well
+ * faces the support hand, muzzle tipped slightly up.
+ */
+const RELOAD_POS = [-0.05, -0.085, 0.05];
+const RELOAD_ROT = [12, 16, -28];
+/** Fractions of the reload spent dipping in and coming back up; return rate (1/s) on cancel. */
+const RELOAD_IN = 0.2;
+const RELOAD_OUT = 0.2;
+const RELOAD_RETURN = 12;
+/** Progress at which the magazine seats (1.4 s) and the bolt closes (about 2.05 s) of the reload (sounds in audio.ts). */
+const RELOAD_SEAT_AT = 1400 / RELOAD_MS;
+const RELOAD_BOLT_AT = 2050 / RELOAD_MS;
+
+/** A smooth 0..1..0 bump of half-width `w` centred on `c`. */
+function bump(x: number, c: number, w: number): number {
+    const d = Math.abs(x - c) / w;
+    if (d >= 1) return 0;
+    const u = 1 - d;
+    return u * u * (3 - 2 * u);
+}
+
 /** A remote shot's eye position must be this close to a defender's (m) to count as theirs. */
 const SHOOTER_MATCH = 1.6;
 const REMOTE_FLASH_COUNT = 4;
@@ -232,6 +255,26 @@ const HUD_CSS = `
 #sb-vis .fill { height: 100%; width: 0; background: #b9d4ff; }
 #sb-vis.hidden .state { color: #8fe3a8; }
 #sb-vis.exposed .state { color: #ff5a4a; } #sb-vis.exposed .fill { background: #ff5a4a; }
+#sb-ammo { right: 22px; bottom: 14px; display: none; text-align: right; white-space: nowrap; }
+#sb-ammo .mag { font: 700 52px/1 system-ui, sans-serif; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+#sb-ammo .res { margin-left: 6px; font: 600 20px/1 system-ui, sans-serif; opacity: .7; font-variant-numeric: tabular-nums; }
+#sb-ammo.low .mag { color: #ffb43b; }
+#sb-ammo.empty .mag { color: #ff3b3b; }
+#sb-ammo.reloading .mag { opacity: .45; }
+#sb-ammo .rl { display: none; margin-top: 4px; font: 800 11px/1 system-ui, sans-serif; letter-spacing: .3em; }
+#sb-ammo.hint .rl, #sb-ammo.reloading .rl, #sb-ammo.out .rl { display: block; }
+#sb-ammo.hint .rl { opacity: .8; } #sb-ammo.out .rl { color: #ff3b3b; }
+#sb-ammo .bar { display: none; width: 150px; height: 4px; margin: 5px 0 0 auto; background: rgba(255,255,255,.18);
+    box-shadow: 0 0 2px #000; }
+#sb-ammo.reloading .bar { display: block; }
+#sb-ammo .fill { height: 100%; width: 0; background: #ffd36b; }
+#sb-xhair { left: 50%; top: 50%; width: 0; height: 0; display: none; --g: 4px; mix-blend-mode: difference;
+    text-shadow: none; }
+#sb-xhair i { position: absolute; background: #e8eaed; }
+#sb-xhair i:nth-child(1), #sb-xhair i:nth-child(2) { width: 2px; height: 6px; left: -1px; }
+#sb-xhair i:nth-child(3), #sb-xhair i:nth-child(4) { width: 6px; height: 2px; top: -1px; }
+#sb-xhair i:nth-child(1) { bottom: var(--g); } #sb-xhair i:nth-child(2) { top: var(--g); }
+#sb-xhair i:nth-child(3) { right: var(--g); } #sb-xhair i:nth-child(4) { left: var(--g); }
 #sb-disc { top: 100px; left: 50%; transform: translateX(-50%); padding: 6px 14px; display: none;
     background: rgba(160,20,20,.85); font: 700 15px/1.2 system-ui, sans-serif; letter-spacing: .15em; }
 #sb-hit { left: 50%; top: 50%; width: 0; height: 0; opacity: 0; transform: rotate(45deg); }
@@ -609,6 +652,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     let swingT = -1;
     let windup = 0.2;
     let vmTeam: Team | null = null;
+    /** Weight 0..1 of the gun's reload pose (eased back down when a reload is cancelled). */
+    let reloadW = 0;
 
     const setKnifePose = (a: number[], b: number[], t: number): void => {
         const u = 1 - t;
@@ -616,12 +661,13 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         knife.setLocalEulerAngles(a[3] * u + b[3] * t, a[4] * u + b[4] * t, a[5] * u + b[5] * t);
     };
 
-    const updateViewmodel = (dt: number, team: Team): void => {
+    const updateViewmodel = (dt: number, team: Team, reload: number): void => {
         if (team !== vmTeam) {
             vmTeam = team;
             recoilT = 0;
             flashT = 0;
             swingT = -1;
+            reloadW = 0;
         }
         const defender = team === 'defenders';
         gun.enabled = localAlive && defender;
@@ -636,9 +682,26 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             const s = 1 - 0.7 * k;
             const sx = Math.sin(time * SWAY_RATE) * SWAY_POS * s;
             const sy = Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6 * s;
-            gun.setLocalPosition(gunPos.x + sx, gunPos.y + sy + 0.012 * e, gunPos.z + 0.035 * e);
-            gun.setLocalEulerAngles(gunPitch + 4 * e + sy * 120, gunYaw + Math.sin(time * SWAY_RATE * 0.7) * SWAY_ROT * s,
-                gunRoll + sx * 160);
+            // Reload: state-driven from the progress alone. Dip and cant in over the first 20 %, hold low,
+            // come back up over the last 20 %; a cancelled reload (progress back to 0) eases home.
+            const p = reload > 0 ? Math.min(1, reload) : 0;
+            let target = 0;
+            if (p > 0) {
+                const x = p < RELOAD_IN ? p / RELOAD_IN : p > 1 - RELOAD_OUT ? (1 - p) / RELOAD_OUT : 1;
+                target = x * x * (3 - 2 * x);
+            }
+            reloadW = target >= reloadW ? target : reloadW + (target - reloadW) * (1 - Math.exp(-RELOAD_RETURN * dt));
+            const w = reloadW;
+            // Small jolts as the magazine seats and the bolt slams home (zero when not reloading).
+            const jolt = p > 0 ? bump(p, RELOAD_SEAT_AT, 0.05) + 0.7 * bump(p, RELOAD_BOLT_AT, 0.04) : 0;
+            gun.setLocalPosition(
+                gunPos.x + sx + RELOAD_POS[0] * w,
+                gunPos.y + sy + 0.012 * e + RELOAD_POS[1] * w + 0.012 * jolt,
+                gunPos.z + 0.035 * e + RELOAD_POS[2] * w);
+            gun.setLocalEulerAngles(
+                gunPitch + 4 * e + sy * 120 + RELOAD_ROT[0] * w + 5 * jolt,
+                gunYaw + Math.sin(time * SWAY_RATE * 0.7) * SWAY_ROT * s + RELOAD_ROT[1] * w,
+                gunRoll + sx * 160 + RELOAD_ROT[2] * w);
             return;
         }
         if (swingT < 0) {
@@ -783,6 +846,23 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     const teamEl = infoEl.appendChild(document.createElement('span'));
     const idEl = infoEl.appendChild(document.createElement('span'));
     const pingEl = infoEl.appendChild(document.createElement('span'));
+    // Ammo counter (bottom right, defenders only): magazine big, reserve small, then a state line.
+    const ammoEl = div('sb-ammo');
+    const magEl = span(ammoEl, 'mag');
+    const resEl = span(ammoEl, 'res');
+    const reloadLabel = new Slot(div('', ammoEl, 'rl'));
+    const reloadFill = div('', div('', ammoEl, 'bar'), 'fill');
+    // Spread ticks around the crosshair dot (defenders only).
+    const xhairEl = div('sb-xhair');
+    for (let i = 0; i < 4; i++) xhairEl.appendChild(document.createElement('i'));
+    /** CSS px per unit of tan(angle) at the screen centre; recomputed on resize. */
+    let pxPerTan = 0;
+    const measureXhair = (): void => {
+        const h = app.graphicsDevice.canvas.clientHeight || window.innerHeight;
+        pxPerTan = (h / 2) / Math.tan((cam.fov / 2) * Math.PI / 180);
+        shownGap = -1;
+    };
+    window.addEventListener('resize', measureXhair);
     const discEl = div('sb-disc');
     discEl.textContent = 'DISCONNECTED';
     const hitEl = div('sb-hit');
@@ -862,6 +942,14 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     let shownAlive: boolean | null = null;
     let shownVisPct = -1;
     let shownVisState = -1;
+    let shownArmed = false;
+    let shownMag = -1;
+    let shownReserve = -1;
+    /** Ammo state key: (0 normal, 1 low, 2 empty) + 3 * (0 nothing, 1 reloading, 2 reload hint, 3 out of ammo). */
+    let shownAmmoKey = -1;
+    let shownReloadPct = -1;
+    let shownGap = -1;
+    measureXhair();
 
     const updateHud = (dt: number, local: LocalView, phase: Phase): void => {
         const hp = Math.max(0, Math.round(local.health));
@@ -931,6 +1019,40 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                 line.el.style.opacity = (1 - (line.age - KILLFEED_LIFE) / KILLFEED_FADE).toFixed(2);
             }
         }
+    };
+
+    const AMMO_CLS = ['', 'low', 'empty'];
+    const AMMO_STATE_CLS = ['', ' reloading', ' hint', ' out'];
+    const AMMO_LABEL = ['', 'RELOADING', 'R  RELOAD', 'NO AMMO'];
+
+    const updateAmmo = (local: LocalView): void => {
+        const armed = local.alive && local.team === 'defenders';
+        if (armed !== shownArmed) {
+            shownArmed = armed;
+            ammoEl.style.display = armed ? 'block' : 'none';
+            xhairEl.style.display = armed ? 'block' : 'none';
+        }
+        if (!armed) return;
+        const mag = local.mag, reserve = local.reserve;
+        if (mag !== shownMag) { shownMag = mag; magEl.textContent = String(mag); }
+        if (reserve !== shownReserve) { shownReserve = reserve; resEl.textContent = `/ ${reserve}`; }
+        const reloading = local.reload > 0;
+        const level = mag <= 0 ? 2 : mag <= local.magSize / 4 ? 1 : 0;
+        const state = reloading ? 1 : level > 0 && reserve > 0 ? 2 : mag <= 0 ? 3 : 0;
+        const key = level + 3 * state;
+        if (key !== shownAmmoKey) {
+            shownAmmoKey = key;
+            ammoEl.className = `sb-ui ${AMMO_CLS[level]}${AMMO_STATE_CLS[state]}`;
+            reloadLabel.set(AMMO_LABEL[state]);
+            shownReloadPct = -1;
+        }
+        if (reloading) {
+            const pct = Math.round(Math.min(1, local.reload) * 100);
+            if (pct !== shownReloadPct) { shownReloadPct = pct; reloadFill.style.width = `${pct}%`; }
+        }
+        // Spread ticks: the cone's half-angle projected to CSS pixels, outside the 4 px dot.
+        const gap = 3 + Math.round(Math.tan(Math.max(0, local.spread)) * pxPerTan);
+        if (gap !== shownGap) { shownGap = gap; xhairEl.style.setProperty('--g', `${gap}px`); }
     };
 
     const updateMatchBar = (local: LocalView, match: MatchView): void => {
@@ -1086,10 +1208,11 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             ghostMat.setParameter('uTime', time);
             ghostSkinMat.setParameter('uTime', time);
             updateRemotes(dt, remotes);
-            updateViewmodel(dt, local.team);
+            updateViewmodel(dt, local.team, local.reload);
             updateEffects(dt);
             updateBomb(dt, match);
             updateHud(dt, local, match.phase);
+            updateAmmo(local);
             updateMatchBar(local, match);
             updateBanner(dt, local, match);
             updateUse(local);

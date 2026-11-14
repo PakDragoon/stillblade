@@ -13,7 +13,9 @@
  *                           -> occlusion(LowPass) -> occlusion(Gain) -> fade(Gain) -> Panner(HRTF) -> master
  *   master(Gain 0.8) -> DynamicsCompressor (gentle limiter) -> destination
  */
-import { BREATH_RANGE, EYE_HEIGHT, GHOST_MAX_VIS, KNIFE_SOUND_RANGE, STEP_RANGE } from '@shared/constants';
+import {
+    BREATH_RANGE, EYE_HEIGHT, GHOST_MAX_VIS, KNIFE_SOUND_RANGE, RELOAD_SOUND_RANGE, STEP_RANGE
+} from '@shared/constants';
 import { rayWorld } from '@shared/raycast';
 import type { Box, Vec3 } from '@shared/types';
 import type { AudioEngine, BombView, CreateAudio, CueKind, ListenerView } from './audio-api';
@@ -338,6 +340,67 @@ const synthSlash: Synth = (v, t, _x, hit) => {
     env(body.gain, th, 0.002, 0.6, 0.07);
 };
 
+/** A small metallic click at `t`: tight band-passed white noise plus a faint inharmonic ping. */
+function metalClick(v: Voice, t: number, freq: number, level: number): void {
+    const c = v.gain(v.input);
+    v.noise(v.bank.white, t, 0.03, v.filter('bandpass', freq * jitter(0.05), 5, c));
+    env(c.gain, t, 0.0005, level, 0.014);
+    const ping = v.gain(v.input);
+    v.osc('sine', freq * 0.71 * jitter(0.04), t, 0.06, ping);
+    v.osc('sine', freq * 1.13 * jitter(0.04), t, 0.06, ping);
+    env(ping.gain, t, 0.0005, level * 0.08, 0.045);
+}
+
+/** A dull clunk at `t`: low-passed brown noise and a short falling sine. */
+function clunk(v: Voice, t: number, freq: number, level: number): void {
+    const body = v.gain(v.input);
+    v.noise(v.bank.brown, t, 0.07, v.filter('lowpass', 700, 0.9, body));
+    env(body.gain, t, 0.002, level, 0.05);
+    const knock = v.gain(v.input);
+    const o = v.osc('sine', freq, t, 0.08, knock);
+    o.frequency.exponentialRampToValueAtTime(freq * 0.55, t + 0.05);
+    env(knock.gain, t, 0.002, level * 0.6, 0.05);
+}
+
+/** A short metal-on-metal scrape from `t`: band-passed white noise sweeping `f0` -> `f1`. */
+function scrape(v: Voice, t: number, dur: number, f0: number, f1: number, level: number): void {
+    const s = v.gain(v.input);
+    const bp = v.filter('bandpass', f0, 2.5, s);
+    bp.frequency.setValueAtTime(f0, t);
+    bp.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    v.noise(v.bank.white, t, dur + 0.02, bp);
+    s.gain.setValueAtTime(0, t);
+    s.gain.linearRampToValueAtTime(level, t + dur * 0.3);
+    s.gain.linearRampToValueAtTime(0, t + dur);
+}
+
+/**
+ * Reload (~2.2 s, all scheduled from `t`): magazine release click and slide out at 0.3 s, magazine
+ * seated (clunk + latch click) at 1.4 s, bolt pulled back and slammed home at 1.9 s. Quiet by design.
+ */
+const synthReload: Synth = (v, t) => {
+    const out = t + 0.3 + Math.random() * 0.03;
+    metalClick(v, out, 3400, 0.5);
+    scrape(v, out + 0.02, 0.09, 1500, 900, 0.18);
+    const seat = t + 1.4 + Math.random() * 0.03;
+    scrape(v, seat - 0.06, 0.06, 900, 1600, 0.14);
+    clunk(v, seat, 190, 0.55);
+    metalClick(v, seat + 0.012, 2800, 0.45);
+    const bolt = t + 1.9;
+    scrape(v, bolt, 0.07, 1600, 3200, 0.22);
+    metalClick(v, bolt + 0.07, 3800, 0.4);
+    metalClick(v, bolt + 0.17, 3000, 0.6);
+    clunk(v, bolt + 0.17, 230, 0.45);
+};
+
+/** Dry fire: a lone hammer click, crisp and small. */
+const synthDry: Synth = (v, t) => {
+    metalClick(v, t, 4200, 0.7);
+    const tick = v.gain(v.input);
+    v.noise(v.bank.brown, t, 0.03, v.filter('bandpass', 900, 1.5, tick));
+    env(tick.gain, t, 0.001, 0.25, 0.018);
+};
+
 /** Hurt: a short, felt-more-than-heard low thump. */
 const synthHurt: Synth = (v, t) => {
     const thump = v.gain(v.input);
@@ -567,6 +630,9 @@ const GUN_CFG: ShotCfg = { range: GUN_RANGE, ref: 2, hrtf: false, occLift: 0 };
 const IMPACT_CFG: ShotCfg = { range: IMPACT_RANGE, ref: 1, hrtf: false, occLift: 0 };
 const KNIFE_CFG: ShotCfg = { range: KNIFE_SOUND_RANGE, ref: 1, hrtf: true, occLift: 0 };
 const BOMB_CFG: ShotCfg = { range: BOMB_RANGE, ref: 2, hrtf: true, occLift: 0 };
+/** Reload: emitted from about hand height (RELOAD_LIFT above the feet); HRTF so it can be placed. */
+const RELOAD_LIFT = 1.0;
+const RELOAD_CFG: ShotCfg = { range: RELOAD_SOUND_RANGE, ref: 1, hrtf: true, occLift: 0 };
 /** Unused by non-positional one-shots except as a placeholder. */
 const CUE_CFG: ShotCfg = { range: 1, ref: 1, hrtf: false, occLift: 0 };
 /** Scratch config for footsteps, whose range depends on loudness. */
@@ -591,6 +657,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
     let beepAcc = 0;
     let beeping = false;
     const beepPos: Vec3 = [0, 0, 0];
+    const reloadPos: Vec3 = [0, 0, 0];
 
     // ---- occlusion --------------------------------------------------------------------------
 
@@ -931,6 +998,20 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
 
         gunshot(pos: Vec3, isLocal: boolean): void {
             oneShot(isLocal ? null : pos, GUN_CFG, isLocal ? 0.7 : 1, synthGun, 0, false);
+        },
+
+        reload(pos: Vec3, isLocal: boolean): void {
+            if (isLocal) {
+                oneShot(null, RELOAD_CFG, 0.45, synthReload, 0, false);
+                return;
+            }
+            // The event carries the feet position: the magazine is worked at about hand height.
+            reloadPos[0] = pos[0]; reloadPos[1] = pos[1] + RELOAD_LIFT; reloadPos[2] = pos[2];
+            oneShot(reloadPos, RELOAD_CFG, 1, synthReload, 0, false);
+        },
+
+        dryFire(): void {
+            oneShot(null, CUE_CFG, 0.5, synthDry, 0, false);
         },
 
         impact(pos: Vec3): void {

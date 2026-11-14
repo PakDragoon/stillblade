@@ -27,7 +27,8 @@ import { instantiateWeapon, type WeaponModel } from './weapons';
  * Weapons (weapons.ts) hang from the "socket_gun" / "socket_knife" nodes on the right wrist bone:
  *   - Defenders carry the gun (same vertex-colour material as the body) and hold it with the "aim" pose on
  *     the upper layer at full weight; a remote shot plays "shoot" (a recoil that ends on the aim pose).
- *     After the animation is applied, the spine is bent by the aim pitch.
+ *     After the animation is applied, the spine is bent by the aim pitch; while RemoteView.reloading the same
+ *     bones also dip the gun to a low hold (procedural, no clip).
  *   - Ghosts carry the knife, drawn with the body's own material and per-instance parameters, so it is
  *     exactly as visible as the body (and disabled with it when the player is culled).
  * Each character is therefore at most two draw calls: the skinned body and one weapon.
@@ -88,6 +89,10 @@ const UPPER_ROOT_BONE = 'Abdomen';
 const PITCH_BONES = ['Abdomen', 'Chest', 'Neck', 'UpperArm.R', 'UpperArm.L'];
 const PITCH_SHARE = [0.2, 0.25, 0.3, 0.55, 0.55];
 const PITCH_LIMIT = 1.1;
+// Reload (defenders, RemoteView.reloading): the same bones dip the gun to a low, canted-in hold. Radians
+// per bone (negative tips forward/down), blended in and out over RELOAD_BLEND seconds. No clip, no asset.
+const RELOAD_DIP = [-0.05, -0.12, -0.15, -0.45, -0.45];
+const RELOAD_BLEND = 0.2;
 const DEG_PER_RAD = 180 / Math.PI;
 
 // ---------------------------------------------------------------------------------------------
@@ -265,6 +270,10 @@ export class Character {
     private knife: pc.Entity | null = null;
     private knifeMi: pc.MeshInstance | null = null;
     private readonly pitchBones: pc.GraphNode[] = [];
+    private readonly pitchShare: number[] = [];
+    private readonly reloadDip: number[] = [];
+    /** Weight 0..1 of the reload dip. */
+    private reloadW = 0;
     private readonly qa = new pc.Quat();
     private readonly qb = new pc.Quat();
 
@@ -305,9 +314,12 @@ export class Character {
         } else {
             this.upper = null;
         }
-        for (const name of PITCH_BONES) {
-            const b = e.findByName(name);
-            if (b) this.pitchBones.push(b);
+        for (let i = 0; i < PITCH_BONES.length; i++) {
+            const b = e.findByName(PITCH_BONES[i]);
+            if (!b) continue;
+            this.pitchBones.push(b);
+            this.pitchShare.push(PITCH_SHARE[i]);
+            this.reloadDip.push(RELOAD_DIP[i]);
         }
         this.state = S_IDLE;
     }
@@ -397,15 +409,18 @@ export class Character {
         return this.armed && this.gun ? this.gun.getRotation() : null;
     }
 
-    /** Bend the spine by the aim pitch. Must run after the animation has been applied this frame. */
-    private applyPitch(pitch: number): void {
+    /**
+     * Bend the spine by the aim pitch, plus the reload dip at weight `rw`. Must run after the animation
+     * has been applied this frame.
+     */
+    private applyPitch(pitch: number, rw: number): void {
         const p = pitch > PITCH_LIMIT ? PITCH_LIMIT : pitch < -PITCH_LIMIT ? -PITCH_LIMIT : pitch;
-        if (p > -1e-3 && p < 1e-3) return;
+        if (p > -1e-3 && p < 1e-3 && rw <= 0) return;
         const right = this.entity.parent ? this.entity.parent.right : this.entity.right;
         for (let i = 0; i < this.pitchBones.length; i++) {
             const b = this.pitchBones[i];
             // Positive angle about +right tips -Z (forward) up: positive pitch looks up.
-            this.qa.setFromAxisAngle(right, p * PITCH_SHARE[i] * DEG_PER_RAD);
+            this.qa.setFromAxisAngle(right, (p * this.pitchShare[i] + rw * this.reloadDip[i]) * DEG_PER_RAD);
             this.qb.copy(b.getRotation());
             this.qa.mul(this.qb);
             b.setRotation(this.qa);
@@ -421,6 +436,7 @@ export class Character {
         this.upperT = -1;
         this.spikeT = -1;
         this.prevVis = 0;
+        this.reloadW = 0;
         this.holdPose();
         this.go(S_IDLE, 0);
     }
@@ -468,6 +484,7 @@ export class Character {
                 this.alive = false;
                 this.deadT = 0;
                 if (this.upper) { this.upper.weight = 0; this.upperT = -1; }
+                this.reloadW = 0;
                 this.anim.speed = 1;
                 this.go(S_DEATH, 0.1);
             } else {
@@ -524,7 +541,13 @@ export class Character {
                 this.upperT = -1;
             }
         }
-        if (this.armed) this.applyPitch(v.pitch);
+        if (this.armed) {
+            const step = dt / RELOAD_BLEND;
+            const rw = v.reloading ? Math.min(1, this.reloadW + step) : Math.max(0, this.reloadW - step);
+            this.reloadW = rw;
+            // Smoothstep so the dip starts and ends gently.
+            this.applyPitch(v.pitch, rw * rw * (3 - 2 * rw));
+        }
         return true;
     }
 }
