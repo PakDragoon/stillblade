@@ -14,13 +14,13 @@ describe('wire format', () => {
         expect(wire).toBeInstanceOf(Uint8Array);
         expect((wire as Uint8Array).byteLength).toBe(24);
         // Exact equality matters: the server must simulate the very inputs the client predicted with.
-        expect(decodeClient(wire as Uint8Array).cmd).toEqual(cmd);
+        expect(decodeClient(wire as Uint8Array)).toEqual({ type: "cmd", cmd: cmd });
     });
 
     it('round-trips every command flag on its own', () => {
         for (const flag of ['jump', 'walk', 'crouch', 'fire', 'use', 'reload'] as const) {
             const only: NetCmd = { ...cmd, jump: false, walk: false, crouch: false, fire: false, use: false, reload: false, [flag]: true };
-            expect(decodeClient(encodeClient({ type: 'cmd', cmd: only }) as Uint8Array).cmd).toEqual(only);
+            expect(decodeClient(encodeClient({ type: 'cmd', cmd: only }) as Uint8Array)).toEqual({ type: "cmd", cmd: only });
         }
     });
 
@@ -28,7 +28,7 @@ describe('wire format', () => {
         const wire = encodeClient({ type: 'cmd', cmd }) as Uint8Array;
         const padded = new Uint8Array(64);
         padded.set(wire, 10);
-        expect(decodeClient(padded.subarray(10, 34)).cmd).toEqual(cmd);
+        expect(decodeClient(padded.subarray(10, 34))).toEqual({ type: "cmd", cmd: cmd });
     });
 
     it('rejects malformed commands', () => {
