@@ -2,6 +2,22 @@
 
 This guide puts Stillblade on the internet so other people can play it. It assumes no hosting experience. Read it once end to end before starting.
 
+## First friends test: your steps in order
+
+Nothing here is assumed. Each step points to the part below that explains it in detail. Only you can do the ones that involve accounts or money.
+
+1. **Get the latest code onto GitHub's `main` branch** (merge and push this work). The server is built from `main`, and the GitHub Pages workflow only builds from `main`.
+2. **Buy a domain, or pick a free name** (see "Why the server needs a name"). You need one name such as `play.example.com`.
+3. **Rent a small Ubuntu VPS** (1 GB RAM is enough) and note its public IP address (B1 and B2). Make an SSH key first if you have none.
+4. **Point the name at the VPS** with a DNS `A` record and wait until `nslookup play.example.com` prints the VPS IP (B6).
+5. **Log in, create your user, switch on the firewall, install Docker** (B3, B4, B5).
+6. **Clone the repository on the VPS and fill in `deploy/.env`** (B7, B8). `SB_DOMAIN` is your server name. `SB_ALLOWED_ORIGINS` is `https://pakdragoon.github.io`.
+7. **Start the server** with `docker compose up -d --build` from the `deploy` folder, then open `https://play.example.com/health` in a browser. You should see `{"ok":true,...}` (B9, B10). The server log (`docker compose logs game`) must say `maps greybox, warehouse (default warehouse)`.
+8. **Publish the client** (Part A): on GitHub turn on Pages with source "GitHub Actions", add the repository variable `SERVER_URL` = `wss://play.example.com`, then run the "Deploy client to GitHub Pages" workflow from the Actions tab.
+9. **Play**: open `https://pakdragoon.github.io/stillblade/`, pick a map and a room code, and send friends the same link with the same room code. A direct link that picks the map and room looks like `https://pakdragoon.github.io/stillblade/?map=warehouse&room=ABCD`. Maps available: `greybox` (shown as "Test Map 1") and `warehouse`.
+
+If something fails, see Troubleshooting at the bottom.
+
 ## The two pieces
 
 Stillblade is two separate programs, and they are hosted in different places:
@@ -351,7 +367,7 @@ docker image prune -f
 ## Part C: check it works end to end
 
 1. Open `https://<your-github-username>.github.io/<repository-name>/` in a browser.
-2. Join a match. Open the same page in a second browser or on another device and join the same room; you should see each other.
+2. Join a match on each map (use the Map menu, or add `?map=greybox` / `?map=warehouse` to the address). Open the same page in a second browser or on another device and join the same room code; you should see each other. The map is chosen by whoever creates the room; later joiners get that room's map.
 3. If it does not connect, open the browser's developer tools (F12), look at the **Console** and the **Network** tab (filter by "WS"), and use the troubleshooting list below.
 4. On the server, `docker compose logs -f game` should show lines like `player 1 joined`.
 
@@ -370,6 +386,8 @@ docker image prune -f
 **The health check works but the game says it cannot reach the server.** Check the `SERVER_URL` variable has no typo and no trailing path, and that the Pages workflow was re-run after you set it. Hard-refresh the page (Ctrl+F5) to bypass the browser cache.
 
 **`docker compose up` complains that `SB_DOMAIN` or `SB_ALLOWED_ORIGINS` is not set.** You are not in the `deploy` folder, or `deploy/.env` does not exist or misspells the names. Compare with `.env.example`.
+
+**`docker compose logs game` shows `Cannot use import statement outside a module`.** You are running an old image. Update the code (`git pull`) and rebuild with `docker compose up -d --build`.
 
 **The server runs out of memory during `--build`.** Very small VPS plans can struggle with `npm ci` during the build. Add a swap file (search "Ubuntu add swap file") or pick a plan with more RAM.
 
