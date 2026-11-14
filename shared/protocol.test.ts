@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createGunState } from './gun';
+import { createKnifeState } from './knife';
 import { decodeClient, decodeServer, encodeClient, encodeServer, type NetCmd, type ServerMsg } from './protocol';
 
 const cmd: NetCmd = {
@@ -42,7 +43,8 @@ describe('wire format', () => {
             me: {
                 team: 'ghosts', action: 0.5, vis: 0.35, pos: [1.23456789012345, 0, -19.87654321098765],
                 vel: [5.2, -3.3333333333, 0.000001], onGround: true, crouched: false, health: 66, alive: true,
-                respawnAt: 0, gun: { mag: 17, reserve: 90, reload: 132, cooldown: 6, burst: 29, sinceShot: 255 }
+                respawnAt: 0, gun: { mag: 17, reserve: 90, reload: 132, cooldown: 6, burst: 29, sinceShot: 255, shots: 201 },
+                knife: { cooldown: 41, windup: 12 }
             },
             players: [
                 { id: 7, team: 'defenders', pos: [3.5, 1.2, -8.25], yaw: 9.5, pitch: -0.6, crouched: true, alive: true, vis: 1, reloading: true },
@@ -50,7 +52,7 @@ describe('wire format', () => {
             ]
         };
         const wire = encodeServer(snap) as Uint8Array;
-        expect(wire.byteLength).toBe(82 + 2 * 19);
+        expect(wire.byteLength).toBe(85 + 2 * 19);
         const back = decodeServer(wire);
         if (back.type !== 'snap') throw new Error('wrong type');
 
@@ -59,6 +61,7 @@ describe('wire format', () => {
         expect(back.me.pos).toEqual(snap.me.pos); // float64: prediction replays from this exactly
         expect(back.me.vel).toEqual(snap.me.vel);
         expect(back.me.gun).toEqual(snap.me.gun); // the gun is predicted too: integers, exact
+        expect(back.me.knife).toEqual(snap.me.knife); // so is the knife timing
         expect(back.me).toMatchObject({ team: 'ghosts', onGround: true, crouched: false, alive: true, health: 66 });
         expect(back.me.action).toBeCloseTo(0.5, 4);
         expect(back.me.vis).toBeCloseTo(0.35, 4);
@@ -77,7 +80,7 @@ describe('wire format', () => {
     it('keeps an acknowledgement of -1 (nothing simulated yet)', () => {
         const back = decodeServer(encodeServer({
             type: 'snap', time: 0, ack: -1, players: [],
-            me: { team: 'defenders', action: 0, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: false, crouched: false, health: 100, alive: false, respawnAt: 0, gun: createGunState() }
+            me: { team: 'defenders', action: 0, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: false, crouched: false, health: 100, alive: false, respawnAt: 0, gun: createGunState(), knife: createKnifeState() }
         }) as Uint8Array);
         expect(back.type === 'snap' && back.ack).toBe(-1);
     });

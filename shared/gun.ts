@@ -23,6 +23,11 @@ export interface GunState {
     burst: number;
     /** Commands since the last shot, capped at 255. */
     sinceShot: number;
+    /**
+     * Shots fired since the spawn, wrapping at 256. Seeds the spread of the next shot: the server
+     * counts it, so a client cannot choose its spread by choosing its command numbers.
+     */
+    shots: number;
 }
 
 /** What `stepGun` did this command. A shot returns its recoil pattern index instead (0 or more). */
@@ -33,7 +38,7 @@ export const GUN_DRY = -3;
 const SINCE_SHOT_CAP = 255;
 
 export function createGunState(): GunState {
-    return { mag: MAG_SIZE, reserve: RESERVE_AMMO, reload: 0, cooldown: 0, burst: 0, sinceShot: SINCE_SHOT_CAP };
+    return { mag: MAG_SIZE, reserve: RESERVE_AMMO, reload: 0, cooldown: 0, burst: 0, sinceShot: SINCE_SHOT_CAP, shots: 0 };
 }
 
 /** Full magazine and reserve, nothing in progress: every spawn (so every round start). */
@@ -44,6 +49,7 @@ export function resetGun(g: GunState): void {
     g.cooldown = 0;
     g.burst = 0;
     g.sinceShot = SINCE_SHOT_CAP;
+    g.shots = 0;
 }
 
 export function copyGunState(dst: GunState, src: GunState): void {
@@ -53,11 +59,12 @@ export function copyGunState(dst: GunState, src: GunState): void {
     dst.cooldown = src.cooldown;
     dst.burst = src.burst;
     dst.sinceShot = src.sinceShot;
+    dst.shots = src.shots;
 }
 
 export function sameGunState(a: GunState, b: GunState): boolean {
     return a.mag === b.mag && a.reserve === b.reserve && a.reload === b.reload &&
-        a.cooldown === b.cooldown && a.burst === b.burst && a.sinceShot === b.sinceShot;
+        a.cooldown === b.cooldown && a.burst === b.burst && a.sinceShot === b.sinceShot && a.shots === b.shots;
 }
 
 function canReload(g: GunState): boolean {
@@ -69,7 +76,8 @@ function canReload(g: GunState): boolean {
  * simulates, by the server and by the client's prediction and replay alike.
  * `armed` is false while the trigger cannot act (round freeze, hands busy planting or defusing);
  * timers still run then. Returns the recoil pattern index of a shot fired this command, or one
- * of GUN_IDLE, GUN_RELOAD (a reload started) and GUN_DRY (an empty click).
+ * of GUN_IDLE, GUN_RELOAD (a reload started) and GUN_DRY (an empty click). After a shot,
+ * `spreadSeed(g)` is the seed for that shot's spread.
  */
 export function stepGun(g: GunState, fire: boolean, reload: boolean, armed: boolean): number {
     if (g.sinceShot < SINCE_SHOT_CAP) {
@@ -99,6 +107,7 @@ export function stepGun(g: GunState, fire: boolean, reload: boolean, armed: bool
         const index = g.burst;
         if (g.burst < RECOIL_SHOTS - 1) g.burst++;
         g.sinceShot = 0;
+        g.shots = (g.shots + 1) & 0xff;
         return index;
     }
     if (canReload(g)) {
@@ -159,13 +168,19 @@ function hash32(x: number): number {
     return (x ^ (x >>> 16)) >>> 0;
 }
 
+/** Spread seed of the shot `stepGun` just fired: the shooter's shot count, which the server keeps. */
+export function spreadSeed(g: GunState): number {
+    return g.shots;
+}
+
 /**
  * Deterministic spread offset for one shot, in radians, written as [pitch, yaw] into `out`.
- * Uniform over a disc of radius `spread`, seeded by the command and the shooter, never by
- * Math.random: the client predicts exactly the offset the server will use.
+ * Uniform over a disc of radius `spread`, seeded by `spreadSeed` and the shooter, never by
+ * Math.random or the client-chosen command number: the client predicts exactly the offset the
+ * server will use but cannot pick it.
  */
-export function spreadOffset(seq: number, shooter: number, spread: number, out: [number, number]): [number, number] {
-    const h = hash32((seq >>> 0) ^ Math.imul(shooter >>> 0, 0x9e3779b9));
+export function spreadOffset(seed: number, shooter: number, spread: number, out: [number, number]): [number, number] {
+    const h = hash32((seed >>> 0) ^ Math.imul(shooter >>> 0, 0x9e3779b9));
     const u = (h & 0xffff) / 65536;
     const v = (h >>> 16) / 65535;
     const r = spread * Math.sqrt(v);
@@ -183,9 +198,9 @@ const scratch: [number, number] = [0, 0];
  * burst, plus spread. The server traces this; the client draws its predicted tracer along it.
  */
 export function shotDirection(
-    yaw: number, pitch: number, index: number, spread: number, seq: number, shooter: number, out: Vec3
+    yaw: number, pitch: number, index: number, spread: number, seed: number, shooter: number, out: Vec3
 ): Vec3 {
-    spreadOffset(seq, shooter, spread, scratch);
+    spreadOffset(seed, shooter, spread, scratch);
     const p = pitch + recoilPitch(index) + scratch[0];
     return viewDir(yaw + recoilYaw(index) + scratch[1], p < -PITCH_LIMIT ? -PITCH_LIMIT : p > PITCH_LIMIT ? PITCH_LIMIT : p, out);
 }

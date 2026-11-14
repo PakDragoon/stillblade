@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
-    DRY_FIRE_TICKS, FIRE_INTERVAL_TICKS, MAG_SIZE, RECOIL_DECAY_TICKS, RECOIL_RECOVER_TICKS, RELOAD_TICKS,
+    DRY_FIRE_TICKS, FIRE_INTERVAL_TICKS, KNIFE_COOLDOWN_TICKS, KNIFE_WINDUP_TICKS, MAG_SIZE, RECOIL_DECAY_TICKS, RECOIL_RECOVER_TICKS, RELOAD_TICKS,
     RESERVE_AMMO, RUN_SPEED, SPREAD_AIR, SPREAD_CROUCHED, SPREAD_STILL, WALK_SPEED
 } from './constants';
 import {
     GUN_DRY, GUN_IDLE, GUN_RELOAD, RECOIL_SHOTS, createGunState, recoilPitch, recoilYaw, resetGun, shotDirection,
-    spreadAngle, spreadOffset, stepGun, type GunState
+    spreadAngle, spreadOffset, spreadSeed, stepGun, type GunState
 } from './gun';
 import { createPlayerState } from './movement';
 import { viewDir } from './raycast';
@@ -94,7 +94,13 @@ describe('ammunition and reload', () => {
 
 describe('gun tuning', () => {
     it('fits every counter in the one byte the snapshot gives it', () => {
-        for (const v of [MAG_SIZE, RESERVE_AMMO, RELOAD_TICKS, DRY_FIRE_TICKS, FIRE_INTERVAL_TICKS]) expect(v).toBeLessThanOrEqual(255);
+        for (const v of [MAG_SIZE, RESERVE_AMMO, RELOAD_TICKS, DRY_FIRE_TICKS, FIRE_INTERVAL_TICKS, RECOIL_SHOTS]) {
+            expect(Number.isInteger(v)).toBe(true);
+            expect(v).toBeGreaterThan(0);
+            expect(v).toBeLessThanOrEqual(255);
+        }
+        // The knife timing travels in one byte each too.
+        for (const v of [KNIFE_COOLDOWN_TICKS, KNIFE_WINDUP_TICKS]) expect(v).toBeLessThanOrEqual(255);
         // A full pattern recovers before the since-shot counter saturates at 255.
         expect(RECOIL_RECOVER_TICKS + RECOIL_SHOTS * RECOIL_DECAY_TICKS).toBeLessThan(255);
         expect(RECOIL_RECOVER_TICKS).toBeGreaterThan(FIRE_INTERVAL_TICKS); // sustained fire never recovers
@@ -159,17 +165,17 @@ describe('spread', () => {
         expect(SPREAD_AIR).toBeGreaterThan(spreadAngle(state(RUN_SPEED)));
     });
 
-    it('is a pure function of the command and the shooter, inside the cone', () => {
+    it('is a pure function of the shot count and the shooter, inside the cone', () => {
         const a: [number, number] = [0, 0], b: [number, number] = [0, 0];
         const seen = new Set<string>();
-        for (let seq = 0; seq < 500; seq++) {
-            spreadOffset(seq, 3, 0.01, a);
-            spreadOffset(seq, 3, 0.01, b);
+        for (let seed = 0; seed < 256; seed++) {
+            spreadOffset(seed, 3, 0.01, a);
+            spreadOffset(seed, 3, 0.01, b);
             expect(b).toEqual(a); // what the client predicts is what the server traces
             expect(Math.hypot(a[0], a[1])).toBeLessThanOrEqual(0.01 + 1e-12);
             seen.add(a.join());
         }
-        expect(seen.size).toBeGreaterThan(490); // it actually varies shot to shot
+        expect(seen.size).toBeGreaterThan(250); // it actually varies shot to shot
         spreadOffset(42, 3, 0.01, a);
         spreadOffset(42, 4, 0.01, b);
         expect(b).not.toEqual(a); // and between shooters
@@ -203,5 +209,28 @@ describe('spread', () => {
         spreadOffset(7, 1, 0.02, off);
         shotDirection(0.3, -0.1, 9, 0.02, 7, 1, dir);
         expect(dir).toEqual(viewDir(0.3 + recoilYaw(9) + off[1], -0.1 + recoilPitch(9) + off[0], plain));
+    });
+});
+
+describe('spread seed', () => {
+    it('counts shots fired, wrapping at 256, and resets on spawn', () => {
+        const g = createGunState();
+        expect(g.shots).toBe(0);
+        const seeds: number[] = [];
+        for (let i = 0; i < 300; i++) {
+            g.mag = MAG_SIZE; // endless ammunition for the test
+            g.cooldown = 0;
+            if (stepGun(g, true, false, true) >= 0) seeds.push(spreadSeed(g));
+        }
+        expect(seeds).toHaveLength(300);
+        expect(seeds.slice(0, 3)).toEqual([1, 2, 3]);
+        expect(seeds[254]).toBe(255);
+        expect(seeds[255]).toBe(0); // wraps in its byte
+        // Nothing but a shot moves it.
+        const before = g.shots;
+        run(g, 200, false);
+        expect(g.shots).toBe(before);
+        resetGun(g);
+        expect(g.shots).toBe(0);
     });
 });

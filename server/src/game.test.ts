@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     BODY_DAMAGE, EYE_HEIGHT, FIRE_INTERVAL_TICKS, GHOST_MAX_VIS, KNIFE_BACKSTAB_DAMAGE, KNIFE_DAMAGE,
-    KNIFE_WINDUP_TICKS, MAG_SIZE, MAX_HEALTH, RELOAD_SOUND_RANGE, RELOAD_TICKS, RESERVE_AMMO, RESPAWN_MS, RUN_SPEED,
+    KNIFE_COOLDOWN_TICKS, KNIFE_WINDUP_TICKS, MAG_SIZE, MAX_HEALTH, RELOAD_SOUND_RANGE, RELOAD_TICKS, RESERVE_AMMO, RESPAWN_MS, RUN_SPEED,
     TICK_RATE, VIS_SWING_SPIKE
 } from '../../shared/constants';
 import { shotDirection, spreadAngle } from '../../shared/gun';
@@ -29,7 +29,8 @@ class Client {
     readonly inbox: ServerMsg[] = [];
     readonly id: number;
     yaw = 0;
-    private seq = 0;
+    /** Next command number. Tests may jump it, as a modified client could. */
+    seq = 0;
     constructor(private readonly game: Game, name = '') {
         this.id = game.join({
             send: m => {
@@ -265,15 +266,34 @@ describe('defender ammunition, reload and recoil', () => {
         run(10 * FIRE_INTERVAL_TICKS, c => (c === defender ? { fire: true, pitch } : {}));
         const shots = defender.shots();
         expect(shots).toHaveLength(10);
-        // Commands are numbered from 0 and setup() spends 30 of them settling; shot n is command 30 + 6n.
+        // Shot n of the life is spread-seeded by the shot count after it, n + 1.
         const dir: Vec3 = [0, 0, 0];
         shots.forEach((s, n) => {
             const len = Math.hypot(s.to[0] - s.from[0], s.to[1] - s.from[1], s.to[2] - s.from[2]);
-            shotDirection(defender.yaw, pitch, n, spreadAngle(D.state), 30 + n * FIRE_INTERVAL_TICKS, D.id, dir);
+            shotDirection(defender.yaw, pitch, n, spreadAngle(D.state), n + 1, D.id, dir);
             for (let k = 0; k < 3; k++) expect((s.to[k] - s.from[k]) / len).toBeCloseTo(dir[k], 9);
         });
         // The burst climbs.
         expect(shots[9].to[1] - shots[9].from[1]).toBeGreaterThan(shots[0].to[1] - shots[0].from[1]);
+    });
+
+    it('spreads shots the same whatever command numbers the client sends', () => {
+        const directions = (jump: number): number[][] => {
+            const { defender, run } = setup();
+            // Moving widens the spread, so the seed matters.
+            run(10 * FIRE_INTERVAL_TICKS, c => {
+                if (c !== defender) return {};
+                defender.seq += jump;
+                return { fire: true, pitch: 0.4, right: 1 };
+            });
+            return defender.shots().map(s => {
+                const len = Math.hypot(s.to[0] - s.from[0], s.to[1] - s.from[1], s.to[2] - s.from[2]);
+                return [0, 1, 2].map(k => (s.to[k] - s.from[k]) / len);
+            });
+        };
+        const honest = directions(0);
+        expect(honest).toHaveLength(10);
+        for (const jump of [1, 7, 1000, 123457]) expect(directions(jump)).toEqual(honest);
     });
 
     it('refills at the start of each round and cancels a reload in progress', () => {
@@ -428,6 +448,26 @@ describe('ghost knife', () => {
         walled.run(KNIFE_WINDUP_TICKS + 1, c => (c === walled.ghost ? { fire: true } : {}));
         expect(walled.ghost.slashes()[0].victim).toBeUndefined();
         expect(walled.D.health).toBe(MAX_HEALTH);
+    });
+
+    it('counts the windup and cooldown in processed commands, not in client command numbers', () => {
+        const { ghost, defender, run } = close();
+        // A modified client skipping far ahead in `seq` on every command.
+        const jumping = (c: Client) => {
+            if (c !== ghost) return {};
+            ghost.seq += 100_000;
+            return { fire: true };
+        };
+        run(1, jumping);
+        expect(defender.sounds('windup')).toHaveLength(1);
+        run(KNIFE_WINDUP_TICKS - 1, jumping);
+        expect(defender.slashes()).toHaveLength(0); // the swing does not land early
+        run(1, jumping);
+        expect(defender.slashes()).toHaveLength(1);
+        run(KNIFE_COOLDOWN_TICKS - KNIFE_WINDUP_TICKS - 1, jumping);
+        expect(defender.sounds('windup')).toHaveLength(1); // the cooldown is not shortened
+        run(1, jumping);
+        expect(defender.sounds('windup')).toHaveLength(2);
     });
 
     it('gives ghosts no gun', () => {

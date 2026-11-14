@@ -1,11 +1,12 @@
 import {
     BODY_DAMAGE, BREATH_RANGE, EYE_HEIGHT, EYE_HEIGHT_CROUCHED, HEAD_DAMAGE, HEAD_ZONE,
     HULL_HALF_WIDTH, HULL_HEIGHT, HULL_HEIGHT_CROUCHED, KNIFE_BACKSTAB_DAMAGE, KNIFE_CONE_COS,
-    KNIFE_COOLDOWN_TICKS, KNIFE_DAMAGE, KNIFE_RANGE, KNIFE_SOUND_RANGE, KNIFE_WINDUP_TICKS, MAX_HEALTH,
+    KNIFE_DAMAGE, KNIFE_RANGE, KNIFE_SOUND_RANGE, MAX_HEALTH,
     MAX_REWIND_MS, RELOAD_SOUND_RANGE, RESPAWN_MS, SHOT_RANGE, STEP_DISTANCE, STEP_LOUD_CROUCH, STEP_LOUD_RUN, STEP_LOUD_WALK,
     STEP_RANGE, TICK_DT, TICK_RATE, VIS_HURT_SPIKE, VIS_SWING_SPIKE
 } from '../../shared/constants';
-import { GUN_RELOAD, createGunState, resetGun, shotDirection, spreadAngle, stepGun } from '../../shared/gun';
+import { GUN_RELOAD, createGunState, resetGun, shotDirection, spreadAngle, spreadSeed, stepGun } from '../../shared/gun';
+import { KNIFE_SLASH, KNIFE_SWING, createKnifeState, resetKnife, stepKnife } from '../../shared/knife';
 import { createPlayerState, horizontalSpeed, stepPlayer } from '../../shared/movement';
 import {
     PROTOCOL_VERSION, SNAPSHOT_RATE, type NetCmd, type PlayerSnap, type RosterEntry, type RoundMsg,
@@ -40,12 +41,10 @@ export class Player {
     respawnAt = 0;
     lastSeq = -1;
     credits = MAX_CMD_CREDITS;
-    /** Earliest command that may start the next knife swing (ghosts). */
-    nextFireSeq = 0;
     /** The defender gun (shared/gun.ts); reset at every spawn. */
     readonly gun = createGunState();
-    /** Command at which a knife swing in progress lands; -1 when none. */
-    slashAtSeq = -1;
+    /** Ghost knife timing, counted in commands processed for this player (shared/knife.ts). */
+    readonly knife = createKnifeState();
     /** 0..1 opacity: always 1 for defenders. */
     vis: number;
     /** Ground distance covered since the last footstep. */
@@ -213,7 +212,7 @@ export class Game {
         p.pitch = 0;
         p.health = MAX_HEALTH;
         p.alive = true;
-        p.slashAtSeq = -1;
+        resetKnife(p.knife);
         resetGun(p.gun);
         p.stepAccum = 0;
         p.actionTicks = 0;
@@ -267,12 +266,20 @@ export class Game {
             }
         }
 
+        // Weapon timers run on every processed command; the trigger acts only outside the freeze
+        // and with free hands. The client runs the same steps with the same inputs.
+        const armed = !acting && this.phase !== 'freeze';
         if (p.team === 'defenders') {
-            // The gun's timers run on every command; the trigger acts only outside the freeze and
-            // with free hands. The client runs the same step with the same inputs.
-            const r = stepGun(p.gun, cmd.fire, cmd.reload, !acting && this.phase !== 'freeze');
+            const r = stepGun(p.gun, cmd.fire, cmd.reload, armed);
             if (r >= 0) this.fire(p, cmd, r);
             else if (r === GUN_RELOAD) this.emitSound(p, 'reload', 1, RELOAD_SOUND_RANGE);
+        } else {
+            const k = stepKnife(p.knife, cmd.fire, armed);
+            if (k === KNIFE_SLASH) this.slash(p, cmd);
+            else if (k === KNIFE_SWING) {
+                p.vis = Math.max(p.vis, VIS_SWING_SPIKE);
+                this.emitSound(p, 'windup', 1, KNIFE_SOUND_RANGE);
+            }
         }
 
         if (acting) {
@@ -284,25 +291,9 @@ export class Game {
                 p.actionTicks = 0;
                 this.endRound('defenders', 'defused');
             }
-            return; // hands are busy: no attacking
+            return;
         }
         p.actionTicks = 0;
-        if (this.phase === 'freeze') return;
-
-        if (p.team === 'defenders') return; // the gun was handled above
-        if (p.slashAtSeq >= 0) {
-            if (cmd.seq >= p.slashAtSeq) {
-                p.slashAtSeq = -1;
-                this.slash(p, cmd);
-            }
-        } else if (cmd.fire && cmd.seq >= p.nextFireSeq) {
-            // A swing is committed at the windup: it gives the ghost away by sight and by sound
-            // before it can land.
-            p.nextFireSeq = cmd.seq + KNIFE_COOLDOWN_TICKS;
-            p.slashAtSeq = cmd.seq + KNIFE_WINDUP_TICKS;
-            p.vis = Math.max(p.vis, VIS_SWING_SPIKE);
-            this.emitSound(p, 'windup', 1, KNIFE_SOUND_RANGE);
-        }
     }
 
     /** Sends a sound only to players close enough to hear it. */
@@ -322,7 +313,7 @@ export class Game {
         victim.alive = false;
         // Only warmup has respawns; in a round the dead wait for the next one.
         victim.respawnAt = this.phase === 'warmup' ? this.now + RESPAWN_MS : 0;
-        victim.slashAtSeq = -1;
+        resetKnife(victim.knife);
         victim.gun.reload = 0; // death cancels a reload
         victim.actionTicks = 0;
         victim.deaths++;
@@ -352,7 +343,7 @@ export class Game {
         const { eye, dir, hmin, hmax } = this;
         this.aimFrom(shooter, cmd);
         // The view plus recoil plus spread, exactly as the client predicted it.
-        shotDirection(cmd.yaw, cmd.pitch, shot, spreadAngle(shooter.state), cmd.seq, shooter.id, dir);
+        shotDirection(cmd.yaw, cmd.pitch, shot, spreadAngle(shooter.state), spreadSeed(shooter.gun), shooter.id, dir);
         // Test against where the shooter saw everyone, within a bounded window.
         const viewTime = clamp(cmd.viewTime, this.now - MAX_REWIND_MS, this.now);
         let range = rayWorld(this.map.boxes, eye, dir, SHOT_RANGE);
@@ -568,7 +559,7 @@ export class Game {
                     team: p.team,
                     action: p.actionTicks / (p.team === 'ghosts' ? PLANT_TICKS : DEFUSE_TICKS),
                     pos: p.state.pos, vel: p.state.vel, onGround: p.state.onGround, crouched: p.state.crouched,
-                    health: p.health, alive: p.alive, respawnAt: p.respawnAt, vis: p.vis, gun: p.gun
+                    health: p.health, alive: p.alive, respawnAt: p.respawnAt, vis: p.vis, gun: p.gun, knife: p.knife
                 },
                 players
             });

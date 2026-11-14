@@ -1,12 +1,15 @@
 import * as pc from 'playcanvas';
 import {
-    EYE_HEIGHT, EYE_HEIGHT_CROUCHED, KNIFE_COOLDOWN_TICKS, KNIFE_WINDUP_TICKS, MAG_SIZE, MAX_HEALTH, RELOAD_TICKS,
+    EYE_HEIGHT, EYE_HEIGHT_CROUCHED, KNIFE_WINDUP_TICKS, MAG_SIZE, MAX_HEALTH, RELOAD_TICKS,
     SHOT_RANGE, STEP_DISTANCE, STEP_LOUD_CROUCH, STEP_LOUD_RUN, STEP_LOUD_WALK, TICK_DT
 } from '@shared/constants';
 import {
     GUN_DRY, GUN_RELOAD, copyGunState, createGunState, recoilPitch, recoilYaw, resetGun, sameGunState,
-    shotDirection, spreadAngle, stepGun
+    shotDirection, spreadAngle, spreadSeed, stepGun
 } from '@shared/gun';
+import {
+    KNIFE_SLASH, KNIFE_SWING, copyKnifeState, createKnifeState, resetKnife, sameKnifeState, stepKnife
+} from '@shared/knife';
 import { copyPlayerState, createPlayerState, horizontalSpeed, stepPlayer } from '@shared/movement';
 import {
     DEFAULT_PORT, type NetCmd, type RosterEntry, type RoundMsg, type SelfSnap, type ShotEvent, type SlashEvent,
@@ -202,10 +205,11 @@ async function start(): Promise<void> {
     let gunMismatches = 0;
     /** Recoil camera kick (radians) at the previous and current tick, interpolated like position. */
     let kickPitchPrev = 0, kickYawPrev = 0, kickPitch = 0, kickYaw = 0;
-    /** Earliest command that may start the next knife swing. Mirrors the server. */
-    let nextFireSeq = 0;
-    /** Command at which a knife swing in progress lands; -1 when none. Mirrors the server. */
-    let slashAtSeq = -1;
+    /** Predicted knife timing (ghosts), stepped like the server does (shared/knife.ts). */
+    const knife = createKnifeState();
+    const knifeBefore = createKnifeState();
+    /** Snapshots whose replayed knife timing differed from what we had predicted (should stay 0). */
+    let knifeMismatches = 0;
     let stepAccum = 0;
     let vis = 0;
     let action = 0;
@@ -244,13 +248,18 @@ async function start(): Promise<void> {
             curr.crouched = me.crouched;
             copyGunState(gunBefore, gun);
             copyGunState(gun, me.gun);
+            copyKnifeState(knifeBefore, knife);
+            copyKnifeState(knife, me.knife);
             const defender = me.team === 'defenders';
             for (let i = 0; i < pending.length; i++) {
                 const c = pending[i];
                 stepPlayer(curr, c, TICK_DT, boxes);
-                if (defender && c.live) stepGun(gun, c.fire, c.reload, c.armed);
+                if (!c.live) continue;
+                if (defender) stepGun(gun, c.fire, c.reload, c.armed);
+                else stepKnife(knife, c.fire, c.armed);
             }
             if (defender && !sameGunState(gun, gunBefore)) gunMismatches++;
+            if (!defender && !sameKnifeState(knife, knifeBefore)) knifeMismatches++;
 
             const ex = bx - curr.pos[0], ey = by - curr.pos[1], ez = bz - curr.pos[2];
             if (ex === 0 && ey === 0 && ez === 0) return;
@@ -269,7 +278,7 @@ async function start(): Promise<void> {
             input.pitch = 0;
             alive = true;
             health = MAX_HEALTH;
-            slashAtSeq = -1;
+            resetKnife(knife);
             resetGun(gun);
             kickPitchPrev = kickYawPrev = kickPitch = kickYaw = 0;
             stepAccum = 0;
@@ -409,7 +418,7 @@ async function start(): Promise<void> {
                     eyePos[0] = curr.pos[0];
                     eyePos[1] = curr.pos[1] + (curr.crouched ? EYE_HEIGHT_CROUCHED : EYE_HEIGHT);
                     eyePos[2] = curr.pos[2];
-                    shotDirection(cmd.yaw, cmd.pitch, r, spreadAngle(curr), cmd.seq, net.id, aim);
+                    shotDirection(cmd.yaw, cmd.pitch, r, spreadAngle(curr), spreadSeed(gun), net.id, aim);
                     const dist = rayWorld(boxes, eyePos, aim, SHOT_RANGE);
                     shotEnd[0] = eyePos[0] + aim[0] * dist;
                     shotEnd[1] = eyePos[1] + aim[1] * dist;
@@ -419,15 +428,14 @@ async function start(): Promise<void> {
                     audio.impact(shotEnd);
                 } else if (r === GUN_RELOAD) audio.reload(curr.pos, true);
                 else if (r === GUN_DRY) audio.dryFire();
-            } else if (acting || match.phase === 'freeze') {
-                // Hands are busy, or the round has not started: no knife.
-            } else if (slashAtSeq >= 0) {
-                if (cmd.seq >= slashAtSeq) { slashAtSeq = -1; audio.knifeSlash(curr.pos, false, true); }
-            } else if (cmd.fire && cmd.seq >= nextFireSeq) {
-                nextFireSeq = cmd.seq + KNIFE_COOLDOWN_TICKS;
-                slashAtSeq = cmd.seq + KNIFE_WINDUP_TICKS;
-                presenter.knifeSwing(KNIFE_WINDUP_TICKS * TICK_DT);
-                audio.knifeWindup(curr.pos, true);
+            } else {
+                // The same knife step the server runs for this command (shared/knife.ts).
+                const k = stepKnife(knife, cmd.fire, cmd.armed);
+                if (k === KNIFE_SLASH) audio.knifeSlash(curr.pos, false, true);
+                else if (k === KNIFE_SWING) {
+                    presenter.knifeSwing(KNIFE_WINDUP_TICKS * TICK_DT);
+                    audio.knifeWindup(curr.pos, true);
+                }
             }
         }
         // The camera shows the recoil the next shot will carry, so the crosshair is honest. Taken
@@ -511,10 +519,10 @@ async function start(): Promise<void> {
     Object.assign(window, {
         __sb: {
             app, state: curr, input, net, mapData, mapList, audio, presenter, match,
-            gun,
+            gun, knife,
             stats: () => ({
                 fps, resScale, alive, health, vis, pending: pending.length, error: Math.hypot(...errorOffset),
-                gun: { ...gun }, gunMismatches
+                gun: { ...gun }, gunMismatches, knife: { ...knife }, knifeMismatches
             })
         }
     });

@@ -1,5 +1,6 @@
 import type { Phase, RoundReason } from './rules';
 import type { GunState } from './gun';
+import type { KnifeState } from './knife';
 import type { InputCmd, Vec3 } from './types';
 
 export const PROTOCOL_VERSION = 6;
@@ -55,6 +56,8 @@ export interface SelfSnap {
     respawnAt: number;
     /** The defender gun, predicted by the client: sent exactly (all small integers). */
     gun: GunState;
+    /** The ghost knife timing, predicted by the client: sent exactly (small integers). */
+    knife: KnifeState;
 }
 
 export interface ShotEvent {
@@ -143,7 +146,7 @@ export type ClientMsg = { type: 'cmd'; cmd: NetCmd };
 const CMD_TAG = 1;
 const SNAP_TAG = 2;
 const CMD_BYTES = 24;
-const SNAP_HEAD_BYTES = 82;
+const SNAP_HEAD_BYTES = 85;
 const SNAP_PLAYER_BYTES = 19;
 const ANGLE_SCALE = 32767 / Math.PI;
 
@@ -202,7 +205,10 @@ function encodeSnap(m: Extract<ServerMsg, { type: 'snap' }>): Uint8Array<ArrayBu
     v.setUint8(78, g.cooldown);
     v.setUint8(79, g.burst);
     v.setUint8(80, g.sinceShot);
-    v.setUint8(81, m.players.length);
+    v.setUint8(81, g.shots);
+    v.setUint8(82, me.knife.cooldown);
+    v.setUint8(83, me.knife.windup);
+    v.setUint8(84, m.players.length);
     let o = SNAP_HEAD_BYTES;
     for (const p of m.players) {
         v.setUint16(o, p.id, true);
@@ -219,7 +225,7 @@ function encodeSnap(m: Extract<ServerMsg, { type: 'snap' }>): Uint8Array<ArrayBu
 
 function decodeSnap(v: DataView): ServerMsg {
     const flags = v.getUint8(13);
-    const count = v.getUint8(81);
+    const count = v.getUint8(84);
     if (v.byteLength < SNAP_HEAD_BYTES + count * SNAP_PLAYER_BYTES) throw new Error('truncated snapshot');
     const players: PlayerSnap[] = [];
     let o = SNAP_HEAD_BYTES;
@@ -255,8 +261,10 @@ function decodeSnap(v: DataView): ServerMsg {
             respawnAt: v.getFloat64(67, true),
             gun: {
                 mag: v.getUint8(75), reserve: v.getUint8(76), reload: v.getUint8(77),
-                cooldown: v.getUint8(78), burst: v.getUint8(79), sinceShot: v.getUint8(80)
-            }
+                cooldown: v.getUint8(78), burst: v.getUint8(79), sinceShot: v.getUint8(80),
+                shots: v.getUint8(81)
+            },
+            knife: { cooldown: v.getUint8(82), windup: v.getUint8(83) }
         },
         players
     };
