@@ -36,7 +36,7 @@ for (let t = 1; t <= totalTicks; t++) {
     for (let i = 0; i < PLAYERS; i++) {
         const cmd: NetCmd = {
             seq: t, forward: 1, right: Math.sin(t / 40 + i) > 0 ? 1 : -1, yaw: Math.fround(t / 90 + i), pitch: 0,
-            jump: t % 97 === i, walk: false, crouch: false, fire: true, use: false, viewTime: t * TICK_MS - 100
+            jump: t % 97 === i, walk: false, crouch: false, fire: true, use: false, reload: false, viewTime: t * TICK_MS - 100
         };
         game.handleCmd(ids[i], cmd);
     }

@@ -1,7 +1,8 @@
 import type { Phase, RoundReason } from './rules';
+import type { GunState } from './gun';
 import type { InputCmd, Vec3 } from './types';
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 export const DEFAULT_PORT = 8080;
 /** Snapshots per second sent to each client. */
 export const SNAPSHOT_RATE = 30;
@@ -17,6 +18,8 @@ export interface NetCmd extends InputCmd {
     fire: boolean;
     /** Use key held: plant (ghosts) or defuse (defenders). */
     use: boolean;
+    /** Reload key (R) pressed; acted on only if the magazine is not full and there is reserve. */
+    reload: boolean;
     /** Server time (ms) at which this client was drawing other players: the lag-compensation target. */
     viewTime: number;
 }
@@ -31,6 +34,8 @@ export interface PlayerSnap {
     alive: boolean;
     /** Opacity 0..1: 1 for defenders, velocity-driven for ghosts. */
     vis: number;
+    /** A defender in the middle of a reload (for its animation). */
+    reloading: boolean;
 }
 
 export interface SelfSnap {
@@ -48,6 +53,8 @@ export interface SelfSnap {
     alive: boolean;
     /** Server time (ms) of the next respawn; meaningful only while dead. */
     respawnAt: number;
+    /** The defender gun, predicted by the client: sent exactly (all small integers). */
+    gun: GunState;
 }
 
 export interface ShotEvent {
@@ -76,7 +83,7 @@ export interface SlashEvent {
 /** A sound the recipient is close enough to hear. Never sent to players out of range. */
 export interface SoundEvent {
     type: 'sound';
-    kind: 'step' | 'windup';
+    kind: 'step' | 'windup' | 'reload';
     id: number;
     pos: Vec3;
     /** 0..1 loudness at the source. */
@@ -135,7 +142,7 @@ export type ClientMsg = { type: 'cmd'; cmd: NetCmd };
 const CMD_TAG = 1;
 const SNAP_TAG = 2;
 const CMD_BYTES = 24;
-const SNAP_HEAD_BYTES = 76;
+const SNAP_HEAD_BYTES = 82;
 const SNAP_PLAYER_BYTES = 19;
 const ANGLE_SCALE = 32767 / Math.PI;
 
@@ -152,7 +159,7 @@ function encodeCmd(c: NetCmd): Uint8Array<ArrayBuffer> {
     v.setInt8(6, Math.round(c.right * 127));
     v.setFloat32(7, c.yaw, true);
     v.setFloat32(11, c.pitch, true);
-    v.setUint8(15, (c.jump ? 1 : 0) | (c.walk ? 2 : 0) | (c.crouch ? 4 : 0) | (c.fire ? 8 : 0) | (c.use ? 16 : 0));
+    v.setUint8(15, (c.jump ? 1 : 0) | (c.walk ? 2 : 0) | (c.crouch ? 4 : 0) | (c.fire ? 8 : 0) | (c.use ? 16 : 0) | (c.reload ? 32 : 0));
     v.setFloat64(16, c.viewTime, true);
     return out;
 }
@@ -166,7 +173,7 @@ function decodeCmd(v: DataView): NetCmd {
         yaw: v.getFloat32(7, true),
         pitch: v.getFloat32(11, true),
         jump: (flags & 1) !== 0, walk: (flags & 2) !== 0, crouch: (flags & 4) !== 0,
-        fire: (flags & 8) !== 0, use: (flags & 16) !== 0,
+        fire: (flags & 8) !== 0, use: (flags & 16) !== 0, reload: (flags & 32) !== 0,
         viewTime: v.getFloat64(16, true)
     };
 }
@@ -187,11 +194,18 @@ function encodeSnap(m: Extract<ServerMsg, { type: 'snap' }>): Uint8Array<ArrayBu
         v.setFloat64(43 + k * 8, me.vel[k], true);
     }
     v.setFloat64(67, me.respawnAt, true);
-    v.setUint8(75, m.players.length);
+    const g = me.gun;
+    v.setUint8(75, g.mag);
+    v.setUint8(76, g.reserve);
+    v.setUint8(77, g.reload);
+    v.setUint8(78, g.cooldown);
+    v.setUint8(79, g.burst);
+    v.setUint8(80, g.sinceShot);
+    v.setUint8(81, m.players.length);
     let o = SNAP_HEAD_BYTES;
     for (const p of m.players) {
         v.setUint16(o, p.id, true);
-        v.setUint8(o + 2, (p.team === 'ghosts' ? 1 : 0) | (p.crouched ? 2 : 0) | (p.alive ? 4 : 0));
+        v.setUint8(o + 2, (p.team === 'ghosts' ? 1 : 0) | (p.crouched ? 2 : 0) | (p.alive ? 4 : 0) | (p.reloading ? 8 : 0));
         v.setUint8(o + 3, Math.round(unit(p.vis) * 255));
         for (let k = 0; k < 3; k++) v.setFloat32(o + 4 + k * 4, p.pos[k], true);
         // Yaw accumulates without bound on the client; wrap it into one turn before packing.
@@ -204,7 +218,7 @@ function encodeSnap(m: Extract<ServerMsg, { type: 'snap' }>): Uint8Array<ArrayBu
 
 function decodeSnap(v: DataView): ServerMsg {
     const flags = v.getUint8(13);
-    const count = v.getUint8(75);
+    const count = v.getUint8(81);
     if (v.byteLength < SNAP_HEAD_BYTES + count * SNAP_PLAYER_BYTES) throw new Error('truncated snapshot');
     const players: PlayerSnap[] = [];
     let o = SNAP_HEAD_BYTES;
@@ -215,6 +229,7 @@ function decodeSnap(v: DataView): ServerMsg {
             team: f & 1 ? 'ghosts' : 'defenders',
             crouched: (f & 2) !== 0,
             alive: (f & 4) !== 0,
+            reloading: (f & 8) !== 0,
             vis: v.getUint8(o + 3) / 255,
             pos: [v.getFloat32(o + 4, true), v.getFloat32(o + 8, true), v.getFloat32(o + 12, true)],
             yaw: v.getInt16(o + 16, true) / ANGLE_SCALE,
@@ -236,7 +251,11 @@ function decodeSnap(v: DataView): ServerMsg {
             vis: v.getUint16(17, true) / 65535,
             pos: [v.getFloat64(19, true), v.getFloat64(27, true), v.getFloat64(35, true)],
             vel: [v.getFloat64(43, true), v.getFloat64(51, true), v.getFloat64(59, true)],
-            respawnAt: v.getFloat64(67, true)
+            respawnAt: v.getFloat64(67, true),
+            gun: {
+                mag: v.getUint8(75), reserve: v.getUint8(76), reload: v.getUint8(77),
+                cooldown: v.getUint8(78), burst: v.getUint8(79), sinceShot: v.getUint8(80)
+            }
         },
         players
     };

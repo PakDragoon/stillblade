@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
-    BODY_DAMAGE, EYE_HEIGHT, GHOST_MAX_VIS, KNIFE_BACKSTAB_DAMAGE, KNIFE_DAMAGE, KNIFE_WINDUP_TICKS, MAX_HEALTH,
-    RESPAWN_MS, RUN_SPEED, TICK_RATE, VIS_SWING_SPIKE
+    BODY_DAMAGE, EYE_HEIGHT, FIRE_INTERVAL_TICKS, GHOST_MAX_VIS, KNIFE_BACKSTAB_DAMAGE, KNIFE_DAMAGE,
+    KNIFE_WINDUP_TICKS, MAG_SIZE, MAX_HEALTH, RELOAD_SOUND_RANGE, RELOAD_TICKS, RESERVE_AMMO, RESPAWN_MS, RUN_SPEED,
+    TICK_RATE, VIS_SWING_SPIKE
 } from '../../shared/constants';
+import { shotDirection, spreadAngle } from '../../shared/gun';
 import type { NetCmd, ServerMsg, ShotEvent, SlashEvent, SoundEvent } from '../../shared/protocol';
 import {
     BOMB_MS, DEFUSE_TICKS, FREEZE_MS, HALFTIME_ROUND, MATCH_OVER_MS, OVER_MS, PLANT_TICKS, ROUNDS_TO_WIN, ROUND_MS
 } from '../../shared/rules';
-import type { Box, MapData } from '../../shared/types';
+import type { Box, MapData, Vec3 } from '../../shared/types';
 import { Game } from './game';
 
 const TICK_MS = 1000 / TICK_RATE;
@@ -39,7 +41,7 @@ class Client {
     cmd(over: Partial<NetCmd> = {}): void {
         this.game.handleCmd(this.id, {
             seq: this.seq++, forward: 0, right: 0, yaw: this.yaw, pitch: 0, jump: false, walk: false, crouch: false,
-            fire: false, use: false, viewTime: this.game.now, ...over
+            fire: false, use: false, reload: false, viewTime: this.game.now, ...over
         });
     }
     last<T extends ServerMsg['type']>(type: T): Extract<ServerMsg, { type: T }> {
@@ -191,6 +193,109 @@ describe('defender gun', () => {
         run(60, c => (c === ghost ? { right: 1 } : {}));
         run(1, c => (c === defender ? { ...BODY_AIM, viewTime: seenAt } : {}));
         expect(defender.shots().at(-1)!.victim).toBeUndefined();
+    });
+});
+
+describe('defender ammunition, reload and recoil', () => {
+    const SKY = { fire: true, pitch: 0.5 }; // misses everything, so nobody dies mid-test
+
+    it('runs dry after a magazine, reloads automatically, and accounts the reserve', () => {
+        const { defender, run, D } = setup();
+        run(MAG_SIZE * FIRE_INTERVAL_TICKS, c => (c === defender ? SKY : {}));
+        expect(defender.shots()).toHaveLength(MAG_SIZE);
+        expect(D.gun).toMatchObject({ mag: 0, reserve: RESERVE_AMMO });
+        // Holding the trigger on empty starts the reload; nothing fires until it completes.
+        run(RELOAD_TICKS, c => (c === defender ? SKY : {}));
+        expect(defender.shots()).toHaveLength(MAG_SIZE);
+        expect(D.gun.reload).toBeGreaterThan(0);
+        run(1, c => (c === defender ? SKY : {}));
+        expect(defender.shots()).toHaveLength(MAG_SIZE + 1);
+        expect(D.gun).toMatchObject({ mag: MAG_SIZE - 1, reserve: RESERVE_AMMO - MAG_SIZE, reload: 0 });
+        // The snapshot carries the gun exactly, for the client to predict from.
+        run(2, () => null); // no commands, so the last snapshot shows the current state
+        expect(defender.last('snap').me.gun).toEqual(D.gun);
+    });
+
+    it('reloads on R, keeps reloading while moving, and blocks fire meanwhile', () => {
+        const { defender, run, D } = setup();
+        run(3 * FIRE_INTERVAL_TICKS, c => (c === defender ? SKY : {}));
+        expect(D.gun.mag).toBe(MAG_SIZE - 3);
+        run(1, c => (c === defender ? { reload: true } : {}));
+        expect(D.gun.reload).toBe(RELOAD_TICKS);
+        const fired = defender.shots().length;
+        run(RELOAD_TICKS - 1, c => (c === defender ? { ...SKY, forward: 1 } : {}));
+        expect(defender.shots()).toHaveLength(fired);
+        run(1, c => (c === defender ? { forward: 1 } : {}));
+        expect(D.gun).toMatchObject({ mag: MAG_SIZE, reserve: RESERVE_AMMO - 3, reload: 0 });
+    });
+
+    it('sends the reload sound only within earshot, and shows others the reload', () => {
+        const far = setup(); // 20 m apart
+        far.run(1, c => (c === far.defender ? SKY : {}));
+        far.run(1, c => (c === far.defender ? { reload: true } : {}));
+        expect(far.ghost.sounds('reload')).toHaveLength(0);
+        expect(far.defender.sounds('reload')).toHaveLength(0); // the shooter predicts its own
+
+        const near = setup(makeMap([], -10 + RELOAD_SOUND_RANGE - 1));
+        near.run(1, c => (c === near.defender ? SKY : {}));
+        near.run(1, c => (c === near.defender ? { reload: true } : {}));
+        expect(near.ghost.sounds('reload')).toMatchObject([{ id: near.defender.id }]);
+        near.run(2);
+        expect(near.ghost.last('snap').players.find(p => p.id === near.defender.id)!.reloading).toBe(true);
+        near.run(RELOAD_TICKS + 2);
+        expect(near.ghost.last('snap').players.find(p => p.id === near.defender.id)!.reloading).toBe(false);
+    });
+
+    it('cancels a reload on death and refills on respawn', () => {
+        const { ghost, defender, run, D } = setup(makeMap([], -8.5)); // ghost within knife reach
+        run(1, c => (c === defender ? SKY : {}));
+        run(1, c => (c === defender ? { reload: true, yaw: 0 } : { }));
+        expect(D.gun.reload).toBeGreaterThan(0);
+        run(KNIFE_WINDUP_TICKS + 1, c => (c === ghost ? { fire: true } : { yaw: 0 })); // backstab
+        expect(D.alive).toBe(false);
+        expect(D.gun.reload).toBe(0);
+        run(Math.ceil(RESPAWN_MS / TICK_MS) + 1);
+        expect(D.alive).toBe(true);
+        expect(D.gun).toMatchObject({ mag: MAG_SIZE, reserve: RESERVE_AMMO, reload: 0, burst: 0 });
+    });
+
+    it('traces the view plus the recoil pattern plus spread, exactly as shared/gun.ts says', () => {
+        const { defender, run, D } = setup();
+        const pitch = Math.fround(0.4);
+        run(10 * FIRE_INTERVAL_TICKS, c => (c === defender ? { fire: true, pitch } : {}));
+        const shots = defender.shots();
+        expect(shots).toHaveLength(10);
+        // Commands are numbered from 0 and setup() spends 30 of them settling; shot n is command 30 + 6n.
+        const dir: Vec3 = [0, 0, 0];
+        shots.forEach((s, n) => {
+            const len = Math.hypot(s.to[0] - s.from[0], s.to[1] - s.from[1], s.to[2] - s.from[2]);
+            shotDirection(defender.yaw, pitch, n, spreadAngle(D.state), 30 + n * FIRE_INTERVAL_TICKS, D.id, dir);
+            for (let k = 0; k < 3; k++) expect((s.to[k] - s.from[k]) / len).toBeCloseTo(dir[k], 9);
+        });
+        // The burst climbs.
+        expect(shots[9].to[1] - shots[9].from[1]).toBeGreaterThan(shots[0].to[1] - shots[0].from[1]);
+    });
+
+    it('refills at the start of each round and cancels a reload in progress', () => {
+        const { game, defender, run, D } = setup(makeMap(), true);
+        run(Math.ceil(FREEZE_MS / TICK_MS) - 30 + 1);
+        expect(game.phase).toBe('live');
+        run(5 * FIRE_INTERVAL_TICKS, c => (c === defender ? SKY : {}));
+        run(1, c => (c === defender ? { reload: true } : {}));
+        expect(D.gun.reload).toBeGreaterThan(0);
+        run(Math.ceil(ROUND_MS / TICK_MS) + 1, () => null); // time runs out
+        expect(game.phase).toBe('over');
+        run(Math.ceil(OVER_MS / TICK_MS) + 1);
+        expect(game.phase).toBe('freeze');
+        expect(D.gun).toMatchObject({ mag: MAG_SIZE, reserve: RESERVE_AMMO, reload: 0 });
+    });
+
+    it('does not fire or reload during the freeze', () => {
+        const { defender, run, D } = setup(makeMap(), true);
+        D.gun.mag = 10;
+        run(20, c => (c === defender ? { fire: true, reload: true } : {}));
+        expect(defender.shots()).toHaveLength(0);
+        expect(D.gun).toMatchObject({ mag: 10, reload: 0 });
     });
 });
 

@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { createGunState } from './gun';
 import { decodeClient, decodeServer, encodeClient, encodeServer, type NetCmd, type ServerMsg } from './protocol';
 
 const cmd: NetCmd = {
     seq: 123456, forward: 1, right: -1, yaw: Math.fround(7.123456), pitch: Math.fround(-0.4321),
-    jump: true, walk: false, crouch: true, fire: false, use: true, viewTime: 98765.4321
+    jump: true, walk: false, crouch: true, fire: false, use: true, reload: true, viewTime: 98765.4321
 };
 
 describe('wire format', () => {
@@ -13,6 +14,13 @@ describe('wire format', () => {
         expect((wire as Uint8Array).byteLength).toBe(24);
         // Exact equality matters: the server must simulate the very inputs the client predicted with.
         expect(decodeClient(wire as Uint8Array).cmd).toEqual(cmd);
+    });
+
+    it('round-trips every command flag on its own', () => {
+        for (const flag of ['jump', 'walk', 'crouch', 'fire', 'use', 'reload'] as const) {
+            const only: NetCmd = { ...cmd, jump: false, walk: false, crouch: false, fire: false, use: false, reload: false, [flag]: true };
+            expect(decodeClient(encodeClient({ type: 'cmd', cmd: only }) as Uint8Array).cmd).toEqual(only);
+        }
     });
 
     it('decodes a command from a view into a larger buffer', () => {
@@ -34,15 +42,15 @@ describe('wire format', () => {
             me: {
                 team: 'ghosts', action: 0.5, vis: 0.35, pos: [1.23456789012345, 0, -19.87654321098765],
                 vel: [5.2, -3.3333333333, 0.000001], onGround: true, crouched: false, health: 66, alive: true,
-                respawnAt: 0
+                respawnAt: 0, gun: { mag: 17, reserve: 90, reload: 132, cooldown: 6, burst: 29, sinceShot: 255 }
             },
             players: [
-                { id: 7, team: 'defenders', pos: [3.5, 1.2, -8.25], yaw: 9.5, pitch: -0.6, crouched: true, alive: true, vis: 1 },
-                { id: 300, team: 'ghosts', pos: [-14.9, 0, 21.1], yaw: -2, pitch: 1.2, crouched: false, alive: false, vis: 0.2 }
+                { id: 7, team: 'defenders', pos: [3.5, 1.2, -8.25], yaw: 9.5, pitch: -0.6, crouched: true, alive: true, vis: 1, reloading: true },
+                { id: 300, team: 'ghosts', pos: [-14.9, 0, 21.1], yaw: -2, pitch: 1.2, crouched: false, alive: false, vis: 0.2, reloading: false }
             ]
         };
         const wire = encodeServer(snap) as Uint8Array;
-        expect(wire.byteLength).toBe(76 + 2 * 19);
+        expect(wire.byteLength).toBe(82 + 2 * 19);
         const back = decodeServer(wire);
         if (back.type !== 'snap') throw new Error('wrong type');
 
@@ -50,25 +58,26 @@ describe('wire format', () => {
         expect(back.ack).toBe(4242);
         expect(back.me.pos).toEqual(snap.me.pos); // float64: prediction replays from this exactly
         expect(back.me.vel).toEqual(snap.me.vel);
+        expect(back.me.gun).toEqual(snap.me.gun); // the gun is predicted too: integers, exact
         expect(back.me).toMatchObject({ team: 'ghosts', onGround: true, crouched: false, alive: true, health: 66 });
         expect(back.me.action).toBeCloseTo(0.5, 4);
         expect(back.me.vis).toBeCloseTo(0.35, 4);
 
         const [a, b] = back.players;
-        expect(a).toMatchObject({ id: 7, team: 'defenders', crouched: true, alive: true, vis: 1 });
+        expect(a).toMatchObject({ id: 7, team: 'defenders', crouched: true, alive: true, vis: 1, reloading: true });
         expect(a.pos[0]).toBeCloseTo(3.5, 5);
         expect(a.pos[2]).toBeCloseTo(-8.25, 5);
         expect(Math.cos(a.yaw)).toBeCloseTo(Math.cos(9.5), 3); // same direction once wrapped
         expect(Math.sin(a.yaw)).toBeCloseTo(Math.sin(9.5), 3);
         expect(a.pitch).toBeCloseTo(-0.6, 1);
-        expect(b).toMatchObject({ id: 300, team: 'ghosts', alive: false });
+        expect(b).toMatchObject({ id: 300, team: 'ghosts', alive: false, reloading: false });
         expect(b.vis).toBeCloseTo(0.2, 2);
     });
 
     it('keeps an acknowledgement of -1 (nothing simulated yet)', () => {
         const back = decodeServer(encodeServer({
             type: 'snap', time: 0, ack: -1, players: [],
-            me: { team: 'defenders', action: 0, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: false, crouched: false, health: 100, alive: false, respawnAt: 0 }
+            me: { team: 'defenders', action: 0, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: false, crouched: false, health: 100, alive: false, respawnAt: 0, gun: createGunState() }
         }) as Uint8Array);
         expect(back.type === 'snap' && back.ack).toBe(-1);
     });
