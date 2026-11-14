@@ -23,6 +23,8 @@ ENV NODE_ENV=production \
 WORKDIR /app
 # The maps sit where the server's built-in default also looks
 # (../../client/public/maps from dist/server), so SB_MAPS_DIR is belt and braces.
+# The bundle is an ES module; without this file Node treats main.js as CommonJS and crashes.
+RUN echo '{"type":"module"}' > package.json
 COPY --from=build /src/dist/server ./dist/server
 COPY client/public/maps/*.json ./client/public/maps/
 # Files stay root-owned (read-only for the server); the process runs unprivileged.
