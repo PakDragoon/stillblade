@@ -25,7 +25,7 @@ const IMPACT_LIFE = 4;
 const FLASH_TIME = 0.04;
 /** Unsuppressed guns (room option off): a bigger star-shaped flash, shown a little longer. */
 const LOUD_FLASH_TIME = 0.055;
-const LOUD_FLASH_SIZE = 0.13;
+const LOUD_FLASH_SIZE = 0.2;
 const KILLFEED_MAX = 5;
 const KILLFEED_LIFE = 5;
 const KILLFEED_FADE = 0.5;
@@ -1634,7 +1634,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                             e.translateLocal(0, 0, -0.04 * fx);
                         } else {
                             // Bigger than first person: it is seen from metres away.
-                            e.setLocalScale(LOUD_FLASH_SIZE * 1.6 * fx, LOUD_FLASH_SIZE * 1.6 * fx, LOUD_FLASH_SIZE * 2.4 * fx);
+                            e.setLocalScale(LOUD_FLASH_SIZE * 1.3 * fx, LOUD_FLASH_SIZE * 1.3 * fx, LOUD_FLASH_SIZE * 2 * fx);
                         }
                         e.rotateLocal(0, 0, Math.random() * 90);
                         e.enabled = true;
