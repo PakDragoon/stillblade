@@ -35,7 +35,7 @@ The owner has no game development experience and expects the game to have every 
 
 | Wave | Package | Model | Depends on |
 |---|---|---|---|
-| 1 | A. Combat core: defender knife, body-part damage, suppressor option | Opus 5.5 | nothing |
+| 1 | A. Combat core: defender knife, body-part damage, suppressor option (**built on `claude/combat-core-c154af`, protocol 9; not yet reviewed or merged**) | Opus 5.5 | nothing |
 | 1 | B. Client utilities: key bindings, phone notice, feedback button, error reports | Sonnet 5.5 | nothing |
 | 2 | C. Bomb carrier | Opus 5.5 | A merged |
 | 2 | D. Rooms and community: room list, room options, vote kick, name filter, map vote | Sonnet 5.5 | A merged |
@@ -49,11 +49,13 @@ The owner has no game development experience and expects the game to have every 
 
 The owner's first friends test can happen at any point; after wave 2 is best, because the feedback button and error reports are in. Its results should adjust waves 4 and 5.
 
-Housekeeping to fold into package A: delete the unused `IDLE_MS` in `shared/rules.ts`. Before package J: move the project to Node 22 (the Docker image already uses it; local Node is 20.11, which is why Vite and Vitest are pinned to old majors).
+Housekeeping folded into package A: the unused `IDLE_MS` is deleted on its branch. Before package J: move the project to Node 22 (the Docker image already uses it; local Node is 20.11, which is why Vite and Vitest are pinned to old majors).
 
 ---
 
 ## A. Combat core (Opus 5.5)
+
+**Status (2026-11-16): built on branch `claude/combat-core-c154af` at protocol 9, 201 tests passing, browser-checked at `?lag=150` on both maps; waiting for review and the owner's go-ahead to merge. What was built, every decision taken, and what was not verified are in `HANDOFF.md` ("Package A (combat core) in detail"). Open point for the reviewer: the existing shot-event position leak and its suggested fix (`HANDOFF.md`, Known problems). Package B merges after it.** The specification below is kept as written.
 
 Three changes to the same combat code, so one package. Shared simulation and binary format: read the rules in `HANDOFF.md` first, and keep `server/src/prediction.test.ts` passing.
 
@@ -100,7 +102,7 @@ Today any ghost can plant. Change to one bomb.
 
 ## D. Rooms and community (Sonnet 5.5)
 
-JSON messages and UI only. Builds on the `RoomOptions` from package A.
+JSON messages and UI only. Builds on the `RoomOptions` from package A (`shared/room-options.ts`: add a field, a line in `parseRoomOptions`, and a row in the lobby panel; the create-room form in `client/src/ui.ts` sends them as query parameters).
 
 - **Public room list.** Rooms are public or private (creator's choice; private is the default for "Create room", public for "Quick play"). An HTTP endpoint on the game server (`GET /rooms`, origin-checked, cached for a second) lists public rooms: code, map, player count and capacity, phase, options. The menu shows the list with a refresh and a join button, and Quick play joins the fullest public room that has space, or creates one.
 - **Room options** set at creation and shown in the lobby: public or private, map, suppressed weapons (from A), maximum players (2 to 10), rounds to win (3, 6, 9), fill with bots (from E; show it disabled until E exists). Only the creator can change them, only in warmup.
