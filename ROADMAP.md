@@ -188,6 +188,6 @@ Needs a server that is always on with a persistent disk.
 
 ## Hosting steps still open (owner)
 
-1. Friends test: set up the Cloudflare Tunnel and the Cloudflare Pages project (`DEPLOY.md`, "First friends test"; the tunnel variant is described in `HANDOFF.md` under Hosting).
+1. Friends test: the tunnel and the Cloudflare project are set up and were checked working on 2026-11-15 (`HANDOFF.md`, Hosting). Still to do: the owner plays it himself, checks the ping shown in settings, invites friends, and collects what feels wrong. Add a card for Stillblade on the `play.orcavalley.com` home page.
 2. Always-on: rent the VPS, point `stillblade-server.orcavalley.com` at it as a DNS-only record, and run the Compose stack. The Docker and Caddy setup has never been run; expect to fix something on the first try.
 3. Check the Low graphics tier on a laptop without a dedicated GPU once package G is in.

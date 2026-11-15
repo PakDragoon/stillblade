@@ -1,6 +1,6 @@
 # Stillblade — handoff
 
-Last rewritten 2026-11-15 at commit `51aa489` on `main` (pushed to github.com/PakDragoon/stillblade). Everything below describes `main` at that commit; there are no unmerged branches that matter.
+Last rewritten 2026-11-15 on `main` (game code as of commit `51aa489`; later commits are documents and the Cloudflare config) (pushed to github.com/PakDragoon/stillblade). Everything below describes `main` at that commit; there are no unmerged branches that matter.
 
 **If you are a new session:** this file tells you what exists, what has and has not been verified, the rules that must not be broken, and how the owner wants work done. `ROADMAP.md` tells you what to build next and what is already decided. Read both before changing anything. `DEPLOY.md` covers hosting. You need nothing else: no memory files or earlier conversations are assumed.
 
@@ -15,7 +15,7 @@ Built with the PlayCanvas engine as a library, TypeScript and Vite on the client
 
 ## Where things stand
 
-The game is playable end to end on a local machine. It is **not deployed** and has **never been played by a person with a mouse**: every check was automated tests, or a browser driven by script against a scripted bot. The owner has not yet played it.
+The game is playable end to end and, since 2026-11-15, **live for testing** at `https://stillblade.orcavalley.com`, with the game server running on the owner's PC behind a Cloudflare Tunnel (see Hosting; it is only up while that PC runs the server). It has **never been played by a person with a mouse**: every check was automated tests, or a browser driven by script against a scripted bot. The owner has not yet played it, and the friends test has not happened.
 
 ### What exists
 
@@ -46,7 +46,7 @@ The game is playable end to end on a local machine. It is **not deployed** and h
 5. **A live defuse**, and a match where players actually fight (stats on the result card have only ever been zeros).
 6. **Frame rate on integrated graphics**, especially Warehouse (30 k vertices, a 3072² lightmap). The adaptive-resolution step-down has never triggered in a real slow case.
 7. **Animation in motion.** Reload, switch, aim and character animations were judged from still frames.
-8. **Deployment.** Docker, Caddy, the Cloudflare Tunnel and Cloudflare Pages have never been run. See Hosting.
+8. **The always-on deployment.** Docker, Caddy and the VPS route have never been run. The tunnel route is live (see Hosting), but **ping through it is unmeasured**: a throttled test browser on the owner's own PC reported about 320 ms, which is probably inflated; check it with "Show FPS and ping" in settings, from the owner's screen and a friend's. Whether `SB_TRUST_PROXY` is set on the running server is also unconfirmed (it only shows when a seventh player connects).
 9. **Pointer lock flows:** Esc to pause, mouse release for chat, the clipboard copy of the invite link, the automatic reconnect.
 
 ## Match flow, HUD and menus in detail
@@ -199,10 +199,10 @@ All third-party art is CC0. Maps: textures and sky from Poly Haven, listed in `c
 
 ## Hosting
 
-Nothing is deployed. The plan, decided with the owner:
+Live for testing since 2026-11-15. Checked that day from a browser: the page loaded, joined a room through the tunnel, downloaded Warehouse and reached the warmup lobby with no console errors; a connection from another origin was refused.
 
-- **Client:** its own Cloudflare Pages project at `https://stillblade.orcavalley.com` (build command `npm run build:client`, output `dist/client`, variables `VITE_SERVER_URL=wss://stillblade-server.orcavalley.com` and `NODE_VERSION=22`). The owner's games home page at `play.orcavalley.com` will link to it. The build uses relative asset paths, so a sub-path also works.
-- **Server, first friends test:** the owner's own PC behind a Cloudflare Tunnel. The tunnel's public hostname `stillblade-server.orcavalley.com` points at `http://localhost:8080`, and the server is started with `SB_TRUST_PROXY=1` (so the per-IP connection limit sees real addresses through the tunnel) and `SB_ALLOWED_ORIGINS=https://stillblade.orcavalley.com`. In PowerShell: `$env:SB_TRUST_PROXY='1'; $env:SB_ALLOWED_ORIGINS='https://stillblade.orcavalley.com'; npm run server`. Check `https://stillblade-server.orcavalley.com/health`. No Docker, Caddy or DNS record is needed for this route. It has not been tried.
+- **Client (live):** a Cloudflare Workers Builds project named `stillblade`, connected to the GitHub repository, serving static files at `https://stillblade.orcavalley.com`. Cloudflare's current form is the Workers one, not classic Pages: build command `npm run build:client`, deploy command `npx wrangler deploy`, path `/`, and the output folder comes from `wrangler.jsonc` in the repo (`assets.directory` = `./dist/client`; its `name` must match the project name). Build variables (under Settings, Build, "Build variables and secrets", not runtime variables): `VITE_SERVER_URL=wss://stillblade-server.orcavalley.com` and `NODE_VERSION=22`. Every push to `main` rebuilds it. If the variable is missing the page guesses `wss://<page host>:8080` and cannot connect; `?server=wss://stillblade-server.orcavalley.com` in the URL overrides it. The owner's games home page at `play.orcavalley.com` should get a card linking to it (not done).
+- **Server (live while the owner's PC runs it):** the owner's PC behind a Cloudflare Tunnel named `stillblade` (the `cloudflared` Windows service, installed at `C:\Program Files (x86)\cloudflared\`). The tunnel has one "Published application" route: `stillblade-server.orcavalley.com` to `http://localhost:8080` (plain `http`; Cloudflare adds the encryption and created the DNS record itself). The server must be started with `SB_TRUST_PROXY=1` (so the per-IP connection limit sees real addresses through the tunnel) and `SB_ALLOWED_ORIGINS=https://stillblade.orcavalley.com`. In PowerShell from the project folder: `$env:SB_TRUST_PROXY='1'; $env:SB_ALLOWED_ORIGINS='https://stillblade.orcavalley.com'; npm run server`, and keep that window open. Check `https://stillblade-server.orcavalley.com/health`. A 502 there means the server on the PC is not running. No Docker, Caddy or VPS is involved in this route.
 - **Server, always-on:** a small VPS running the Compose stack in `deploy/` (game server plus Caddy for the certificate), with the same name as a DNS-only record. `DEPLOY.md` has the steps. Candidates priced on 2026-11-15: AWS Lightsail 1 GB with IPv4 at $7 a month, DigitalOcean 1 GB at $6; plain EC2 costs about twice as much. Region by ping from Pakistan: UAE or Bahrain, Singapore, or Mumbai.
 - **What was tested:** the `Dockerfile` got a fix (the server bundle is an ES module and needs a `package.json` saying so), verified by running the image's file layout with Node outside Docker. Docker itself could not run on the owner's PC because hardware virtualization is off, so the image build, Compose, Caddy and the certificate are untested.
 - Cloudflare's "Workers VPC" and its tunnels are not servers; the owner looked into both.
