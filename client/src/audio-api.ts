@@ -68,6 +68,10 @@ export interface AudioEngine {
     knifeSlash(pos: Vec3, hit: boolean, isLocal: boolean): void;
     /** The local player was hurt (non-positional). */
     hurt(): void;
+    /** The local player's attack landed: a short tick, distinct for a headshot and a kill (non-positional). */
+    hitMarker(kind: 'body' | 'head' | 'kill'): void;
+    /** Player volume settings, each 0..1: everything scales with `master`; footsteps (heard or own) with `footsteps`, other sounds with `effects`. */
+    setVolumes(v: { master: number; effects: number; footsteps: number }): void;
 }
 
 /** `boxes` is the map's solid geometry, for occlusion tests. */

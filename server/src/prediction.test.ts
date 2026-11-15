@@ -129,7 +129,7 @@ function playThrough(opts: { seed: number; ticks: number; upTicks: number; downT
         up.push({ at: tick + opts.upTicks, wire: encodeClient({ type: 'cmd', cmd }) });
         while (up.length && up[0].at <= tick) {
             const msg = decodeClient(up.shift()!.wire as Uint8Array);
-            game.handleCmd(id, msg.cmd);
+            game.handleCmd(id, (msg as { cmd: NetCmd }).cmd);
         }
     }
     return result;

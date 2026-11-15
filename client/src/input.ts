@@ -1,7 +1,7 @@
 import type { LoadoutInput } from '@shared/gun';
 import type { InputCmd } from '@shared/types';
 
-const SENSITIVITY = 0.0022; // radians per pixel of mouse movement
+const BASE_SENSITIVITY = 0.0022; // radians per pixel of mouse movement at multiplier 1
 const PITCH_LIMIT = (89 * Math.PI) / 180;
 
 /** Keyboard and pointer-lock mouse, sampled once per simulation tick. */
@@ -16,6 +16,11 @@ export class Input {
     /** Mouse wheel notches not yet sent: positive is down (next weapon). */
     private wheelSteps = 0;
     private mouseFire = false;
+    /** Settings: multiplier on the base sensitivity, and inverted vertical look. */
+    sensitivity = 1;
+    invertY = false;
+    /** While true (typing in chat, a menu open) game keys and the mouse do nothing. */
+    suspended = false;
     private mouseAim = false;
 
     /** Left mouse while the pointer is captured; F also fires so it can be driven without pointer lock. */
@@ -25,7 +30,8 @@ export class Input {
 
     constructor(private readonly canvas: HTMLCanvasElement) {
         window.addEventListener('keydown', e => {
-            if (e.target instanceof HTMLInputElement) return; // typing in the menu
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return; // typing in a menu or chat
+            if (this.suspended) return;
             if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) this.jumpQueued = true; }
             if (e.code === 'Tab') e.preventDefault(); // scoreboard, not focus change
             if (e.code === 'KeyQ' && !e.repeat) this.swapQueued = true;
@@ -34,7 +40,7 @@ export class Input {
         window.addEventListener('keyup', e => this.keys.delete(e.code));
         window.addEventListener('blur', () => { this.keys.clear(); this.mouseFire = this.mouseAim = false; });
         document.addEventListener('mousedown', e => {
-            if (!this.locked) return;
+            if (!this.locked || this.suspended) return;
             if (e.button === 0) this.mouseFire = true;
             else if (e.button === 2) this.mouseAim = true;
         });
@@ -44,15 +50,24 @@ export class Input {
         });
         document.addEventListener('contextmenu', e => { if (this.locked) e.preventDefault(); });
         document.addEventListener('wheel', e => {
-            if (!this.locked || e.deltaY === 0) return;
+            if (!this.locked || this.suspended || e.deltaY === 0) return;
             this.wheelSteps += e.deltaY > 0 ? 1 : -1;
         }, { passive: true });
         document.addEventListener('mousemove', e => {
-            if (!this.locked) return;
-            const k = SENSITIVITY * this.lookScale;
+            if (!this.locked || this.suspended) return;
+            const k = BASE_SENSITIVITY * this.sensitivity * this.lookScale;
             this.yaw -= e.movementX * k;
-            this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch - e.movementY * k));
+            this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch - e.movementY * k * (this.invertY ? -1 : 1)));
         });
+    }
+
+    /** Forgets every held key and button (a menu or the chat box took the keyboard). */
+    releaseAll(): void {
+        this.keys.clear();
+        this.mouseFire = this.mouseAim = false;
+        this.jumpQueued = false;
+        this.swapQueued = false;
+        this.wheelSteps = 0;
     }
 
     get locked(): boolean {

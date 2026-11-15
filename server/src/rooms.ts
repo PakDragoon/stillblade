@@ -41,7 +41,7 @@ export class Rooms {
         let created = false;
         if (!game) {
             if (this.rooms.size >= this.limits.maxRooms) return { ok: false, reason: 'Server full' };
-            game = new Game(this.maps.get(mapId || this.defaultMap)!);
+            game = new Game(this.maps.get(mapId || this.defaultMap)!, { lobby: true });
             // A new room starts at the current tick time so its clock is never behind the loop's.
             game.now = now;
             this.rooms.set(roomId, game);

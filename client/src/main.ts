@@ -17,6 +17,9 @@ import {
     type SoundEvent
 } from '@shared/protocol';
 import { DEFAULT_MAP, isMapId, type MapListEntry } from '@shared/maps';
+import { QUALITY_RES, SettingsStore } from './settings';
+import { Radar } from './radar';
+import { Ui, type JoinChoice } from './ui';
 import { canAct, movementLocked } from '@shared/rules';
 import { rayWorld } from '@shared/raycast';
 import type { Box, MapData, Vec3 } from '@shared/types';
@@ -26,7 +29,7 @@ import { Input } from './input';
 import { applyMapLook } from './maplook';
 import { Net } from './net';
 import { createPresenter } from './presenter';
-import type { LocalView, MatchView, WeaponSlotView } from './presenter-api';
+import type { LocalView, MatchView, RemoteView, WeaponSlotView } from './presenter-api';
 
 const RAD = Math.PI / 180;
 /** Vertical field of view from the hip, in degrees; aiming down sights narrows it by the weapon's zoom. */
@@ -59,46 +62,16 @@ const lagMs = Math.max(0, Number(params.get('lag')) || 0);
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
-const overlay = document.getElementById('overlay')!;
-const status = document.getElementById('status')!;
-const menu = document.getElementById('menu') as HTMLFormElement;
-const nameInput = document.getElementById('name') as HTMLInputElement;
-const roomInput = document.getElementById('room') as HTMLInputElement;
-const mapSelect = document.getElementById('map') as HTMLSelectElement;
 
-interface JoinChoice { name: string; room: string; map: string }
-
-/**
- * Shows the name, room and map form and resolves when the player presses Play. `?auto=1` skips it.
- * The map is a request: it is used if the room is new, otherwise the room's own map wins.
- */
-function askToJoin(maps: MapListEntry[], onGesture: () => void): Promise<JoinChoice> {
-    let saved = '';
-    try { saved = localStorage.getItem('sb-name') ?? ''; } catch { /* storage unavailable: no remembered name */ }
-    nameInput.value = params.get('name') ?? saved;
-    roomInput.value = params.get('room') ?? '';
-    for (const m of maps) mapSelect.add(new Option(m.name, m.id));
-    const wanted = params.get('map') ?? '';
-    mapSelect.value = maps.some(m => m.id === wanted) ? wanted : maps.some(m => m.id === DEFAULT_MAP) ? DEFAULT_MAP : maps[0]?.id ?? '';
-    const read = (): JoinChoice => ({
-        name: nameInput.value.trim(), room: roomInput.value.trim(),
-        // An id from the URL that is not in the list still goes to the server, which says no clearly.
-        map: params.has('auto') && wanted ? wanted : mapSelect.value
-    });
-    if (params.has('auto')) return Promise.resolve(read());
-    menu.hidden = false;
-    status.textContent = '';
-    return new Promise(resolve => {
-        menu.addEventListener('submit', e => {
-            e.preventDefault();
-            e.stopPropagation();
-            const choice = read();
-            try { localStorage.setItem('sb-name', choice.name); } catch { /* not remembered */ }
-            menu.hidden = true;
-            onGesture();
-            resolve(choice);
-        }, { once: true });
-    });
+/** How a refused or lost connection is explained to the player. */
+function explainFailure(reason: string): { title: string; message: string } {
+    const r = reason.toLowerCase();
+    if (r.includes('room full')) return { title: 'Room full', message: 'This room already has ten players. Ask for another room code, or use Quick play.' };
+    if (r.includes('unknown map')) return { title: 'Map not found', message: 'This server does not have the map in that link. Create a room and pick one of the listed maps.' };
+    if (r.includes('server full')) return { title: 'Server busy', message: 'The server is at its room limit. Try again in a few minutes.' };
+    if (r.includes('too many')) return { title: 'Too many connections', message: 'Close your other Stillblade tabs, then try again.' };
+    if (r.includes('origin')) return { title: 'Not allowed', message: 'This server does not accept connections from this web page.' };
+    return { title: 'Cannot reach the server', message: 'The game server did not answer. Check your connection; if it keeps failing, the server may be down.' };
 }
 
 const app = new pc.Application(canvas, {
@@ -169,28 +142,107 @@ async function loadMap(id: string): Promise<MapData> {
 
 async function start(): Promise<void> {
     const mapList = await fetchMapList();
+    const settings = new SettingsStore();
     const input = new Input(canvas);
     const presenter = createPresenter(app, camera);
     // Audio needs the map's boxes for occlusion; the array is filled once the room's map is known.
     const boxes: Box[] = [];
     const audio = createAudio(boxes);
+    const radar = new Radar(document.body);
+    /** `?auto=1` skips the menu and the lobby panel; `?quiet=1` also stops the pause menu opening (for scripted checks). */
+    const auto = params.has('auto');
+    let net!: Net;
+    let retryNow: (() => void) | null = null;
+    /** Names by player id, for the death recap, spectating and kill feed. */
+    const rosterNames = new Map<number, string>();
 
-    const { name, room, map } = await askToJoin(mapList, () => { audio.unlock(); input.lock(); });
+    const ui = new Ui(settings, {
+        join: () => { /* resolved through showMenu */ },
+        ready: ready => net?.sendMsg({ type: 'ready', ready }),
+        start: () => net?.sendMsg({ type: 'start' }),
+        switchTeam: () => net?.sendMsg({ type: 'team' }),
+        chat: (text, team) => net?.sendMsg({ type: 'chat', team, text }),
+        leave: () => { try { sessionStorage.removeItem('sb-rejoin'); } catch { /* fine */ } net?.close(); location.assign(location.pathname); },
+        retry: () => retryNow?.(),
+        backToMenu: () => { try { sessionStorage.removeItem('sb-rejoin'); } catch { /* fine */ } location.assign(location.pathname); },
+        lock: () => { audio.unlock(); input.lock(); },
+        unlock: () => document.exitPointerLock(),
+        isLocked: () => input.locked,
+        typing: on => { input.suspended = on; if (on) input.releaseAll(); }
+    });
+    ui.quiet = auto || params.has('quiet');
+    document.addEventListener('pointerlockchange', () => ui.onLockChange(input.locked));
+    canvas.addEventListener('click', () => { audio.unlock(); if (!ui.cursorNeeded) input.lock(); });
+    window.addEventListener('keydown', () => audio.unlock(), { once: true });
+
+    // Who we are joining as: the page URL (auto), a reconnect after a drop, or the menu.
+    let saved = '';
+    try { saved = localStorage.getItem('sb-name') ?? ''; } catch { /* no remembered name */ }
+    let choice: JoinChoice;
+    let rejoin: JoinChoice | null = null;
+    try { rejoin = JSON.parse(sessionStorage.getItem('sb-rejoin') ?? 'null') as JoinChoice | null; } catch { /* none */ }
+    if (auto) choice = { name: params.get('name') ?? saved, room: params.get('room') ?? '', map: params.get('map') ?? '' };
+    else if (rejoin && typeof rejoin.room === 'string') choice = rejoin;
+    else {
+        const wanted = params.get('map') ?? '';
+        choice = await ui.showMenu(mapList, {
+            name: params.get('name') ?? saved, room: params.get('room') ?? '',
+            map: mapList.some(m => m.id === wanted) ? wanted : DEFAULT_MAP
+        });
+        // An invite link's map is only a request for a new room; a joiner takes the room's own.
+        if (params.get('room') && choice.room === params.get('room')!.trim()) choice.map = wanted;
+    }
+    audio.unlock();
     const query = new URLSearchParams();
-    if (room) query.set('room', room);
-    if (name) query.set('name', name);
-    if (map) query.set('map', map);
+    if (choice.room) query.set('room', choice.room);
+    if (choice.name) query.set('name', choice.name);
+    if (choice.map) query.set('map', choice.map);
     const serverUrl = `${serverBase}/?${query}`;
 
     // The room decides the map: connect, learn it from the welcome, load it, then start simulating.
-    status.textContent = 'Connecting…';
-    const net = new Net(serverUrl, lagMs);
-    const welcome = await net.welcome.catch((err: unknown) => {
-        throw new Error(`Could not join: ${err instanceof Error ? err.message : String(err)}`);
-    });
-    status.textContent = `Loading ${welcome.mapName}…`;
-    const mapData = await loadMap(welcome.map);
+    // A refused join shows why, with a button to try again.
+    let welcome: Awaited<Net['welcome']>;
+    for (;;) {
+        ui.showLoading('Connecting', 'Looking for the game server');
+        net = new Net(serverUrl, lagMs);
+        try {
+            welcome = await net.welcome;
+            break;
+        } catch (err) {
+            const f = explainFailure(err instanceof Error ? err.message : String(err));
+            ui.showError(f.title, f.message);
+            await new Promise<void>(resolve => { retryNow = resolve; });
+        }
+    }
+    try { sessionStorage.removeItem('sb-rejoin-tried'); } catch { /* fine */ }
+    ui.showLoading(welcome.mapName, 'Downloading the map');
+    let mapData: MapData;
+    try {
+        mapData = await loadMap(welcome.map);
+    } catch (err) {
+        console.error(err);
+        ui.showError('Could not load the map', `${welcome.mapName} failed to download. Check your connection and try again.`, false);
+        return;
+    }
     boxes.push(...mapData.boxes);
+    radar.setMap(mapData);
+    // A dropped connection gets one automatic reconnect to the same room, then asks.
+    net.onClose = (code, reason) => {
+        console.warn(`connection closed: ${code} ${reason}`);
+        let tried = false;
+        try { tried = sessionStorage.getItem('sb-rejoin-tried') === '1'; } catch { /* treat as untried */ }
+        if (tried) {
+            ui.showError('Connection lost', 'The connection to the server ended and reconnecting did not work.');
+            retryNow = () => { location.reload(); };
+            return;
+        }
+        ui.showLoading('Connection lost', 'Reconnecting to the same room');
+        try {
+            sessionStorage.setItem('sb-rejoin-tried', '1');
+            sessionStorage.setItem('sb-rejoin', JSON.stringify({ ...choice, map: welcome.map }));
+        } catch { /* nothing to resume from */ }
+        setTimeout(() => location.reload(), 800);
+    };
     const camSpawn = mapData.spawns.ghosts[0];
     camera.setPosition(camSpawn.pos[0], camSpawn.pos[1] + EYE_HEIGHT, camSpawn.pos[2]);
 
@@ -296,16 +348,14 @@ async function start(): Promise<void> {
                 presenter.shot(ev.from, ev.to, false, ev.weapon ?? 0);
                 audio.gunshot(ev.from, false, ev.weapon ?? 0);
                 audio.impact(ev.to);
-            } else if (ev.victim !== undefined) presenter.hitConfirm(ev.head === true, ev.killed === true);
-            if (ev.victim === net.id) { presenter.damaged(ev.damage ?? 0); audio.hurt(); }
-            if (ev.killed && ev.victim !== undefined) presenter.killFeed(ev.shooter, ev.victim, ev.head ? 'headshot' : 'shot');
+            }
+            if (ev.killed && ev.victim !== undefined) presenter.killFeed(ev.shooter, ev.victim, ev.head ? 'headshot' : 'shot', WEAPONS[ev.weapon]?.label);
         },
         slash(ev: SlashEvent): void {
             const hit = ev.victim !== undefined;
             // Our own swing already made its whoosh when it was predicted; only a confirmed hit adds to it.
             if (ev.attacker !== net.id) audio.knifeSlash(ev.pos, hit, false);
-            else if (hit) { presenter.hitConfirm(ev.backstab === true, ev.killed === true); audio.knifeSlash(ev.pos, true, true); }
-            if (ev.victim === net.id) { presenter.damaged(ev.damage ?? 0); audio.hurt(); }
+            else if (hit) audio.knifeSlash(ev.pos, true, true);
             if (ev.killed && ev.victim !== undefined) presenter.killFeed(ev.attacker, ev.victim, ev.backstab ? 'backstab' : 'knife');
         },
         sound(ev: SoundEvent): void {
@@ -324,6 +374,7 @@ async function start(): Promise<void> {
             match.reason = msg.reason ?? null;
             match.matchOver = msg.matchOver === true;
             phaseEndsAt = msg.endsAt;
+            ui.setPhase(msg.phase);
             if (msg.phase === was) return;
             if (msg.phase === 'live' && was === 'freeze') audio.cue('roundStart');
             else if (msg.phase === 'planted') audio.cue('planted');
@@ -337,21 +388,30 @@ async function start(): Promise<void> {
         },
         roster(players: RosterEntry[]): void {
             presenter.roster(players);
+            rosterNames.clear();
+            for (const p of players) rosterNames.set(p.id, p.name);
+            ui.setRoster(players, net.id);
+        },
+        summary(msg): void { ui.showSummary(msg, net.id); },
+        chat(msg): void { ui.chat(msg, alive, match.phase === 'freeze' || match.phase === 'live' || match.phase === 'planted'); },
+        notice(text): void { ui.note(text); },
+        damage(msg): void {
+            presenter.damaged(msg.amount, msg.dir);
+            audio.hurt();
+            if (msg.killed) presenter.died(rosterNames.get(msg.by ?? -1) ?? 'Someone', msg.kind, msg.dist ?? 0, msg.weapon !== undefined ? WEAPONS[msg.weapon]?.label : undefined);
+        },
+        hitConfirm(msg): void {
+            presenter.hitConfirm(msg.kind === 'head', msg.kind === 'kill');
+            audio.hitMarker(msg.kind);
         }
     });
-
-    // Browsers keep audio muted until the player interacts with the page.
-    overlay.addEventListener('click', () => { audio.unlock(); input.lock(); });
-    overlay.classList.toggle('hidden', input.locked);
-    canvas.addEventListener('click', () => { audio.unlock(); input.lock(); });
-    window.addEventListener('keydown', () => audio.unlock(), { once: true });
-    document.addEventListener('pointerlockchange', () => overlay.classList.toggle('hidden', input.locked));
-    status.textContent = 'Click to resume';
+    ui.enterGame(choice.room || 'public', welcome.map, welcome.mapName);
 
     const local: LocalView = {
         id: 0, team: 'ghosts', health: MAX_HEALTH, alive: false, respawnIn: 0, connected: false, ping: 0, firing: false, vis: 0,
         canAct: false, action: 0, showScores: false, weapon: 0, weapons: [] as WeaponSlotView[],
-        mag: WEAPONS[0].magSize, magSize: WEAPONS[0].magSize, reserve: 0, reload: 0, spread: 0, draw: 0, aim: 0
+        mag: WEAPONS[0].magSize, magSize: WEAPONS[0].magSize, reserve: 0, reload: 0, spread: 0, draw: 0, aim: 0,
+        yaw: 0, spectating: null, spectateId: -1, overview: false
     };
     const slotViews = local.weapons as WeaponSlotView[];
     for (let i = 0; i < WEAPON_COUNT; i++) slotViews.push({ mag: 0, reserve: 0 });
@@ -360,9 +420,48 @@ async function start(): Promise<void> {
     let eye = EYE_HEIGHT;
     let fps = 60;
     let hudTimer = 0;
+    /** Spectating: the teammate being followed (by id), and a queued left/right press. */
+    let specId = -1;
+    let specStep = 0;
+    const radarSubject: { pos: Vec3; yaw: number; team: 'ghosts' | 'defenders' } = { pos: [0, 0, 0], yaw: 0, team: 'ghosts' };
+    window.addEventListener('keydown', e => {
+        if (input.suspended || e.repeat) return;
+        if (e.code === 'ArrowLeft') specStep = -1;
+        else if (e.code === 'ArrowRight') specStep = 1;
+    });
+    const mapCx = (mapData.bounds.min[0] + mapData.bounds.max[0]) / 2;
+    const mapCz = (mapData.bounds.min[2] + mapData.bounds.max[2]) / 2;
+    const mapW = mapData.bounds.max[0] - mapData.bounds.min[0];
+    const mapD = mapData.bounds.max[2] - mapData.bounds.min[2];
+    /** Picks the living teammate to follow; returns null when there is none (map overview). Teammates only, never enemies. */
+    const pickSpectated = (remotes: readonly RemoteView[]): RemoteView | null => {
+        let first: RemoteView | null = null, cur: RemoteView | null = null, next: RemoteView | null = null, prev: RemoteView | null = null;
+        for (const r of remotes) {
+            if (r.team !== net.team || !r.alive) continue;
+            if (!first || r.id < first.id) first = r;
+            if (r.id === specId) cur = r;
+        }
+        if (!first) return null;
+        if (specStep !== 0 && cur) {
+            for (const r of remotes) {
+                if (r.team !== net.team || !r.alive || r.id === cur.id) continue;
+                if (r.id > cur.id && (!next || r.id < next.id)) next = r;
+                if (r.id < cur.id && (!prev || r.id > prev.id)) prev = r;
+            }
+            let last: RemoteView | null = null;
+            for (const r of remotes) if (r.team === net.team && r.alive && (!last || r.id > last.id)) last = r;
+            cur = specStep > 0 ? next ?? first : prev ?? last;
+        }
+        specStep = 0;
+        cur ??= first;
+        specId = cur!.id;
+        return cur;
+    };
 
     // Adaptive resolution: integrated GPUs are fill-rate bound, so when frames run long the cheapest
     // fix is fewer pixels. Steps down quickly, and back up only after a long smooth stretch.
+    /** The graphics setting caps the adaptive step; `?res=` overrides everything. */
+    let resCap = 1;
     let resScale = fixedRes > 0 ? Math.max(0.4, fixedRes) : 1;
     let slowTime = 0, smoothTime = 0, sinceStepUp = Infinity, stepUpWait = 12;
     const setRes = (scale: number): void => {
@@ -371,6 +470,17 @@ async function start(): Promise<void> {
         app.resizeCanvas();
     };
     if (resScale < 1) setRes(resScale);
+    settings.watch(st => {
+        input.sensitivity = st.sensitivity;
+        input.invertY = st.invertY;
+        camera.camera!.fov = st.fov;
+        audio.setVolumes({ master: st.master, effects: st.effects, footsteps: st.footsteps });
+        presenter.setCrosshair({ style: st.crosshairStyle, color: st.crosshairColor, size: st.crosshairSize });
+        ui.applySettingsToPage(st);
+        resCap = QUALITY_RES[st.quality];
+        if (fixedRes === 0 && resScale > resCap) setRes(resCap);
+        else if (fixedRes === 0 && st.quality === 'high' && resScale < 1) { /* adaptive step-up takes it back */ }
+    });
     const adaptResolution = (dt: number): void => {
         if (fixedRes > 0 || dt > 0.2) return; // pinned, or a stall (tab switch) rather than a slow GPU
         sinceStepUp += dt;
@@ -381,7 +491,7 @@ async function start(): Promise<void> {
             if (sinceStepUp < 5) stepUpWait = Math.min(stepUpWait * 2, 120);
             setRes(resScale - 0.1);
             slowTime = smoothTime = 0;
-        } else if (smoothTime > stepUpWait && resScale < 1) {
+        } else if (smoothTime > stepUpWait && resScale < resCap) {
             setRes(resScale + 0.1);
             smoothTime = 0;
             sinceStepUp = 0;
@@ -463,6 +573,8 @@ async function start(): Promise<void> {
     };
 
     app.on('update', (dt: number) => {
+        // A panel, the pause menu or the chat box owns the keyboard and mouse: no weapon keys, buttons or wheel reach the game.
+        if (ui.cursorNeeded !== input.suspended) { input.suspended = ui.cursorNeeded; if (input.suspended) input.releaseAll(); }
         // Fixed-rate simulation, rendered with interpolation so motion is smooth at any frame rate.
         accumulator += Math.min(dt, 0.25);
         while (accumulator >= TICK_DT) {
@@ -519,11 +631,36 @@ async function start(): Promise<void> {
         local.draw = loadout.draw / held.drawTicks;
         local.aim = aimNow;
         const remotes = net.interpolate();
+        // Dead in a round: follow a living teammate in first person, or look at the whole map.
+        let followed: RemoteView | null = null;
+        const spectating = !alive && match.phase !== 'warmup' && net.connected;
+        if (spectating) {
+            followed = pickSpectated(remotes);
+            if (followed) {
+                camera.setPosition(followed.pos[0], followed.pos[1] + (followed.crouched ? EYE_HEIGHT_CROUCHED : EYE_HEIGHT), followed.pos[2]);
+                camera.setEulerAngles(followed.pitch / RAD, followed.yaw / RAD, 0);
+            } else {
+                const aspect = canvas.clientWidth / Math.max(1, canvas.clientHeight);
+                const height = Math.max(mapD, mapW / aspect) / (2 * Math.tan((settings.value.fov / 2) * RAD)) * 1.08 + mapData.bounds.max[1];
+                camera.setPosition(mapCx, height, mapCz);
+                camera.setEulerAngles(-90, 0, 0);
+            }
+        } else specId = -1;
+        local.spectating = followed ? (rosterNames.get(followed.id) ?? `Player ${followed.id}`) : null;
+        local.spectateId = followed ? followed.id : -1;
+        local.overview = spectating && !followed;
+        local.yaw = followed ? followed.yaw : input.yaw;
         presenter.frame(dt, local, remotes, match);
         const eyeNow = camera.getPosition();
         listener.pos[0] = eyeNow.x; listener.pos[1] = eyeNow.y; listener.pos[2] = eyeNow.z;
-        listener.yaw = input.yaw;
-        listener.pitch = input.pitch;
+        listener.yaw = local.yaw;
+        listener.pitch = followed ? followed.pitch : input.pitch;
+        const subject = followed ? followed.pos : curr.pos;
+        radarSubject.pos[0] = subject[0]; radarSubject.pos[1] = subject[1]; radarSubject.pos[2] = subject[2];
+        radarSubject.yaw = local.yaw;
+        radarSubject.team = net.team;
+        radar.update(dt, radarSubject, remotes, match.phase === 'planted' ? match.bombPos : null);
+        ui.tick(net.serverTime());
         listener.team = net.team;
         listener.alive = alive;
         let bomb: BombView | null = null;
@@ -564,5 +701,8 @@ async function start(): Promise<void> {
 app.start();
 start().catch(err => {
     console.error(err);
-    status.textContent = String(err instanceof Error ? err.message : err);
+    const box = document.createElement('div');
+    box.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0d10;color:#ff8a7a;font:16px system-ui;padding:24px;text-align:center';
+    box.textContent = `Stillblade could not start: ${err instanceof Error ? err.message : String(err)}`;
+    document.body.appendChild(box);
 });

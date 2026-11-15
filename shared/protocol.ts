@@ -4,7 +4,7 @@ import type { KnifeState } from './knife';
 import type { InputCmd, Vec3 } from './types';
 import { WEAPON_COUNT } from './weapons';
 
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 export const DEFAULT_PORT = 8080;
 /** Snapshots per second sent to each client. */
 export const SNAPSHOT_RATE = 30;
@@ -128,13 +128,81 @@ export interface RoundMsg {
     matchOver?: boolean;
 }
 
-export interface RosterEntry {
+/** Per-player match statistics. Reset when a new match starts. */
+export interface MatchStats {
+    kills: number;
+    deaths: number;
+    /** Damage dealt to a player who died within ASSIST_MS (shared/stats.ts) to someone else's hit. */
+    assists: number;
+    headshots: number;
+    backstabs: number;
+    /** Health actually removed from enemies. */
+    damage: number;
+    plants: number;
+    defuses: number;
+}
+
+export interface RosterEntry extends MatchStats {
     id: number;
     name: string;
     team: Team;
-    kills: number;
-    deaths: number;
     alive: boolean;
+    /** Pressed ready in the warmup lobby. */
+    ready: boolean;
+    /** The room creator: the only player who may start the match early. */
+    creator: boolean;
+    /** Moved to spectate-only for sending no input changes during live rounds. */
+    idle: boolean;
+}
+
+/** What hit a player: used for the hit marker, the kill feed and the death recap. */
+export type DamageKind = 'shot' | 'headshot' | 'knife' | 'backstab';
+
+/** Final result of a match, sent once when it is decided; the next match starts at `nextAt`. */
+export interface SummaryMsg {
+    type: 'summary';
+    winner: Team;
+    score: Record<Team, number>;
+    players: RosterEntry[];
+    /** Player id with the best `mvpScore` (shared/stats.ts). */
+    mvp: number;
+    /** Server time (ms) the fresh match starts. */
+    nextAt: number;
+}
+
+/** A chat line as delivered to one recipient. */
+export interface ChatMsg {
+    type: 'chat';
+    from: number;
+    name: string;
+    /** Team chat: only the sender's team receives it. */
+    team: boolean;
+    /** Sent by a dead player during a live round (so only dead players receive it). */
+    dead: boolean;
+    text: string;
+}
+
+/**
+ * Sent to the player who was hit. `dir` is the world bearing (radians, yaw convention: 0 faces -Z)
+ * from the victim toward the attacker, which a hit already reveals; no position, and `dist` only
+ * with the killing blow (a knife kill is within knife reach, so inside breathing range).
+ */
+export interface DamageMsg {
+    type: 'dmg';
+    dir: number;
+    amount: number;
+    kind: DamageKind;
+    killed?: boolean;
+    by?: number;
+    dist?: number;
+    /** Slot (index into WEAPONS) of the gun that hit; absent for the knife. */
+    weapon?: number;
+}
+
+/** Sent to the attacker: the hit landed. */
+export interface HitConfirmMsg {
+    type: 'hitconfirm';
+    kind: 'body' | 'head' | 'kill';
 }
 
 export type ServerMsg =
@@ -146,9 +214,23 @@ export type ServerMsg =
     | SlashEvent
     | SoundEvent
     | RoundMsg
-    | { type: 'roster'; players: RosterEntry[] };
+    | { type: 'roster'; players: RosterEntry[] }
+    | SummaryMsg
+    | ChatMsg
+    | DamageMsg
+    | HitConfirmMsg
+    /** A server note for this player only (rate limited, idle, refused request). */
+    | { type: 'notice'; text: string };
 
-export type ClientMsg = { type: 'cmd'; cmd: NetCmd };
+/** Everything except `cmd` is rare and travels as JSON text. */
+export type ClientMsg =
+    | { type: 'cmd'; cmd: NetCmd }
+    | { type: 'ready'; ready: boolean }
+    | { type: 'start' }
+    | { type: 'team' }
+    | { type: 'chat'; team: boolean; text: string };
+
+export const CHAT_MAX_CHARS = 120;
 
 // ---------------------------------------------------------------------------------------------
 // Wire format. The two messages that flow constantly (commands up, snapshots down) are packed
@@ -335,11 +417,24 @@ export function decodeServer(data: string | ArrayBuffer | Uint8Array): ServerMsg
 }
 
 export function encodeClient(m: ClientMsg): Wire {
-    return encodeCmd(m.cmd);
+    return m.type === 'cmd' ? encodeCmd(m.cmd) : JSON.stringify(m);
 }
 
-/** Throws on anything that is not a well-formed command: the server treats that as "ignore". */
-export function decodeClient(data: ArrayBuffer | Uint8Array): ClientMsg {
+/** Throws on anything that is not a well-formed message: the server treats that as "ignore". */
+export function decodeClient(data: ArrayBuffer | Uint8Array | string): ClientMsg {
+    if (typeof data === 'string') {
+        if (data.length > 600) throw new Error('message too long');
+        const m = JSON.parse(data) as Record<string, unknown>;
+        switch (m.type) {
+            case 'ready': return { type: 'ready', ready: m.ready === true };
+            case 'start': return { type: 'start' };
+            case 'team': return { type: 'team' };
+            case 'chat':
+                if (typeof m.text !== 'string') throw new Error('bad chat');
+                return { type: 'chat', team: m.team === true, text: m.text };
+            default: throw new Error('unknown client message');
+        }
+    }
     const v = view(data);
     if (v.byteLength !== CMD_BYTES || v.getUint8(0) !== CMD_TAG) throw new Error('unknown client message');
     return { type: 'cmd', cmd: decodeCmd(v) };

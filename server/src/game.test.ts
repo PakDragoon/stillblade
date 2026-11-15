@@ -82,6 +82,9 @@ function setup(map: MapData = makeMap(), rounds = false) {
     return { game, ghost, defender, run, G: game.players.get(ghost.id)!, D: game.players.get(defender.id)!, clients: [ghost, defender] };
 }
 
+/** A client that keeps nudging its view, so it is never moved to spectate for being idle. */
+const present = (c: Client): Partial<NetCmd> => ({ pitch: (c.seq % 2) * 0.001 });
+
 // Eye is at 1.62 m; aiming slightly down lands in the body, below the head zone.
 const BODY_AIM = { fire: true, pitch: -0.03 };
 
@@ -307,7 +310,7 @@ describe('defender ammunition, reload and recoil', () => {
         run(5 * FIRE_INTERVAL_TICKS, c => (c === defender ? SKY : {}));
         run(1, c => (c === defender ? { reload: true } : {}));
         expect(D.loadout.guns[0].reload).toBeGreaterThan(0);
-        run(Math.ceil(ROUND_MS / TICK_MS) + 1, () => null); // time runs out
+        run(Math.ceil(ROUND_MS / TICK_MS) + 1, present); // time runs out (players keep moving their view: not idle)
         expect(game.phase).toBe('over');
         run(Math.ceil(OVER_MS / TICK_MS) + 1);
         expect(game.phase).toBe('freeze');
@@ -717,7 +720,7 @@ describe('rounds and the bomb', () => {
 
     it('gives defenders the round when time runs out', () => {
         const { defender, run } = live();
-        run(ticks(ROUND_MS) + 1, () => null);
+        run(ticks(ROUND_MS) + 1, present);
         expect(defender.last('round')).toMatchObject({ phase: 'over', winner: 'defenders', reason: 'time' });
     });
 
@@ -726,14 +729,14 @@ describe('rounds and the bomb', () => {
         const ghostGroupClient = s.ghost, defenderGroupClient = s.defender;
         /** Plays one round: whoever is currently a defender headshots the other as soon as it is live. */
         const playRound = (): void => {
-            while (s.game.phase !== 'live') s.run(1);
-            s.run(2, c => (s.game.players.get(c.id)!.team === 'defenders' ? { fire: true } : {}));
+            while (s.game.phase !== 'live') s.run(1, present);
+            s.run(2, c => (s.game.players.get(c.id)!.team === 'defenders' ? { fire: true } : present(c)));
             expect(s.game.phase).toBe('over');
         };
         for (let i = 0; i < HALFTIME_ROUND; i++) playRound();
         expect(defenderGroupClient.last('round').score).toEqual({ ghosts: 0, defenders: HALFTIME_ROUND });
 
-        s.run(ticks(OVER_MS) + 2);
+        s.run(ticks(OVER_MS) + 2, present);
         // Roles have traded; the score follows the players, not the role.
         expect(ghostGroupClient.last('snap').me.team).toBe('defenders');
         expect(defenderGroupClient.last('snap').me.team).toBe('ghosts');
@@ -743,7 +746,7 @@ describe('rounds and the bomb', () => {
         for (let i = 0; i < ROUNDS_TO_WIN; i++) playRound();
         expect(ghostGroupClient.last('round')).toMatchObject({ winner: 'defenders', matchOver: true, score: { ghosts: HALFTIME_ROUND, defenders: ROUNDS_TO_WIN } });
 
-        s.run(ticks(MATCH_OVER_MS) + 2);
+        s.run(ticks(MATCH_OVER_MS) + 2, present);
         expect(ghostGroupClient.last('round')).toMatchObject({ phase: 'freeze', round: 1, score: { ghosts: 0, defenders: 0 } });
         expect(ghostGroupClient.last('snap').me.team).toBe('ghosts'); // a new match starts on the original sides
     });

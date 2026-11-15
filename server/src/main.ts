@@ -44,7 +44,7 @@ const http = createServer((req, res) => {
     res.writeHead(404).end();
 });
 
-const wss = new WebSocketServer({ server: http, maxPayload: 256 });
+const wss = new WebSocketServer({ server: http, maxPayload: 1024 });
 wss.on('connection', (ws, req) => {
     const origin = (req.headers.origin ?? '').replace(/\/$/, '');
     if (allowedOrigins.length > 0 && !allowedOrigins.includes(origin)) { ws.close(1008, 'Origin not allowed'); return; }
@@ -81,19 +81,18 @@ wss.on('connection', (ws, req) => {
             return;
         }
         tokens--;
-        if (!isBinary || !Buffer.isBuffer(data)) return;
         try {
-            room.handleCmd(id, decodeClient(data).cmd);
+            room.handleMessage(id, decodeClient(isBinary ? (data as Buffer) : data.toString()));
         } catch {
             // Malformed input from a client is ignored, never fatal.
         }
     });
     ws.on('pong', () => alive.add(ws));
-    ws.on('close', () => {
+    ws.on('close', (code, reason) => {
         rooms.leave(roomId, id);
         const left = (perIp.get(ip) ?? 1) - 1;
         if (left > 0) perIp.set(ip, left); else perIp.delete(ip);
-        console.log(`[${roomId}] player ${id} left (${room.players.size} in room, ${rooms.rooms.size} rooms)`);
+        console.log(`[${roomId}] player ${id} left, close ${code} ${reason.toString()} (${room.players.size} in room, ${rooms.rooms.size} rooms)`);
     });
     ws.on('error', () => ws.terminate());
 });

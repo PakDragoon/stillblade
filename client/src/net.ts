@@ -1,7 +1,8 @@
 import { INTERP_DELAY_MS } from '@shared/constants';
 import {
-    PROTOCOL_VERSION, decodeServer, encodeClient, type NetCmd, type PlayerSnap, type SelfSnap,
-    type RosterEntry, type RoundMsg, type ServerMsg, type ShotEvent, type SlashEvent, type SoundEvent, type Team
+    PROTOCOL_VERSION, decodeServer, encodeClient, type ChatMsg, type ClientMsg, type DamageMsg, type HitConfirmMsg,
+    type NetCmd, type PlayerSnap, type SelfSnap, type RosterEntry, type RoundMsg, type ServerMsg, type ShotEvent,
+    type SlashEvent, type SoundEvent, type SummaryMsg, type Team
 } from '@shared/protocol';
 import type { Vec3 } from '@shared/types';
 import type { RemoteView } from './presenter-api';
@@ -15,6 +16,11 @@ export interface NetHandlers {
     sound(ev: SoundEvent): void;
     round(msg: RoundMsg): void;
     roster(players: RosterEntry[]): void;
+    summary(msg: SummaryMsg): void;
+    chat(msg: ChatMsg): void;
+    notice(text: string): void;
+    damage(msg: DamageMsg): void;
+    hitConfirm(msg: HitConfirmMsg): void;
 }
 
 interface Sample {
@@ -74,6 +80,8 @@ export class Net {
     readonly views: RemoteView[] = [];
 
     readonly welcome: Promise<Welcome>;
+    /** Called when an established connection ends (not for a refused join: that rejects `welcome`). */
+    onClose: ((code: number, reason: string) => void) | null = null;
 
     private ws: WebSocket;
     private handlers: NetHandlers | null = null;
@@ -98,6 +106,7 @@ export class Net {
         this.ws.onclose = e => {
             this.connected = false;
             if (!this.welcomed) this.rejectWelcome(new Error(e.reason || 'Could not reach the game server'));
+            else this.onClose?.(e.code, e.reason);
         };
         this.ws.onmessage = e => {
             const msg = decodeServer(e.data as string | ArrayBuffer);
@@ -133,6 +142,19 @@ export class Net {
         const data = encodeClient({ type: 'cmd', cmd });
         if (this.lagMs > 0) setTimeout(() => { if (this.ws.readyState === WebSocket.OPEN) this.ws.send(data); }, this.lagMs / 2);
         else this.ws.send(data);
+    }
+
+    /** Sends a JSON message (ready, start, team switch, chat). */
+    sendMsg(msg: Exclude<ClientMsg, { type: 'cmd' }>): void {
+        if (this.ws.readyState !== WebSocket.OPEN) return;
+        const data = encodeClient(msg);
+        if (this.lagMs > 0) setTimeout(() => { if (this.ws.readyState === WebSocket.OPEN) this.ws.send(data); }, this.lagMs / 2);
+        else this.ws.send(data);
+    }
+
+    close(): void {
+        this.onClose = null;
+        this.ws.close();
     }
 
     /** Best estimate of the server clock (ms) right now. */
@@ -183,6 +205,21 @@ export class Net {
                 break;
             case 'roster':
                 handlers.roster(msg.players);
+                break;
+            case 'summary':
+                handlers.summary(msg);
+                break;
+            case 'chat':
+                handlers.chat(msg);
+                break;
+            case 'notice':
+                handlers.notice(msg.text);
+                break;
+            case 'dmg':
+                handlers.damage(msg);
+                break;
+            case 'hitconfirm':
+                handlers.hitConfirm(msg);
                 break;
         }
     }

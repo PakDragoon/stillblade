@@ -11,13 +11,16 @@ import {
 import { KNIFE_SLASH, KNIFE_SWING, createKnifeState, resetKnife, stepKnife } from '../../shared/knife';
 import { createPlayerState, horizontalSpeed, stepPlayer } from '../../shared/movement';
 import {
-    PROTOCOL_VERSION, SNAPSHOT_RATE, type NetCmd, type PlayerSnap, type RosterEntry, type RoundMsg,
-    type ServerMsg, type ShotEvent, type SlashEvent, type SoundEvent, type Team
+    PROTOCOL_VERSION, SNAPSHOT_RATE, type ClientMsg, type DamageKind, type MatchStats, type NetCmd, type PlayerSnap,
+    type RosterEntry, type RoundMsg, type ServerMsg, type ShotEvent, type SlashEvent, type SoundEvent, type SummaryMsg,
+    type Team
 } from '../../shared/protocol';
 import {
-    BOMB_MS, DEFUSE_TICKS, FREEZE_MS, HALFTIME_ROUND, MATCH_OVER_MS, OVER_MS, PLANT_TICKS, ROUNDS_TO_WIN, ROUND_MS,
+    BOMB_MS, DEFUSE_TICKS, FREEZE_MS, GRACE_MS, HALFTIME_ROUND, IDLE_ROUNDS, MATCH_OVER_MS, OVER_MS, PLANT_TICKS, ROUNDS_TO_WIN, ROUND_MS,
     canAct, movementLocked, type Phase, type RoundReason
 } from '../../shared/rules';
+import { cleanChat } from '../../shared/chat';
+import { ASSIST_MS, emptyStats, pickMvp } from '../../shared/stats';
 import { rayBox, rayWorld, viewDir } from '../../shared/raycast';
 import type { MapData, PlayerState, Vec3 } from '../../shared/types';
 import { ghostVisTarget, stepVis } from '../../shared/visibility';
@@ -33,6 +36,11 @@ const PITCH_LIMIT = Math.PI / 2;
 const SNAPSHOT_EVERY = Math.round(TICK_RATE / SNAPSHOT_RATE);
 /** Below this a ghost is not drawn at all, so its position is not sent on sight alone. */
 const VIS_SEND_THRESHOLD = 0.01;
+/** Chat: this many lines may be sent at once, refilled one per CHAT_REFILL_MS. */
+const CHAT_BURST = 4;
+const CHAT_REFILL_MS = 1500;
+/** Teams may differ by at most this many players after a warmup team switch. */
+const MAX_TEAM_GAP = 1;
 
 export class Player {
     state: PlayerState = createPlayerState([0, 0, 0]);
@@ -53,8 +61,29 @@ export class Player {
     stepAccum = 0;
     /** Consecutive commands spent planting or defusing. */
     actionTicks = 0;
-    kills = 0;
-    deaths = 0;
+    /** Match statistics (shared/stats.ts); reset when a new match starts. */
+    stats: MatchStats = emptyStats();
+    /** Server time this player joined: the longest-connected player inherits the creator role. */
+    joinedAt = 0;
+    ready = false;
+    /**
+     * Marked after IDLE_ROUNDS consecutive complete rounds without a single input change; not spawned
+     * at the next round start; cleared by the next input change. Nobody is ever removed mid-round.
+     */
+    idle = false;
+    /** Took part in the current round (was spawned for it). */
+    inRound = false;
+    /** Produced an input change since this round's freeze began. */
+    changedThisRound = false;
+    /** Consecutive finished rounds this player took part in without any input change. */
+    quietRounds = 0;
+    private readonly lastInput = [0, 0, 0, 0, 0];
+    private lastButtons = 0;
+    /** Chat rate limit: allowance left and when it was last topped up. */
+    chatTokens = CHAT_BURST;
+    chatTokensAt = 0;
+    /** Who damaged this player recently (attacker id to server time), for assists. */
+    readonly hurtBy = new Map<number, number>();
 
     // Ring buffer of where this player was on recent ticks, for lag compensation.
     private readonly histTime = new Float64Array(HISTORY).fill(-Infinity);
@@ -67,7 +96,7 @@ export class Player {
      * which flips at halftime.
      */
     constructor(
-        readonly id: number, readonly group: 0 | 1, public team: Team, readonly name: string, readonly conn: Connection
+        readonly id: number, public group: 0 | 1, public team: Team, readonly name: string, readonly conn: Connection
     ) {
         this.vis = team === 'ghosts' ? 0 : 1;
     }
@@ -78,6 +107,18 @@ export class Player {
 
     get eyeY(): number {
         return this.state.pos[1] + (this.state.crouched ? EYE_HEIGHT_CROUCHED : EYE_HEIGHT);
+    }
+
+    /** Whether this command changes any input compared with the previous one (seq and view time excluded). */
+    inputChanged(c: NetCmd): boolean {
+        const b = (c.jump ? 1 : 0) | (c.walk ? 2 : 0) | (c.crouch ? 4 : 0) | (c.fire ? 8 : 0) | (c.use ? 16 : 0) | (c.reload ? 32 : 0) |
+            (c.swap ? 64 : 0) | (c.aim ? 128 : 0);
+        const l = this.lastInput;
+        const changed = l[0] !== c.forward || l[1] !== c.right || l[2] !== c.yaw || l[3] !== c.pitch || l[4] !== c.slot ||
+            this.lastButtons !== b;
+        l[0] = c.forward; l[1] = c.right; l[2] = c.yaw; l[3] = c.pitch; l[4] = c.slot;
+        this.lastButtons = b;
+        return changed;
     }
 
     record(time: number): void {
@@ -138,6 +179,16 @@ export class Game {
     private reason: RoundReason | undefined;
     private matchOver = false;
     private readonly rounds: boolean;
+    /** Lobby mode (rooms): the match starts when everyone is ready or the creator starts it. */
+    private readonly lobby: boolean;
+    private startRequested = false;
+    /** A match that fell back to warmup (a team emptied) is held until this server time, then reset. */
+    private held = false;
+    private graceUntil = 0;
+    /** Players who left mid-match, by cleaned name: their stats come back if they return within GRACE_MS. null = ambiguous. */
+    private readonly departed = new Map<string, { stats: MatchStats; group: 0 | 1; at: number } | null>();
+    /** The final result, kept for players who join during the result screen. */
+    private summary: SummaryMsg | null = null;
 
     // Scratch vectors: no allocation on the hot path.
     private readonly eye: Vec3 = [0, 0, 0];
@@ -148,8 +199,9 @@ export class Game {
     private readonly target: Vec3 = [0, 0, 0];
 
     /** `rounds: false` keeps the match in warmup (free roam with respawns), for tests of the core mechanics. */
-    constructor(readonly map: MapData, opts: { rounds?: boolean } = {}) {
+    constructor(readonly map: MapData, opts: { rounds?: boolean; lobby?: boolean } = {}) {
         this.rounds = opts.rounds ?? true;
+        this.lobby = opts.lobby ?? false;
     }
 
     private teamOf(group: 0 | 1): Team {
@@ -174,28 +226,64 @@ export class Game {
         return msg;
     }
 
-    private sendRoster(): void {
+    /** The room creator: the longest-connected player. */
+    get creatorId(): number {
+        let best: Player | undefined;
+        for (const p of this.players.values()) {
+            if (!best || p.joinedAt < best.joinedAt || (p.joinedAt === best.joinedAt && p.id < best.id)) best = p;
+        }
+        return best?.id ?? 0;
+    }
+
+    private rosterEntries(): RosterEntry[] {
+        const creator = this.creatorId;
         const players: RosterEntry[] = [];
         for (const p of this.players.values()) {
-            players.push({ id: p.id, name: p.name, team: p.team, kills: p.kills, deaths: p.deaths, alive: p.alive });
+            players.push({
+                id: p.id, name: p.name, team: p.team, alive: p.alive, ...p.stats,
+                ready: p.ready, creator: p.id === creator, idle: p.idle
+            });
         }
-        this.broadcast({ type: 'roster', players });
+        return players;
+    }
+
+    private sendRoster(): void {
+        this.broadcast({ type: 'roster', players: this.rosterEntries() });
+    }
+
+    private teamCounts(): Record<Team, number> {
+        const n = { ghosts: 0, defenders: 0 };
+        for (const p of this.players.values()) n[p.team]++;
+        return n;
     }
 
     join(conn: Connection, name = ''): number {
         let ghosts = 0;
         for (const p of this.players.values()) if (p.team === 'ghosts') ghosts++;
-        const team: Team = ghosts <= this.players.size - ghosts ? 'ghosts' : 'defenders';
-        const group = team === 'ghosts' ? this.ghostGroup : ((1 - this.ghostGroup) as 0 | 1);
+        let team: Team = ghosts <= this.players.size - ghosts ? 'ghosts' : 'defenders';
+        let group = team === 'ghosts' ? this.ghostGroup : ((1 - this.ghostGroup) as 0 | 1);
         const id = this.nextId++;
         const clean = name.replace(/[^\p{L}\p{N} _.-]/gu, '').trim().slice(0, 16);
-        const player = new Player(id, group, team, clean || `Player ${id}`, conn);
+        const shown = clean || `Player ${id}`;
+        // Returning within the grace period under the same (unique) name: previous side and statistics back.
+        this.purgeDeparted();
+        const back = clean ? this.departed.get(clean) : undefined;
+        let sameName = false;
+        for (const o of this.players.values()) if (o.name === shown) sameName = true;
+        if (back && !sameName) {
+            group = back.group;
+            team = this.teamOf(group);
+        }
+        const player = new Player(id, group, team, shown, conn);
+        if (back && !sameName) { player.stats = { ...back.stats }; this.departed.delete(clean); }
+        player.joinedAt = player.chatTokensAt = this.now;
         this.players.set(id, player);
         conn.send({
             type: 'welcome', version: PROTOCOL_VERSION, id, team, map: this.map.name,
             mapName: this.map.displayName ?? this.map.name, time: this.now
         });
         conn.send(this.roundMsg());
+        if (this.summary && this.phase === 'over') conn.send(this.summary); // joined during the result screen
         // Mid-round arrivals wait for the next round rather than appearing behind someone.
         if (this.phase === 'warmup') this.spawn(player);
         this.sendRoster();
@@ -203,7 +291,165 @@ export class Game {
     }
 
     leave(id: number): void {
+        // The creator role passes to the longest-connected player by itself (see `creatorId`).
+        const p = this.players.get(id);
+        if (p && this.matchInProgress()) {
+            this.purgeDeparted();
+            // Two leavers with one name cannot be told apart: restore neither.
+            this.departed.set(p.name, this.departed.has(p.name) ? null : { stats: { ...p.stats }, group: p.group, at: this.now });
+        }
         if (this.players.delete(id)) this.sendRoster();
+    }
+
+    private matchInProgress(): boolean {
+        return this.held || this.roundsPlayed > 0 || this.phase === 'freeze' || this.phase === 'live' || this.phase === 'planted';
+    }
+
+    private purgeDeparted(): void {
+        for (const [name, d] of this.departed) if (d && this.now - d.at > GRACE_MS) this.departed.delete(name);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Match flow: lobby, chat, statistics, idle handling. JSON messages only; nothing here is
+    // predicted by the client and nothing here may reveal where an enemy is (see `knowsAbout`).
+    // -----------------------------------------------------------------------------------------
+
+    /** A JSON message from a client (everything but the binary movement command). */
+    handleMessage(id: number, msg: ClientMsg): void {
+        const p = this.players.get(id);
+        if (!p) return;
+        switch (msg.type) {
+            case 'cmd': this.handleCmd(id, msg.cmd); break;
+            case 'ready':
+                if (this.phase !== 'warmup' || p.ready === msg.ready) break;
+                p.ready = msg.ready;
+                this.sendRoster();
+                break;
+            case 'start': this.requestStart(p); break;
+            case 'team': this.switchTeam(p); break;
+            case 'chat': this.chat(p, msg.team, msg.text); break;
+        }
+    }
+
+    private notice(p: Player, text: string): void {
+        p.conn.send({ type: 'notice', text });
+    }
+
+    private everyoneReady(): boolean {
+        if (this.players.size === 0) return false;
+        for (const p of this.players.values()) if (!p.ready) return false;
+        return true;
+    }
+
+    /** The creator starts the match early, once each team has a player. */
+    private requestStart(p: Player): void {
+        if (this.phase !== 'warmup') return;
+        if (p.id !== this.creatorId) { this.notice(p, 'Only the room creator can start the match.'); return; }
+        const n = this.teamCounts();
+        if (n.ghosts === 0 || n.defenders === 0) { this.notice(p, 'Each team needs at least one player.'); return; }
+        this.startRequested = true;
+    }
+
+    /** Warmup only, and only if the teams then differ by at most MAX_TEAM_GAP players. */
+    private switchTeam(p: Player): void {
+        if (this.phase !== 'warmup') { this.notice(p, 'Teams can only be changed in warmup.'); return; }
+        const n = this.teamCounts();
+        const to: Team = p.team === 'ghosts' ? 'defenders' : 'ghosts';
+        if (Math.abs((n[to] + 1) - (n[p.team] - 1)) > MAX_TEAM_GAP) { this.notice(p, 'That would make the teams uneven.'); return; }
+        p.group = (1 - p.group) as 0 | 1;
+        p.team = this.teamOf(p.group);
+        this.spawn(p);
+        this.sendRoster();
+    }
+
+    /**
+     * All-chat or team chat. Dead players' lines (while a round is on) reach only dead players, so
+     * the dead cannot call out positions; team chat never leaves the team.
+     */
+    private chat(p: Player, teamOnly: boolean, raw: string): void {
+        const text = cleanChat(raw);
+        if (!text) return;
+        p.chatTokens = Math.min(CHAT_BURST, p.chatTokens + (this.now - p.chatTokensAt) / CHAT_REFILL_MS);
+        p.chatTokensAt = this.now;
+        if (p.chatTokens < 1) { this.notice(p, 'You are sending messages too fast.'); return; }
+        p.chatTokens--;
+        const roundOn = this.phase === 'freeze' || this.phase === 'live' || this.phase === 'planted';
+        const dead = roundOn && !p.alive;
+        const msg: ServerMsg = { type: 'chat', from: p.id, name: p.name, team: teamOnly, dead, text };
+        for (const r of this.players.values()) {
+            if (teamOnly && r.team !== p.team) continue;
+            if (dead && r.alive) continue;
+            r.conn.send(msg);
+        }
+    }
+
+    /** Any change of input (not the command number or clock) counts as being present. */
+    private trackInput(p: Player, cmd: NetCmd): void {
+        if (!p.inputChanged(cmd)) return;
+        if (this.phase === 'freeze' || this.phase === 'live' || this.phase === 'planted') p.changedThisRound = true;
+        if (p.idle) {
+            p.idle = false;
+            p.quietRounds = 0;
+            this.notice(p, 'You are back: you play again from the next round.');
+            this.sendRoster();
+        }
+    }
+
+    /**
+     * Called when a round ends: someone who took part and never touched an input for IDLE_ROUNDS rounds
+     * in a row is marked idle and is not spawned at the next round start. Standing still all round is
+     * not idleness for a player who looks or presses anything, and nobody is removed mid-round.
+     */
+    private countQuietRounds(): void {
+        for (const p of this.players.values()) {
+            if (!p.inRound) continue;
+            p.quietRounds = p.changedThisRound ? 0 : p.quietRounds + 1;
+            if (p.quietRounds >= IDLE_ROUNDS && !p.idle) {
+                p.idle = true;
+                this.notice(p, `No input for ${IDLE_ROUNDS} rounds: you sit out until you move or press a key. You return at the next round start after that.`);
+            }
+        }
+    }
+
+    /** Bearing (yaw convention) from `from` toward `to`, on the ground plane. */
+    private bearing(from: Vec3, to: Vec3): number {
+        return Math.atan2(-(to[0] - from[0]), -(to[2] - from[2]));
+    }
+
+    /** Stats for one landed hit, and the hit messages to both sides. */
+    private recordHit(victim: Player, attacker: Player, dealt: number, kind: DamageKind, weapon?: number): void {
+        if (!this.held) { // warmup play while a match is held must not change its statistics
+            attacker.stats.damage += dealt;
+            if (kind === 'headshot') attacker.stats.headshots++;
+            else if (kind === 'backstab') attacker.stats.backstabs++;
+        }
+        victim.hurtBy.set(attacker.id, this.now);
+        const killed = victim.health <= 0;
+        // The victim learns the direction of the hit and how much it hurt: nothing else. A kill adds
+        // who and how far (a knife kill is within reach, so already inside breathing range).
+        const dmg: ServerMsg = { type: 'dmg', dir: this.bearing(victim.state.pos, attacker.state.pos), amount: dealt, kind };
+        if (weapon !== undefined) dmg.weapon = weapon;
+        if (killed) {
+            dmg.killed = true;
+            dmg.by = attacker.id;
+            dmg.dist = Math.round(dist(victim.state.pos, attacker.state.pos) * 10) / 10;
+        }
+        victim.conn.send(dmg);
+        attacker.conn.send({ type: 'hitconfirm', kind: killed ? 'kill' : kind === 'headshot' ? 'head' : 'body' });
+    }
+
+    private recordKill(victim: Player, attacker: Player, kind: DamageKind): void {
+        void kind;
+        if (this.held) return;
+        victim.stats.deaths++;
+        attacker.stats.kills++;
+        for (const [id, at] of victim.hurtBy) {
+            if (id !== attacker.id && this.now - at <= ASSIST_MS) {
+                const helper = this.players.get(id);
+                if (helper) helper.stats.assists++;
+            }
+        }
+        victim.hurtBy.clear();
     }
 
     private spawn(p: Player): void {
@@ -234,6 +480,7 @@ export class Game {
         if (p.credits <= 0) return;
         p.credits--;
         p.lastSeq = cmd.seq;
+        this.trackInput(p, cmd);
         if (!p.alive) return;
 
         cmd.forward = clamp(cmd.forward, -1, 1);
@@ -294,6 +541,7 @@ export class Game {
                 if (p.actionTicks >= PLANT_TICKS) this.plant(p);
             } else if (p.actionTicks >= DEFUSE_TICKS) {
                 p.actionTicks = 0;
+                p.stats.defuses++;
                 this.endRound('defenders', 'defused');
             }
             return;
@@ -314,9 +562,11 @@ export class Game {
         }
     }
 
-    private damage(victim: Player, amount: number, attacker: Player): boolean {
+    private damage(victim: Player, amount: number, attacker: Player, kind: DamageKind, weapon?: number): boolean {
+        const dealt = Math.min(amount, victim.health);
         victim.health = Math.max(0, victim.health - amount);
         if (victim.team === 'ghosts') victim.vis = Math.max(victim.vis, VIS_HURT_SPIKE);
+        this.recordHit(victim, attacker, dealt, kind, weapon);
         if (victim.health > 0) return false;
         victim.alive = false;
         // Only warmup has respawns; in a round the dead wait for the next one.
@@ -324,8 +574,7 @@ export class Game {
         resetKnife(victim.knife);
         cancelReloads(victim.loadout); // death cancels a reload
         victim.actionTicks = 0;
-        victim.deaths++;
-        attacker.kills++;
+        this.recordKill(victim, attacker, kind);
         this.sendRoster();
         return true;
     }
@@ -379,7 +628,7 @@ export class Game {
             event.victim = victim.id;
             event.head = head;
             event.damage = amount;
-            if (this.damage(victim, amount, shooter)) event.killed = true;
+            if (this.damage(victim, amount, shooter, head ? 'headshot' : 'shot', shooter.loadout.slot)) event.killed = true;
         }
         this.broadcast(event);
     }
@@ -416,7 +665,7 @@ export class Game {
             event.victim = victim.id;
             event.damage = amount;
             event.backstab = backstab;
-            if (this.damage(victim, amount, attacker)) event.killed = true;
+            if (this.damage(victim, amount, attacker, backstab ? 'backstab' : 'knife')) event.killed = true;
         }
         for (const p of this.players.values()) {
             if (p === attacker || p === victim || dist(p.state.pos, attacker.state.pos) <= KNIFE_SOUND_RANGE) p.conn.send(event);
@@ -446,17 +695,38 @@ export class Game {
     }
 
     private startRound(): void {
+        if (this.roundsPlayed === 0 && !this.held) this.resetMatch(); // a fresh match: nothing carries over from warmup
+        this.held = false; // a held match resumes here with its score, sides and statistics
+        this.startRequested = false;
         this.bomb = null;
         this.winner = this.reason = undefined;
+        this.summary = null;
         this.spawnCursor.ghosts = this.spawnCursor.defenders = 0;
-        for (const p of this.players.values()) this.spawn(p);
+        for (const p of this.players.values()) {
+            p.ready = false;
+            p.hurtBy.clear();
+            p.changedThisRound = false;
+            p.inRound = !p.idle;
+            if (!p.idle) this.spawn(p);
+        }
         this.setPhase('freeze', FREEZE_MS);
         this.sendRoster();
     }
 
-    private toWarmup(): void {
+    /**
+     * Back to warmup because a team is empty. A match in progress is held for GRACE_MS (score, rounds,
+     * sides, statistics) and resumes by itself once both teams have a player again.
+     */
+    private toWarmup(hold: boolean): void {
         this.bomb = null;
-        for (const p of this.players.values()) if (!p.alive) this.spawn(p);
+        this.startRequested = false;
+        if (hold) { this.held = true; this.graceUntil = this.now + GRACE_MS; }
+        else this.resetMatch();
+        for (const p of this.players.values()) {
+            p.ready = false;
+            p.inRound = false;
+            if (!p.alive && !p.idle) this.spawn(p);
+        }
         this.setPhase('warmup', 0);
         this.sendRoster();
     }
@@ -464,6 +734,7 @@ export class Game {
     private plant(p: Player): void {
         p.actionTicks = 0;
         this.bomb = [...p.state.pos] as Vec3;
+        p.stats.plants++;
         this.setPhase('planted', BOMB_MS);
     }
 
@@ -473,7 +744,29 @@ export class Game {
         this.roundsPlayed++;
         const group = winner === 'ghosts' ? this.ghostGroup : 1 - this.ghostGroup;
         this.matchOver = ++this.score[group] >= ROUNDS_TO_WIN;
+        this.countQuietRounds();
         this.setPhase('over', this.matchOver ? MATCH_OVER_MS : OVER_MS);
+        this.sendRoster();
+        if (this.matchOver) {
+            this.summary = {
+                type: 'summary', winner, nextAt: this.phaseEndsAt, mvp: 0, players: this.rosterEntries(),
+                score: { ghosts: this.score[this.ghostGroup], defenders: this.score[1 - this.ghostGroup] }
+            };
+            this.summary.mvp = pickMvp(this.summary.players);
+            this.broadcast(this.summary);
+        }
+    }
+
+    /** Zeroes the score and every player's statistics. */
+    private resetMatch(): void {
+        this.score[0] = this.score[1] = 0;
+        this.roundsPlayed = 0;
+        this.matchOver = false;
+        this.summary = null;
+        this.setGhostGroup(0);
+        this.held = false;
+        this.departed.clear();
+        for (const p of this.players.values()) { p.stats = emptyStats(); p.hurtBy.clear(); p.quietRounds = 0; }
     }
 
     /** Flips which side plays ghosts and tells every player its new role. */
@@ -486,6 +779,7 @@ export class Game {
     private updateRound(): void {
         let ghosts = 0, defenders = 0, ghostsAlive = 0, defendersAlive = 0;
         for (const p of this.players.values()) {
+            if (p.idle) continue; // spectate-only players do not hold a team up
             if (p.team === 'ghosts') { ghosts++; if (p.alive) ghostsAlive++; }
             else { defenders++; if (p.alive) defendersAlive++; }
         }
@@ -493,14 +787,15 @@ export class Game {
         const expired = this.now >= this.phaseEndsAt;
         switch (this.phase) {
             case 'warmup':
-                if (playable) this.startRound();
+                if (this.held && this.now >= this.graceUntil) this.resetMatch(); // too long: a fresh lobby
+                if (playable && (this.held || !this.lobby || this.startRequested || this.everyoneReady())) this.startRound();
                 break;
             case 'freeze':
-                if (!playable) this.toWarmup();
+                if (!playable) this.toWarmup(true);
                 else if (expired) this.setPhase('live', ROUND_MS);
                 break;
             case 'live':
-                if (!playable) this.toWarmup();
+                if (!playable) this.toWarmup(true);
                 else if (defendersAlive === 0) this.endRound('ghosts', 'eliminated');
                 else if (ghostsAlive === 0) this.endRound('defenders', 'eliminated');
                 else if (expired) this.endRound('defenders', 'time');
@@ -512,17 +807,13 @@ export class Game {
                 break;
             case 'over':
                 if (!expired) break;
-                if (this.matchOver) {
-                    this.matchOver = false;
-                    this.score[0] = this.score[1] = 0;
-                    this.roundsPlayed = 0;
-                    for (const p of this.players.values()) p.kills = p.deaths = 0;
-                    this.setGhostGroup(0);
-                } else if (this.roundsPlayed === HALFTIME_ROUND) {
+                const finished = this.matchOver;
+                if (finished) this.resetMatch(); // rematch: same room and map, groups kept
+                else if (this.roundsPlayed === HALFTIME_ROUND) {
                     this.setGhostGroup((1 - this.ghostGroup) as 0 | 1);
                 }
                 if (playable) this.startRound();
-                else this.toWarmup();
+                else this.toWarmup(!finished);
                 break;
         }
     }

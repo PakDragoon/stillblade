@@ -12,8 +12,8 @@ const cmd: NetCmd = {
 const SNAP_HEAD = 75 + 5 + 7 * WEAPON_COUNT + 3;
 
 describe('wire format', () => {
-    it('is protocol version 7', () => {
-        expect(PROTOCOL_VERSION).toBe(7);
+    it('is protocol version 8', () => {
+        expect(PROTOCOL_VERSION).toBe(8);
     });
 
     it('round-trips a command exactly, in 25 bytes', () => {
@@ -21,7 +21,7 @@ describe('wire format', () => {
         expect(wire).toBeInstanceOf(Uint8Array);
         expect((wire as Uint8Array).byteLength).toBe(25);
         // Exact equality matters: the server must simulate the very inputs the client predicted with.
-        expect(decodeClient(wire as Uint8Array).cmd).toEqual(cmd);
+        expect(decodeClient(wire as Uint8Array)).toEqual({ type: "cmd", cmd: cmd });
     });
 
     it('round-trips every command flag on its own', () => {
@@ -30,14 +30,14 @@ describe('wire format', () => {
                 ...cmd, jump: false, walk: false, crouch: false, fire: false, use: false, reload: false, swap: false, aim: false,
                 slot: 0, [flag]: true
             };
-            expect(decodeClient(encodeClient({ type: 'cmd', cmd: only }) as Uint8Array).cmd).toEqual(only);
+            expect(decodeClient(encodeClient({ type: 'cmd', cmd: only }) as Uint8Array)).toEqual({ type: 'cmd', cmd: only });
         }
     });
 
     it('round-trips every weapon slot request', () => {
         for (let slot = 0; slot <= 255; slot++) {
             const c: NetCmd = { ...cmd, slot, swap: false, aim: false };
-            expect(decodeClient(encodeClient({ type: 'cmd', cmd: c }) as Uint8Array).cmd.slot).toBe(slot);
+            expect((decodeClient(encodeClient({ type: 'cmd', cmd: c }) as Uint8Array) as { cmd: NetCmd }).cmd.slot).toBe(slot);
         }
     });
 
@@ -45,7 +45,7 @@ describe('wire format', () => {
         const wire = encodeClient({ type: 'cmd', cmd }) as Uint8Array;
         const padded = new Uint8Array(64);
         padded.set(wire, 10);
-        expect(decodeClient(padded.subarray(10, 35)).cmd).toEqual(cmd);
+        expect(decodeClient(padded.subarray(10, 35))).toEqual({ type: 'cmd', cmd });
     });
 
     it('rejects malformed commands', () => {
@@ -141,5 +141,15 @@ describe('wire format', () => {
 
     it('rejects unknown binary from the server', () => {
         expect(() => decodeServer(new Uint8Array(10))).toThrow();
+    });
+
+    it('round-trips the JSON client messages and rejects junk', () => {
+        expect(decodeClient(encodeClient({ type: 'chat', team: true, text: 'hi' }) as string)).toEqual({ type: 'chat', team: true, text: 'hi' });
+        expect(decodeClient(encodeClient({ type: 'ready', ready: true }) as string)).toEqual({ type: 'ready', ready: true });
+        expect(decodeClient('{"type":"start"}')).toEqual({ type: 'start' });
+        expect(decodeClient('{"type":"team"}')).toEqual({ type: 'team' });
+        expect(() => decodeClient('{"type":"chat","text":5}')).toThrow();
+        expect(() => decodeClient('{"type":"nope"}')).toThrow();
+        expect(() => decodeClient('x'.repeat(700))).toThrow();
     });
 });
