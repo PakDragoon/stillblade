@@ -750,6 +750,37 @@ function linearGain(d: number, ref: number, max: number): number {
 // Breathing loops
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Distance attenuation of a ghost's breathing (amplitude, 1 = the old level at point blank). The panner only
+ * places it (HRTF direction) and this curve, applied by its own gain stage, sets how loud it is:
+ *   - inside BREATH_NEAR (2.5 m): a flat BREATH_NEAR_GAIN, about -10 dB below the old level at 1 m, so a ghost
+ *     right next to you is no longer deafening (the owner found it far too loud up close);
+ *   - BREATH_NEAR to BREATH_KNEE (6 m): eases down in decibels to the old curve's level at 6 m;
+ *   - BREATH_KNEE to BREATH_RANGE: exactly the old curve (linear from 0.8 m to silence at 8 m), so it is heard at
+ *     6 to 8 m as before and fades to nothing at the gameplay range.
+ * Changed by measurement only (2026-11-16); needs the owner's ear.
+ */
+const BREATH_NEAR = 2.5;
+const BREATH_NEAR_GAIN = 0.32;
+const BREATH_KNEE = 6;
+/** The old breathing panner: linear from 0.8 m (full) to BREATH_RANGE (silent). */
+const BREATH_OLD_REF = 0.8;
+const BREATH_KNEE_DB = 20 * Math.log10(linearGainOld(BREATH_KNEE));
+const BREATH_NEAR_DB = 20 * Math.log10(BREATH_NEAR_GAIN);
+/** Smoothing (s) of the breathing level as the distance changes. */
+const BREATH_GAIN_SMOOTH = 0.03;
+
+function linearGainOld(d: number): number {
+    return linearGain(d, BREATH_OLD_REF, BREATH_RANGE);
+}
+
+export function breathDistanceGain(d: number): number {
+    if (d <= BREATH_NEAR) return BREATH_NEAR_GAIN;
+    if (d >= BREATH_KNEE) return linearGainOld(d);
+    const t = (d - BREATH_NEAR) / (BREATH_KNEE - BREATH_NEAR);
+    return Math.pow(10, (BREATH_NEAR_DB + (BREATH_KNEE_DB - BREATH_NEAR_DB) * t) / 20);
+}
+
 interface Breather {
     id: number;
     src: AudioBufferSourceNode;
@@ -759,6 +790,8 @@ interface Breather {
     occF: BiquadFilterNode;
     occG: GainNode;
     fade: GainNode;
+    /** Distance level (`breathDistanceGain`); the panner itself does not attenuate. */
+    dist: GainNode;
     panner: PannerNode;
     /** Frame number in which the ghost was last present and alive. */
     seen: number;
@@ -938,18 +971,23 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
         const fade = c.createGain();
         fade.gain.setValueAtTime(0, now);
         fade.gain.linearRampToValueAtTime(1, now + LOOP_FADE);
-        const panner = makePanner(c, true, 0.8, BREATH_RANGE);
+        // HRTF for direction only: rolloff 0, the level comes from `dist` (breathDistanceGain).
+        const panner = makePanner(c, true, BREATH_OLD_REF, BREATH_RANGE);
+        panner.rolloffFactor = 0;
+        const dist = c.createGain();
+        dist.gain.value = 0;
         src.connect(formant);
         formant.connect(band);
         band.connect(amp);
         amp.connect(occF);
         occF.connect(occG);
         occG.connect(fade);
-        fade.connect(panner);
+        fade.connect(dist);
+        dist.connect(panner);
         panner.connect(out);
         src.start(now, Math.random() * nb.pink.duration);
         const b: Breather = {
-            id, src, formant, band, amp, occF, occG, fade, panner,
+            id, src, formant, band, amp, occF, occG, fade, dist, panner,
             seen: frameNo, dying: false, exert: 0,
             // Random phase so several ghosts do not breathe in unison.
             nextBreath: now + Math.random() * 0.6,
@@ -957,7 +995,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
         };
         src.onended = () => {
             src.disconnect(); formant.disconnect(); band.disconnect(); amp.disconnect();
-            occF.disconnect(); occG.disconnect(); fade.disconnect(); panner.disconnect();
+            occF.disconnect(); occG.disconnect(); fade.disconnect(); dist.disconnect(); panner.disconnect();
             const i = breathers.indexOf(b);
             if (i >= 0) { breathers[i] = breathers[breathers.length - 1]; breathers.pop(); }
         };
@@ -1137,6 +1175,10 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
                 if (b.seen !== frameNo) { releaseBreather(b, now); continue; }
                 const h = b.head;
                 setPannerPos(b.panner, h[0], h[1], h[2]);
+                const ddx = h[0] - lpos[0], ddy = h[1] - lpos[1], ddz = h[2] - lpos[2];
+                const level = breathDistanceGain(Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz));
+                if (!b.occInit) b.dist.gain.value = level; // a new emitter starts at its level (the fade-in covers it)
+                else b.dist.gain.setTargetAtTime(level, now, BREATH_GAIN_SMOOTH);
 
                 b.occTimer -= dt;
                 if (b.occTimer <= 0 || !b.occInit) {
