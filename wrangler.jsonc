@@ -1,0 +1,10 @@
+// Cloudflare Workers Builds: serves the built web client (static files only, no Worker script).
+// Build command: npm run build:client. Deploy command: npx wrangler deploy.
+// "name" must match the project name chosen in the Cloudflare dashboard.
+{
+    "name": "stillblade",
+    "compatibility_date": "2026-11-15",
+    "assets": {
+        "directory": "./dist/client"
+    }
+}
