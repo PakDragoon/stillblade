@@ -25,9 +25,12 @@ import { rayWorld } from '@shared/raycast';
 import type { Box, MapData, Vec3 } from '@shared/types';
 import { createAudio } from './audio';
 import type { BombView, ListenerView } from './audio-api';
+import { bindings, inputMatches, mouseInput } from './bindings';
 import { Input } from './input';
 import { applyMapLook } from './maplook';
 import { Net } from './net';
+import { isTouchOnly, showPhoneNotice } from './phone';
+import { reporter } from './report';
 import { createPresenter } from './presenter';
 import type { LocalView, MatchView, RemoteView, WeaponSlotView } from './presenter-api';
 
@@ -62,6 +65,9 @@ const lagMs = Math.max(0, Number(params.get('lag')) || 0);
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
+// Errors, lost graphics contexts and feedback notes are reported from here on (client/src/report.ts).
+reporter.configure(serverBase, canvas);
+reporter.install();
 
 /** How a refused or lost connection is explained to the player. */
 function explainFailure(reason: string): { title: string; message: string } {
@@ -205,6 +211,7 @@ async function start(): Promise<void> {
     for (;;) {
         ui.showLoading('Connecting', 'Looking for the game server');
         net = new Net(serverUrl, lagMs);
+        reporter.setSocket(msg => { if (!net.isOpen) return false; net.sendMsg(msg); return true; });
         try {
             welcome = await net.welcome;
             break;
@@ -334,6 +341,7 @@ async function start(): Promise<void> {
             errorOffset[0] = errorOffset[1] = errorOffset[2] = 0;
             input.yaw = yaw;
             input.pitch = 0;
+            input.clearToggles(); // a new life starts standing and not aiming
             alive = true;
             health = MAX_HEALTH;
             resetKnife(knife);
@@ -405,6 +413,7 @@ async function start(): Promise<void> {
             audio.hitMarker(msg.kind);
         }
     });
+    reporter.mapName = welcome.mapName;
     ui.enterGame(choice.room || 'public', welcome.map, welcome.mapName);
 
     const local: LocalView = {
@@ -424,11 +433,12 @@ async function start(): Promise<void> {
     let specId = -1;
     let specStep = 0;
     const radarSubject: { pos: Vec3; yaw: number; team: 'ghosts' | 'defenders' } = { pos: [0, 0, 0], yaw: 0, team: 'ghosts' };
-    window.addEventListener('keydown', e => {
-        if (input.suspended || e.repeat) return;
-        if (e.code === 'ArrowLeft') specStep = -1;
-        else if (e.code === 'ArrowRight') specStep = 1;
-    });
+    const specInput = (code: string): void => {
+        if (inputMatches(bindings().value, 'specPrev', code)) specStep = -1;
+        else if (inputMatches(bindings().value, 'specNext', code)) specStep = 1;
+    };
+    window.addEventListener('keydown', e => { if (!input.suspended && !e.repeat) specInput(e.code); });
+    document.addEventListener('mousedown', e => { const c = mouseInput(e.button); if (c && !input.suspended && input.locked) specInput(c); });
     const mapCx = (mapData.bounds.min[0] + mapData.bounds.max[0]) / 2;
     const mapCz = (mapData.bounds.min[2] + mapData.bounds.max[2]) / 2;
     const mapW = mapData.bounds.max[0] - mapData.bounds.min[0];
@@ -470,9 +480,11 @@ async function start(): Promise<void> {
         app.resizeCanvas();
     };
     if (resScale < 1) setRes(resScale);
+    reporter.setLive(() => ({ fps, renderScale: resScale, ping: net.ping }));
     settings.watch(st => {
         input.sensitivity = st.sensitivity;
         input.invertY = st.invertY;
+        input.setModes(st.crouchToggle, st.walkToggle, st.aimToggle, st.aimSensitivity);
         camera.camera!.fov = st.fov;
         audio.setVolumes({ master: st.master, effects: st.effects, footsteps: st.footsteps });
         presenter.setCrosshair({ style: st.crosshairStyle, color: st.crosshairColor, size: st.crosshairSize });
@@ -687,7 +699,7 @@ async function start(): Promise<void> {
     // Handle for automated checks and console debugging.
     Object.assign(window, {
         __sb: {
-            app, state: curr, input, net, mapData, mapList, audio, presenter, match,
+            app, state: curr, input, net, mapData, mapList, audio, presenter, match, ui,
             loadout, knife,
             stats: () => ({
                 fps, resScale, alive, health, vis, pending: pending.length, error: Math.hypot(...errorOffset),
@@ -698,8 +710,12 @@ async function start(): Promise<void> {
     });
 }
 
-app.start();
-start().catch(err => {
+/** A touch device with no mouse is told so before the map, the models or the socket are touched (`?desktop=1` skips it). */
+const phone = isTouchOnly(window.matchMedia?.bind(window)) && !params.has('desktop') ? showPhoneNotice(location.href) : Promise.resolve();
+phone.then(() => {
+    app.start();
+    return start();
+}).catch(err => {
     console.error(err);
     const box = document.createElement('div');
     box.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0d10;color:#ff8a7a;font:16px system-ui;padding:24px;text-align:center';

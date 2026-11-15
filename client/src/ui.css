@@ -137,5 +137,23 @@ kbd { display: inline-block; padding: 1px 7px; margin-right: 4px; border: 1px so
 #toast { position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); padding: 8px 16px; background: var(--raise);
     border-bottom: 2px solid var(--go); display: none; }
 body.no-stats #hud, body.no-stats #sb-info .ping { display: none; }
+/* rebinding and feedback */
+#settings-screen .card { max-height: calc(100vh - 24px); }
+#settings-screen .bind-help { grid-column: 1 / -1; font-size: 13px; }
+#settings-screen .bindings { grid-column: 1 / -1; display: grid; gap: 4px; }
+#settings-screen .bindings h4 { margin: 10px 0 2px; font-size: 13px; letter-spacing: .08em; color: var(--dim); font-weight: 600; }
+#settings-screen .bind-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 28px; }
+#settings-screen .bind { display: grid; grid-template-columns: 1fr 112px 112px; gap: 6px; align-items: center; padding: 3px 6px; border-left: 2px solid transparent; font-size: 14px; }
+#settings-screen .bind.conflict { border-left-color: var(--warn); background: rgba(255, 90, 74, .08); }
+#settings-screen .bind button.key { padding: 7px 8px; font-size: 13px; letter-spacing: .02em; text-align: center; }
+#settings-screen .bind button.key.empty { color: var(--dim); }
+#settings-screen .bind button.key.waiting { background: var(--bone); color: var(--ink); }
+#settings-screen .bind .conflict-msg { grid-column: 1 / -1; color: #ffd0cb; font-size: 13px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#settings-screen .bind .conflict-msg button { padding: 6px 10px; font-size: 12px; }
+#feedback-screen .card { width: min(520px, calc(100vw - 32px)); display: grid; gap: 12px; }
+#feedback-screen textarea { width: 100%; resize: vertical; font: 500 15px/1.4 var(--face); padding: 10px 12px; border: 1px solid var(--line); background: #10151b; color: var(--bone); }
+#feedback-screen .small { font-size: 13px; }
+#feedback-screen .status.ok { color: var(--go); } #feedback-screen .status.bad { color: var(--warn); }
+@media (max-width: 900px) { #settings-screen .bind-grid { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { #menu-screen .wrap { grid-template-columns: 1fr; } #lobby-screen .teams { grid-template-columns: 1fr; } #settings-screen .grid { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { #menu-screen .rings i, #loading-screen .bar i { animation: none; } }
