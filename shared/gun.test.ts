@@ -40,8 +40,8 @@ function pistolReady(): LoadoutState {
 
 describe('weapon table', () => {
     it('keeps the rifle as it was and gives the pistol its own numbers', () => {
-        expect(RIFLE).toMatchObject({ auto: true, fireInterval: 6, magSize: 30, reserve: 90, reloadTicks: 132, bodyDamage: 34, headDamage: 100 });
-        expect(PISTOL).toMatchObject({ auto: false, fireInterval: 9, magSize: 12, reserve: 36, reloadTicks: 84, bodyDamage: 26, headDamage: 100 });
+        expect(RIFLE).toMatchObject({ auto: true, fireInterval: 6, magSize: 30, reserve: 90, reloadTicks: 132, bodyDamage: 34 });
+        expect(PISTOL).toMatchObject({ auto: false, fireInterval: 9, magSize: 12, reserve: 36, reloadTicks: 84, bodyDamage: 26 });
         expect(RIFLE.drawTicks).toBe(24); // 0.4 s
         expect(PISTOL.drawTicks).toBe(15); // 0.25 s
         expect(PISTOL.spreadStill).toBeLessThan(RIFLE.spreadStill);

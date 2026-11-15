@@ -23,6 +23,7 @@ The owner has no game development experience and expects the game to have every 
 | Audience | As many players as possible, in a browser. Must run on laptops with integrated graphics (Intel i5 8th to 10th gen); a "High" tier for machines with a GPU. |
 | Loadout | Defenders spawn with rifle, pistol and (to build) a knife. No buy menu, no money, no pickups. Ghosts carry only the knife. |
 | Defender knife | Slot 3, weaker than the ghost's: 35 from the front, 70 from behind (ghost: 55 and 100). |
+| Body-part damage | Multipliers on the gun's body damage: head 2x, torso 1x, arms and legs 0.5x (owner, 2026-11-16: "2x on head, 1x on body and 0.5x on arms/legs"); no one-shot headshots. Knife hits ignore zones. Untuned. |
 | Suppressors | Removed by default. The room creator can switch "suppressed weapons" on when creating the room. |
 | Recoil | Fixed learnable pattern per weapon plus deterministic spread. |
 | Not wanted now | Slower movement while aiming, and bullets passing through thin cover. The owner will think about them. |
@@ -62,9 +63,9 @@ Three changes to the same combat code, so one package. Shared simulation and bin
 **Defender knife.** Slot 3 in the loadout (key 3, included in Q and mouse-wheel cycling). Melee, no ammunition. Reuse the timing model of `shared/knife.ts` (windup, cooldown counted in processed commands) with its own numbers: same 0.2 s windup and 2 m reach, 35 from the front, 70 from behind, draw time about 0.3 s. It lives in the loadout state so the client predicts it and it travels in the snapshot. `WEAPONS` in `shared/weapons.ts` is currently guns only: either add a `kind: 'gun' | 'melee'` to the definition or keep melee beside it, but every consumer (`stepLoadout`, the wire format, the HUD, `characters.ts`, `tools/bot.ts`) must handle three slots. A defender's swing makes the same windup sound as a ghost's. Model: the existing knife from `weapons.glb`.
 
 **Body-part damage.** Today a player is one axis-aligned box (0.6 m wide, 1.8 m tall, 1.2 m crouched) and the top 0.28 m (`HEAD_ZONE`) is the head. Keep the box for movement and for the ray test, and classify the hit point into zones on the server:
-- Head: the top 0.28 m. Damage is the weapon's `headDamage` (100 for both guns), unchanged.
-- Legs: the bottom 45% of the current hull height. Multiplier 0.7.
-- Arms: in the remaining torso band, a hit whose horizontal distance from the hull's vertical centre line is more than 0.2 m. Multiplier 0.8.
+- Head: the top 0.28 m. Multiplier 2.0 (superseded on 2026-11-16 by the owner; this replaced "the weapon's `headDamage`, 100": see the decisions table).
+- Legs: the bottom 45% of the current hull height. Multiplier 0.5 (was 0.7 before the owner's 2026-11-16 decision).
+- Arms: in the remaining torso band, a hit whose horizontal distance from the hull's vertical centre line is more than 0.2 m. Multiplier 0.5 (was 0.8).
 - Torso: everything else. Multiplier 1.0 (the weapon's `bodyDamage`).
 Put the zone function and the multipliers in `shared/` (a table next to the weapons) so bots and tests share it. Damage is rounded to an integer. The shot event, the `dmg` message, `hitconfirm`, the death recap and the kill feed carry the zone; the hit marker gets a distinct look for limbs. Knife hits ignore zones. Add stats per zone only if cheap. Starting numbers are untuned: say so in the handoff.
 

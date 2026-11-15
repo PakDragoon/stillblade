@@ -215,9 +215,10 @@ describe('body-part damage on the server', () => {
         const dx = x, dy = y - EYE_HEIGHT, dz = FACE_Z - EYE_Z;
         return { yaw: Math.fround(Math.atan2(-dx, -dz)), pitch: Math.fround(Math.atan2(dy, Math.hypot(dx, dz))) };
     };
-    const shoot = (x: number, y: number, crouch = false) => {
+    const shoot = (x: number, y: number, crouch = false, health = MAX_HEALTH) => {
         const w = world(makeMap(GHOST_Z));
         const [ghost, defender] = w.clients;
+        w.P(ghost).health = health;
         if (crouch) w.run(20, c => (c === ghost ? { crouch: true } : {}));
         w.run(1, c => (c === defender ? { fire: true, ...aimAt(x, y) } : c === ghost ? { crouch } : {}));
         return { w, ghost, defender, shot: defender.shots().at(-1)! };
@@ -227,11 +228,12 @@ describe('body-part damage on the server', () => {
         for (const [x, y, zone] of [[0, 1.65, 'head'], [0, 1.2, 'torso'], [0.26, 1.2, 'arms'], [-0.26, 1.2, 'arms'], [0, 0.4, 'legs']] as const) {
             const { shot, ghost, w } = shoot(x, y);
             expect(shot).toMatchObject({ victim: ghost.id, zone, damage: zoneDamage(RIFLE, zone) });
-            if (zone !== 'head') expect(w.P(ghost).health).toBe(MAX_HEALTH - zoneDamage(RIFLE, zone));
+            expect(w.P(ghost).health).toBe(MAX_HEALTH - zoneDamage(RIFLE, zone));
             expect(ghost.last('dmg')).toMatchObject({ kind: 'shot', zone, weapon: SLOT_RIFLE });
         }
-        expect(shoot(0.26, 1.2).shot.damage).toBe(27);
-        expect(shoot(0, 0.4).shot.damage).toBe(24);
+        // Head 2x, torso 1x, arms and legs 0.5x the rifle's 34: no single shot kills.
+        expect([shoot(0, 1.65), shoot(0, 1.2), shoot(0.26, 1.2), shoot(0, 0.4)].map(r => r.shot.damage)).toEqual([68, 34, 17, 17]);
+        expect(shoot(0, 1.65).shot.killed).toBeUndefined();
     });
 
     it('moves the bands down with a crouched hull', () => {
@@ -246,7 +248,9 @@ describe('body-part damage on the server', () => {
     it('confirms the zone to the shooter, counts headshots by zone, and names the zone in the kill', () => {
         const limb = shoot(0, 0.4);
         expect(limb.defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'shot', zone: 'legs', kill: false });
-        const head = shoot(0, 1.65);
+        const headHit = shoot(0, 1.65);
+        expect(headHit.defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'shot', zone: 'head', kill: false });
+        const head = shoot(0, 1.65, false, 50); // a wounded ghost: the headshot kills
         expect(head.defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'shot', zone: 'head', kill: true });
         expect(head.w.P(head.defender).stats.headshots).toBe(1);
         expect(limb.w.P(limb.defender).stats.headshots).toBe(0);

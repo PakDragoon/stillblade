@@ -60,16 +60,17 @@ describe.each([
 });
 
 describe('zone damage', () => {
-    it('uses the weapon head damage for the head and the multipliers elsewhere, rounded', () => {
-        expect(ZONE_MULTIPLIER).toEqual({ torso: 1, arms: 0.8, legs: 0.7 });
-        expect(zoneDamage(RIFLE, 'head')).toBe(100);
+    it('scales the body damage: 2x head, 1x torso, 0.5x arms and legs, rounded; no one-shot headshot', () => {
+        expect(ZONE_MULTIPLIER).toEqual({ head: 2, torso: 1, arms: 0.5, legs: 0.5 });
+        expect(zoneDamage(RIFLE, 'head')).toBe(68);
         expect(zoneDamage(RIFLE, 'torso')).toBe(34);
-        expect(zoneDamage(RIFLE, 'arms')).toBe(27); // 27.2
-        expect(zoneDamage(RIFLE, 'legs')).toBe(24); // 23.8
-        expect(zoneDamage(PISTOL, 'head')).toBe(100);
+        expect(zoneDamage(RIFLE, 'arms')).toBe(17);
+        expect(zoneDamage(RIFLE, 'legs')).toBe(17);
+        expect(zoneDamage(PISTOL, 'head')).toBe(52);
         expect(zoneDamage(PISTOL, 'torso')).toBe(26);
-        expect(zoneDamage(PISTOL, 'arms')).toBe(21); // 20.8
-        expect(zoneDamage(PISTOL, 'legs')).toBe(18); // 18.2
+        expect(zoneDamage(PISTOL, 'arms')).toBe(13);
+        expect(zoneDamage(PISTOL, 'legs')).toBe(13);
+        for (const w of WEAPONS) expect(zoneDamage(w, 'head')).toBeLessThan(100);
         for (const w of WEAPONS) for (const z of ['head', 'torso', 'arms', 'legs'] as const) expect(Number.isInteger(zoneDamage(w, z))).toBe(true);
     });
 });

@@ -87,6 +87,11 @@ const present = (c: Client): Partial<NetCmd> => ({ pitch: (c.seq % 2) * 0.001 })
 
 // Eye is at 1.62 m; aiming slightly down lands in the body, below the head zone.
 const BODY_AIM = { fire: true, pitch: -0.03 };
+/**
+ * No gun kills with one shot (head is 2x body damage: 68 for the rifle). Held this long, the rifle puts three
+ * shots into the torso from 20 m (the recoil climbs about 0.25 m, still below the head): 102 damage, a kill.
+ */
+const KILL_TICKS = 2 * FIRE_INTERVAL_TICKS + 1;
 
 describe('core rules', () => {
     it('puts the first two players on opposite teams and spawns them', () => {
@@ -147,12 +152,13 @@ describe('defender gun', () => {
         expect(G.health).toBe(MAX_HEALTH);
     });
 
-    it('scores a headshot when the ray enters the head zone', () => {
+    it('scores a headshot when the ray enters the head zone: twice the body damage, not a kill', () => {
         const { ghost, defender, run, G } = setup();
         expect(EYE_HEIGHT).toBeGreaterThan(1.8 - 0.28); // level aim from eye height is a headshot
         run(1, c => (c === defender ? { fire: true } : {}));
-        expect(defender.shots().at(-1)).toMatchObject({ victim: ghost.id, zone: 'head', killed: true });
-        expect(G.alive).toBe(false);
+        expect(defender.shots().at(-1)).toMatchObject({ victim: ghost.id, zone: 'head', damage: 2 * BODY_DAMAGE });
+        expect(defender.shots().at(-1)!.killed).toBeUndefined();
+        expect(G.health).toBe(MAX_HEALTH - 2 * BODY_DAMAGE);
     });
 
     it('hits a ghost that is completely invisible', () => {
@@ -367,7 +373,7 @@ describe('defender loadout: rifle and pistol', () => {
         expect(defender.shots().length - 6).toBeLessThanOrEqual(5);
     });
 
-    it('does pistol damage: less than the rifle to the body, still a kill to the head', () => {
+    it('does pistol damage: less than the rifle to the body and to the head', () => {
         const body = setup();
         body.run(PISTOL.drawTicks + 1, c => (c === body.defender ? { slot: 2 } : {}));
         body.run(1, c => (c === body.defender ? BODY_AIM : {}));
@@ -378,8 +384,8 @@ describe('defender loadout: rifle and pistol', () => {
         const head = setup();
         head.run(PISTOL.drawTicks + 1, c => (c === head.defender ? { slot: 2 } : {}));
         head.run(1, c => (c === head.defender ? { fire: true } : {}));
-        expect(head.defender.shots().at(-1)).toMatchObject({ weapon: SLOT_PISTOL, zone: 'head', damage: PISTOL.headDamage, killed: true });
-        expect(head.G.alive).toBe(false);
+        expect(head.defender.shots().at(-1)).toMatchObject({ weapon: SLOT_PISTOL, zone: 'head', damage: 2 * PISTOL.bodyDamage });
+        expect(head.G.health).toBe(MAX_HEALTH - 2 * PISTOL.bodyDamage);
     });
 
     it('cancels a reload on switching, keeps each magazine, and sends the reload sound with its weapon', () => {
@@ -684,7 +690,7 @@ describe('rounds and the bomb', () => {
     it('gives ghosts the round when the bomb explodes, even if they have all died', () => {
         const { game, ghost, defender, run, G } = live();
         run(PLANT_TICKS, c => (c === ghost ? { use: true } : {}));
-        run(1, c => (c === defender ? { fire: true } : {})); // headshot the planter
+        run(KILL_TICKS, c => (c === defender ? BODY_AIM : {})); // shoot the planter
         expect(G.alive).toBe(false);
         expect(game.phase).toBe('planted');
         run(ticks(BOMB_MS) + 1);
@@ -707,7 +713,7 @@ describe('rounds and the bomb', () => {
 
     it('ends the round on elimination with no respawn, then starts the next one', () => {
         const { game, ghost, defender, run, G } = live();
-        run(1, c => (c === defender ? { fire: true } : {}));
+        run(KILL_TICKS, c => (c === defender ? BODY_AIM : {}));
         run(1);
         expect(defender.last('round')).toMatchObject({ phase: 'over', winner: 'defenders', reason: 'eliminated' });
         run(ticks(OVER_MS) - 5);
@@ -727,10 +733,10 @@ describe('rounds and the bomb', () => {
     it('swaps sides at halftime and ends the match at the win target', () => {
         const s = live();
         const ghostGroupClient = s.ghost, defenderGroupClient = s.defender;
-        /** Plays one round: whoever is currently a defender headshots the other as soon as it is live. */
+        /** Plays one round: whoever is currently a defender shoots the other down as soon as it is live. */
         const playRound = (): void => {
             while (s.game.phase !== 'live') s.run(1, present);
-            s.run(2, c => (s.game.players.get(c.id)!.team === 'defenders' ? { fire: true } : present(c)));
+            s.run(KILL_TICKS + 1, c => (s.game.players.get(c.id)!.team === 'defenders' ? BODY_AIM : present(c)));
             expect(s.game.phase).toBe('over');
         };
         for (let i = 0; i < HALFTIME_ROUND; i++) playRound();
@@ -758,7 +764,7 @@ describe('rounds and the bomb', () => {
         expect(L.alive).toBe(false);
         expect(L.name).toBe('bZoë_99b the ver');
         expect(late.last('round').phase).toBe('live');
-        run(1, c => (c === defender ? { fire: true } : {}));
+        run(KILL_TICKS, c => (c === defender ? BODY_AIM : {}));
         const roster = ghost.last('roster').players;
         expect(roster.find(p => p.id === defender.id)).toMatchObject({ kills: 1, deaths: 0, alive: true });
         expect(roster.find(p => p.id === ghost.id)).toMatchObject({ kills: 0, deaths: 1, alive: false });

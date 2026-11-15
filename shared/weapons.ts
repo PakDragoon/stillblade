@@ -25,8 +25,8 @@ export interface WeaponDef {
     readonly reloadTicks: number;
     /** Commands from selecting this weapon until it can fire (the switch). */
     readonly drawTicks: number;
+    /** Damage of a torso hit; other body parts scale it by `ZONE_MULTIPLIER` (shared/zones.ts). */
     readonly bodyDamage: number;
-    readonly headDamage: number;
     /** Spread cone half-angles (radians): standing still, crouched still, added at full run, in the air. */
     readonly spreadStill: number;
     readonly spreadCrouched: number;
@@ -55,7 +55,7 @@ const ticks = (ms: number): number => Math.round((ms / 1000) * TICK_RATE);
 const RIFLE: WeaponDef = {
     id: 'rifle', label: 'Rifle', auto: true,
     fireInterval: ticks(100), magSize: 30, reserve: 90, reloadTicks: ticks(2200), drawTicks: ticks(400),
-    bodyDamage: 34, headDamage: 100,
+    bodyDamage: 34,
     spreadStill: 0.004, spreadCrouched: 0.002, spreadMoving: 0.035, spreadAir: 0.06,
     recoilRecoverTicks: 9, recoilDecayTicks: 2,
     // Climbs for the first shots, then wanders right, left and right again: learnable.
@@ -74,7 +74,7 @@ const RIFLE: WeaponDef = {
 const PISTOL: WeaponDef = {
     id: 'pistol', label: 'Pistol', auto: false,
     fireInterval: ticks(150), magSize: 12, reserve: 36, reloadTicks: ticks(1400), drawTicks: ticks(250),
-    bodyDamage: 26, headDamage: 100,
+    bodyDamage: 26,
     spreadStill: 0.003, spreadCrouched: 0.0015, spreadMoving: 0.02, spreadAir: 0.05,
     // Recovery starts one command after the minimum interval and undoes a row every command:
     // measured taps stay accurate, spamming at the limit climbs.

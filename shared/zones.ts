@@ -19,11 +19,15 @@ export const LEG_SHARE = 0.45;
  */
 export const ARM_OFFSET = 0.2;
 
-/** Multiplier on the weapon's `bodyDamage` per zone; the head uses the weapon's `headDamage` instead. */
-export const ZONE_MULTIPLIER: Readonly<Record<Exclude<HitZone, 'head'>, number>> = {
+/**
+ * Multiplier on the weapon's `bodyDamage` per zone, the one source of truth for zone damage (decided by
+ * the owner: twice on the head, once on the body, half on arms and legs). No gun kills with one headshot.
+ */
+export const ZONE_MULTIPLIER: Readonly<Record<HitZone, number>> = {
+    head: 2.0,
     torso: 1.0,
-    arms: 0.8,
-    legs: 0.7
+    arms: 0.5,
+    legs: 0.5
 };
 
 /**
@@ -54,5 +58,5 @@ export function hitZone(hit: Vec3, feet: Vec3, height: number, dir: Vec3): HitZo
 
 /** Health a gun takes off with a hit in `zone`, rounded to a whole number. */
 export function zoneDamage(def: WeaponDef, zone: HitZone): number {
-    return zone === 'head' ? def.headDamage : Math.round(def.bodyDamage * ZONE_MULTIPLIER[zone]);
+    return Math.round(def.bodyDamage * ZONE_MULTIPLIER[zone]);
 }
