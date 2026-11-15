@@ -36,7 +36,7 @@ The owner has no game development experience and expects the game to have every 
 | Wave | Package | Model | Depends on |
 |---|---|---|---|
 | 1 | A. Combat core: defender knife, body-part damage, suppressor option | Opus 5.5 | nothing |
-| 1 | B. Client utilities: key bindings, phone notice, feedback button, error reports | Sonnet 5.5 | nothing |
+| 1 | B. Client utilities: key bindings, phone notice, feedback button, error reports (**built, not merged**) | Sonnet 5.5 | nothing |
 | 2 | C. Bomb carrier | Opus 5.5 | A merged |
 | 2 | D. Rooms and community: room list, room options, vote kick, name filter, map vote | Sonnet 5.5 | A merged |
 | 3 | E. Bots that fight, and a practice range | Opus 5.5 | C merged |
@@ -74,6 +74,8 @@ Put the zone function and the multipliers in `shared/` (a table next to the weap
 **Done means:** tests for the knife slot (timing, damage front and back, switching, nothing changing when `seq` jumps), for every zone and multiplier standing and crouched, for the option reaching `welcome` and changing gunshot range; `prediction.test.ts` extended to three slots and still at zero disagreements; browser check at `?lag=150` on both maps with mismatches at 0; screenshots of the knife in first and third person and of both gun variants; `HANDOFF.md` updated.
 
 ## B. Client utilities (Sonnet 5.5)
+
+**Status: built on branch `claude/client-utilities-be559c` (protocol 10), not yet merged. `HANDOFF.md` ("Client utilities") describes what exists and what was not verified. Merge package A (protocol 9) first, then merge `main` into this branch; package A's side wins for anything predicted or binary.**
 
 Client-side features plus two tiny server endpoints. Stays out of `shared/gun.ts`, `shared/knife.ts`, the binary format and the prediction loop.
 
