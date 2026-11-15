@@ -132,7 +132,7 @@ describe('defender gun', () => {
         run(1, c => (c === defender ? BODY_AIM : {}));
         expect(G.health).toBe(MAX_HEALTH - BODY_DAMAGE);
         const shot = ghost.shots().at(-1)!;
-        expect(shot).toMatchObject({ shooter: defender.id, victim: ghost.id, head: false, damage: BODY_DAMAGE });
+        expect(shot).toMatchObject({ shooter: defender.id, victim: ghost.id, zone: 'torso', damage: BODY_DAMAGE });
         expect(shot.to[2]).toBeCloseTo(10 - 0.3, 3);
 
         run(30, c => (c === defender ? BODY_AIM : {}));
@@ -151,7 +151,7 @@ describe('defender gun', () => {
         const { ghost, defender, run, G } = setup();
         expect(EYE_HEIGHT).toBeGreaterThan(1.8 - 0.28); // level aim from eye height is a headshot
         run(1, c => (c === defender ? { fire: true } : {}));
-        expect(defender.shots().at(-1)).toMatchObject({ victim: ghost.id, head: true, killed: true });
+        expect(defender.shots().at(-1)).toMatchObject({ victim: ghost.id, zone: 'head', killed: true });
         expect(G.alive).toBe(false);
     });
 
@@ -372,13 +372,13 @@ describe('defender loadout: rifle and pistol', () => {
         body.run(PISTOL.drawTicks + 1, c => (c === body.defender ? { slot: 2 } : {}));
         body.run(1, c => (c === body.defender ? BODY_AIM : {}));
         expect(body.G.health).toBe(MAX_HEALTH - PISTOL.bodyDamage);
-        expect(body.defender.shots().at(-1)).toMatchObject({ weapon: SLOT_PISTOL, head: false, damage: PISTOL.bodyDamage });
+        expect(body.defender.shots().at(-1)).toMatchObject({ weapon: SLOT_PISTOL, zone: 'torso', damage: PISTOL.bodyDamage });
         expect(PISTOL.bodyDamage).toBeLessThan(RIFLE.bodyDamage);
 
         const head = setup();
         head.run(PISTOL.drawTicks + 1, c => (c === head.defender ? { slot: 2 } : {}));
         head.run(1, c => (c === head.defender ? { fire: true } : {}));
-        expect(head.defender.shots().at(-1)).toMatchObject({ weapon: SLOT_PISTOL, head: true, damage: PISTOL.headDamage, killed: true });
+        expect(head.defender.shots().at(-1)).toMatchObject({ weapon: SLOT_PISTOL, zone: 'head', damage: PISTOL.headDamage, killed: true });
         expect(head.G.alive).toBe(false);
     });
 
@@ -455,7 +455,7 @@ describe('defender loadout: rifle and pistol', () => {
         run(30, c => (c === ghost ? { slot: 2, aim: true, swap: true } : {}));
         expect(G.loadout).toMatchObject({ slot: 0, draw: 0, aim: 0 });
         expect(ghost.shots()).toHaveLength(0);
-        for (const slot of [3, 15, 255, -1, 1.5, NaN]) run(1, c => (c === defender ? { slot } : {}));
+        for (const slot of [4, 15, 255, -1, 1.5, NaN]) run(1, c => (c === defender ? { slot } : {}));
         expect(D.loadout).toMatchObject({ slot: SLOT_RIFLE, draw: 0 });
     });
 

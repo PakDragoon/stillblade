@@ -1,3 +1,4 @@
+import { DEFAULT_ROOM_OPTIONS, type RoomOptions } from '../../shared/room-options';
 import type { MapData } from '../../shared/types';
 import { Game, type Connection } from './game';
 
@@ -32,16 +33,18 @@ export class Rooms {
     }
 
     /**
-     * Adds a player to `roomId`, creating the room on `mapId` (or the default map) if it does not exist.
-     * An unknown map id is refused even when the room exists, so a bad link fails loudly.
+     * Adds a player to `roomId`, creating the room on `mapId` (or the default map) with `options` if it
+     * does not exist; a room that exists keeps its own map and options. An unknown map id is refused
+     * even when the room exists, so a bad link fails loudly.
      */
-    join(roomId: string, mapId: string | null, conn: Connection, name: string, now: number): JoinResult {
+    join(roomId: string, mapId: string | null, conn: Connection, name: string, now: number,
+        options: RoomOptions = DEFAULT_ROOM_OPTIONS): JoinResult {
         if (mapId !== null && mapId !== '' && !this.maps.has(mapId)) return { ok: false, reason: 'Unknown map' };
         let game = this.rooms.get(roomId);
         let created = false;
         if (!game) {
             if (this.rooms.size >= this.limits.maxRooms) return { ok: false, reason: 'Server full' };
-            game = new Game(this.maps.get(mapId || this.defaultMap)!, { lobby: true });
+            game = new Game(this.maps.get(mapId || this.defaultMap)!, { lobby: true, options });
             // A new room starts at the current tick time so its clock is never behind the loop's.
             game.now = now;
             this.rooms.set(roomId, game);

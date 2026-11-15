@@ -1,10 +1,12 @@
 import type { Phase, RoundReason } from './rules';
 import type { GunState, LoadoutState } from './gun';
 import type { KnifeState } from './knife';
+import type { RoomOptions } from './room-options';
 import type { InputCmd, Vec3 } from './types';
-import { WEAPON_COUNT } from './weapons';
+import { GUN_COUNT } from './weapons';
+import type { HitZone } from './zones';
 
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 export const DEFAULT_PORT = 8080;
 /** Snapshots per second sent to each client. */
 export const SNAPSHOT_RATE = 30;
@@ -22,7 +24,7 @@ export interface NetCmd extends InputCmd {
     use: boolean;
     /** Reload key (R) pressed; acted on only if the magazine is not full and there is reserve. */
     reload: boolean;
-    /** Weapon select: 0 for none, n for slot n - 1 (keys 1, 2; the mouse wheel picks one too). */
+    /** Weapon select: 0 for none, n for slot n - 1 (keys 1, 2, 3; the mouse wheel picks one too). */
     slot: number;
     /** Q: back to the previous weapon (ignored when `slot` is set). */
     swap: boolean;
@@ -44,7 +46,7 @@ export interface PlayerSnap {
     vis: number;
     /** A defender in the middle of a reload (for its animation). */
     reloading: boolean;
-    /** Weapon slot in a defender's hands (index into WEAPONS); 0 for ghosts. */
+    /** Weapon slot in a defender's hands (index into WEAPONS, or SLOT_KNIFE); 0 for ghosts. */
     weapon: number;
     /** A defender drawing the weapon it just switched to. */
     switching: boolean;
@@ -67,22 +69,30 @@ export interface SelfSnap {
     alive: boolean;
     /** Server time (ms) of the next respawn; meaningful only while dead. */
     respawnAt: number;
-    /** The defender's weapons, predicted by the client: sent exactly (all small integers). */
+    /** The defender's weapons including its knife, predicted by the client: sent exactly (all small integers). */
     loadout: LoadoutState;
     /** The ghost knife timing, predicted by the client: sent exactly (small integers). */
     knife: KnifeState;
 }
 
+/**
+ * A gunshot. Sent to the shooter, the player hit, everyone within earshot (GUNSHOT_RANGE, or
+ * GUNSHOT_RANGE_SUPPRESSED in a suppressed room) and, flagged `silent`, to anyone further away whose
+ * eye can see the shooter's eye: they see the flash and tracer but are too far to hear it.
+ */
 export interface ShotEvent {
     type: 'shot';
     shooter: number;
-    /** Slot of the weapon that fired (index into WEAPONS), for its sound and tracer. */
+    /** Slot of the gun that fired (index into WEAPONS), for its sound and tracer. */
     weapon: number;
     from: Vec3;
     to: Vec3;
+    /** Seen but out of earshot: draw it, play no sound. */
+    silent?: boolean;
     /** Present when a player was hit. */
     victim?: number;
-    head?: boolean;
+    /** Where the hit landed (shared/zones.ts); present with `victim`. */
+    zone?: HitZone;
     damage?: number;
     killed?: boolean;
 }
@@ -155,8 +165,11 @@ export interface RosterEntry extends MatchStats {
     idle: boolean;
 }
 
-/** What hit a player: used for the hit marker, the kill feed and the death recap. */
-export type DamageKind = 'shot' | 'headshot' | 'knife' | 'backstab';
+/**
+ * What hit a player: used for the hit marker, the kill feed and the death recap. A shot also carries
+ * its `HitZone` (a headshot is a shot with zone 'head'); knife hits have no zone.
+ */
+export type DamageKind = 'shot' | 'knife' | 'backstab';
 
 /** Final result of a match, sent once when it is decided; the next match starts at `nextAt`. */
 export interface SummaryMsg {
@@ -197,17 +210,37 @@ export interface DamageMsg {
     dist?: number;
     /** Slot (index into WEAPONS) of the gun that hit; absent for the knife. */
     weapon?: number;
+    /** Where a shot landed; absent for the knife. */
+    zone?: HitZone;
 }
 
 /** Sent to the attacker: the hit landed. */
 export interface HitConfirmMsg {
     type: 'hitconfirm';
-    kind: 'body' | 'head' | 'kill';
+    kind: DamageKind;
+    /** Where a shot landed; absent for the knife. */
+    zone?: HitZone;
+    /** The hit killed. */
+    kill: boolean;
+}
+
+/**
+ * Someone was killed: sent to every player in the room, for the kill feed. Says who killed whom and
+ * how, never where (the roster already tells everyone who is alive).
+ */
+export interface KillMsg {
+    type: 'kill';
+    killer: number;
+    victim: number;
+    kind: DamageKind;
+    /** Slot (index into WEAPONS) of the gun; absent for a knife kill. */
+    weapon?: number;
+    zone?: HitZone;
 }
 
 export type ServerMsg =
     /** `map` is the room's map id (load maps/<map>.json and .glb before spawning); `mapName` its display name. */
-    | { type: 'welcome'; version: number; id: number; team: Team; map: string; mapName: string; time: number }
+    | { type: 'welcome'; version: number; id: number; team: Team; map: string; mapName: string; time: number; options: RoomOptions }
     | { type: 'snap'; time: number; ack: number; me: SelfSnap; players: PlayerSnap[] }
     | { type: 'spawn'; pos: Vec3; yaw: number }
     | ShotEvent
@@ -219,6 +252,7 @@ export type ServerMsg =
     | ChatMsg
     | DamageMsg
     | HitConfirmMsg
+    | KillMsg
     /** A server note for this player only (rate limited, idle, refused request). */
     | { type: 'notice'; text: string };
 
@@ -245,10 +279,14 @@ export const CHAT_MAX_CHARS = 120;
 const CMD_TAG = 1;
 const SNAP_TAG = 2;
 const CMD_BYTES = 25;
-/** Self state up to the loadout, then 5 loadout bytes, 7 per weapon, 2 knife, 1 player count. */
+/**
+ * Self state up to the loadout, then 5 loadout bytes, 7 per gun, 2 for the defender knife, 2 for the
+ * ghost knife, 1 player count.
+ */
 const SNAP_LOADOUT = 75;
 const SNAP_GUNS = SNAP_LOADOUT + 5;
-const SNAP_KNIFE = SNAP_GUNS + 7 * WEAPON_COUNT;
+const SNAP_MELEE = SNAP_GUNS + 7 * GUN_COUNT;
+const SNAP_KNIFE = SNAP_MELEE + 2;
 const SNAP_COUNT = SNAP_KNIFE + 2;
 const SNAP_HEAD_BYTES = SNAP_COUNT + 1;
 const SNAP_PLAYER_BYTES = 20;
@@ -312,7 +350,7 @@ function encodeSnap(m: Extract<ServerMsg, { type: 'snap' }>): Uint8Array<ArrayBu
     v.setUint8(SNAP_LOADOUT + 2, l.draw);
     v.setUint8(SNAP_LOADOUT + 3, l.aim);
     v.setUint8(SNAP_LOADOUT + 4, l.trigger);
-    for (let i = 0; i < WEAPON_COUNT; i++) {
+    for (let i = 0; i < GUN_COUNT; i++) {
         const g = l.guns[i], o = SNAP_GUNS + 7 * i;
         v.setUint8(o, g.mag);
         v.setUint8(o + 1, g.reserve);
@@ -322,6 +360,8 @@ function encodeSnap(m: Extract<ServerMsg, { type: 'snap' }>): Uint8Array<ArrayBu
         v.setUint8(o + 5, g.sinceShot);
         v.setUint8(o + 6, g.shots);
     }
+    v.setUint8(SNAP_MELEE, l.knife.cooldown);
+    v.setUint8(SNAP_MELEE + 1, l.knife.windup);
     v.setUint8(SNAP_KNIFE, me.knife.cooldown);
     v.setUint8(SNAP_KNIFE + 1, me.knife.windup);
     v.setUint8(SNAP_COUNT, m.players.length);
@@ -343,7 +383,7 @@ function encodeSnap(m: Extract<ServerMsg, { type: 'snap' }>): Uint8Array<ArrayBu
 
 function decodeLoadout(v: DataView): LoadoutState {
     const guns: GunState[] = [];
-    for (let i = 0; i < WEAPON_COUNT; i++) {
+    for (let i = 0; i < GUN_COUNT; i++) {
         const o = SNAP_GUNS + 7 * i;
         guns.push({
             mag: v.getUint8(o), reserve: v.getUint8(o + 1), reload: v.getUint8(o + 2), cooldown: v.getUint8(o + 3),
@@ -352,7 +392,8 @@ function decodeLoadout(v: DataView): LoadoutState {
     }
     return {
         slot: v.getUint8(SNAP_LOADOUT), prev: v.getUint8(SNAP_LOADOUT + 1), draw: v.getUint8(SNAP_LOADOUT + 2),
-        aim: v.getUint8(SNAP_LOADOUT + 3), trigger: v.getUint8(SNAP_LOADOUT + 4), guns
+        aim: v.getUint8(SNAP_LOADOUT + 3), trigger: v.getUint8(SNAP_LOADOUT + 4), guns,
+        knife: { cooldown: v.getUint8(SNAP_MELEE), windup: v.getUint8(SNAP_MELEE + 1) }
     };
 }
 

@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { TICK_DT, TICK_RATE } from '../../shared/constants';
-import { copyLoadout, createLoadout, resetLoadout, sameLoadout, stepLoadout } from '../../shared/gun';
+import { MELEE_SLASH, MELEE_SWING, copyLoadout, createLoadout, resetLoadout, sameLoadout, stepLoadout } from '../../shared/gun';
+import { sameKnifeState } from '../../shared/knife';
 import { copyPlayerState, createPlayerState, stepPlayer } from '../../shared/movement';
 import { decodeClient, decodeServer, encodeClient, encodeServer, type NetCmd, type ServerMsg, type Wire } from '../../shared/protocol';
 import type { MapData } from '../../shared/types';
-import { SLOT_PISTOL, SLOT_RIFLE } from '../../shared/weapons';
+import { SLOT_KNIFE, SLOT_PISTOL, SLOT_RIFLE } from '../../shared/weapons';
 import { Game } from './game';
 
 const TICK_MS = 1000 / TICK_RATE;
@@ -54,7 +55,10 @@ function playThrough(opts: { seed: number; ticks: number; upTicks: number; downT
     const before = createLoadout();
     const pending: Pending[] = [];
     let alive = false, started = false, yaw = 0, seq = 0, ghostSeq = 0;
-    const result = { snapshots: 0, gunMismatches: 0, posMismatches: 0, shots: [0, 0], switches: 0, reloads: 0, aimedShots: 0 };
+    const result = {
+        snapshots: 0, gunMismatches: 0, knifeMismatches: 0, posMismatches: 0, shots: [0, 0], switches: 0, reloads: 0, aimedShots: 0,
+        swings: 0, slashes: 0, knifeSnapshots: 0
+    };
 
     const rand = rng(opts.seed);
     let fireHold = 0, aimHold = 0, moveHold = 0, forward = 0, right = 0, crouch = false;
@@ -92,6 +96,8 @@ function playThrough(opts: { seed: number; ticks: number; upTicks: number; downT
                     if (c.live) stepLoadout(loadout, c, c.armed);
                 }
                 if (!sameLoadout(loadout, before)) result.gunMismatches++;
+                if (!sameKnifeState(loadout.knife, before.knife)) result.knifeMismatches++;
+                if (loadout.slot === SLOT_KNIFE) result.knifeSnapshots++;
                 if (curr.pos[0] !== px || curr.pos[1] !== py || curr.pos[2] !== pz) result.posMismatches++;
             }
         }
@@ -99,7 +105,8 @@ function playThrough(opts: { seed: number; ticks: number; upTicks: number; downT
         // Like the real client, which starts its simulation only once the welcome and spawn are in.
         if (!started) { if (!alive) continue; started = true; }
 
-        // A restless player: bursts and taps, switches by key and by Q, aiming, reloads, moving about.
+        // A restless player: bursts and taps, knife swings, switches by key (1, 2, 3, and a slot that does not
+        // exist) and by Q, aiming, reloads, moving about.
         if (fireHold > 0) fireHold--; else if (rand() < 0.04) fireHold = rand() < 0.5 ? 1 + Math.floor(rand() * 3) : Math.floor(rand() * 60);
         if (aimHold > 0) aimHold--; else if (rand() < 0.01) aimHold = Math.floor(rand() * 90);
         if (moveHold > 0) moveHold--; else {
@@ -113,7 +120,7 @@ function playThrough(opts: { seed: number; ticks: number; upTicks: number; downT
         const cmd: Pending = {
             seq, forward, right, yaw, pitch: Math.fround(0.5 + rand() * 0.2), jump: rand() < 0.01, walk: rand() < 0.2, crouch,
             fire: fireHold > 0, use: false, reload: rand() < 0.01,
-            slot: r < 0.006 ? 1 : r < 0.012 ? 2 : r < 0.013 ? 7 : 0, swap: rand() < 0.005, aim: aimHold > 0,
+            slot: r < 0.006 ? 1 : r < 0.012 ? 2 : r < 0.018 ? 3 : r < 0.019 ? 7 : 0, swap: rand() < 0.005, aim: aimHold > 0,
             viewTime: game.now, live: alive, armed: true
         };
         seq += opts.seqJump ? opts.seqJump() : 1;
@@ -125,6 +132,8 @@ function playThrough(opts: { seed: number; ticks: number; upTicks: number; downT
             if (loadout.slot !== slot) result.switches++;
             if (shot >= 0) { result.shots[loadout.slot]++; if (loadout.aim > 0) result.aimedShots++; }
             if (shot === -2) result.reloads++;
+            if (shot === MELEE_SWING) result.swings++;
+            if (shot === MELEE_SLASH) result.slashes++;
         }
         up.push({ at: tick + opts.upTicks, wire: encodeClient({ type: 'cmd', cmd }) });
         while (up.length && up[0].at <= tick) {
@@ -138,14 +147,20 @@ function playThrough(opts: { seed: number; ticks: number; upTicks: number; downT
 describe('client prediction of the loadout through the wire', () => {
     it('never disagrees with the server at 150 ms round trip', () => {
         // 9 ticks each way is 150 ms of round trip; two minutes of play.
-        const r = playThrough({ seed: 1, ticks: 120 * TICK_RATE, upTicks: 4, downTicks: 5 });
+        // Seed 5: a script that spends a fair share of time on all three slots. The rifle's count is capped by
+        // its 120 rounds (nothing refills them here) and by the time now spent on the knife.
+        const r = playThrough({ seed: 5, ticks: 120 * TICK_RATE, upTicks: 4, downTicks: 5 });
         expect(r.snapshots).toBeGreaterThan(3000);
-        expect(r.shots[SLOT_RIFLE]).toBeGreaterThan(100);
+        expect(r.shots[SLOT_RIFLE]).toBeGreaterThan(80);
         expect(r.shots[SLOT_PISTOL]).toBeGreaterThan(30);
         expect(r.switches).toBeGreaterThan(20);
         expect(r.reloads).toBeGreaterThan(5);
         expect(r.aimedShots).toBeGreaterThan(10);
+        expect(r.swings).toBeGreaterThan(15); // the knife (slot 3) is predicted and replayed like the guns
+        expect(r.slashes).toBeGreaterThan(10);
+        expect(r.knifeSnapshots).toBeGreaterThan(300);
         expect(r.gunMismatches).toBe(0);
+        expect(r.knifeMismatches).toBe(0);
         expect(r.posMismatches).toBe(0);
     });
 
@@ -153,12 +168,16 @@ describe('client prediction of the loadout through the wire', () => {
         for (const [seed, upTicks, downTicks] of [[2, 1, 1], [3, 9, 9], [4, 0, 15]]) {
             const r = playThrough({ seed, ticks: 40 * TICK_RATE, upTicks, downTicks });
             expect(r.shots[SLOT_PISTOL]).toBeGreaterThan(5);
+            expect(r.swings).toBeGreaterThan(3);
             expect(r.gunMismatches).toBe(0);
+            expect(r.knifeMismatches).toBe(0);
             expect(r.posMismatches).toBe(0);
         }
         const jumpy = rng(9);
         const r = playThrough({ seed: 5, ticks: 40 * TICK_RATE, upTicks: 4, downTicks: 5, seqJump: () => 1 + Math.floor(jumpy() * 1000) });
         expect(r.switches).toBeGreaterThan(5);
+        expect(r.swings).toBeGreaterThan(3);
         expect(r.gunMismatches).toBe(0);
+        expect(r.knifeMismatches).toBe(0);
     });
 });

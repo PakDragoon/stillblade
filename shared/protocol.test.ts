@@ -2,18 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { createLoadout } from './gun';
 import { createKnifeState } from './knife';
 import { PROTOCOL_VERSION, decodeClient, decodeServer, encodeClient, encodeServer, type NetCmd, type ServerMsg } from './protocol';
-import { WEAPON_COUNT } from './weapons';
+import { GUN_COUNT, SLOT_COUNT, SLOT_KNIFE } from './weapons';
 
 const cmd: NetCmd = {
     seq: 123456, forward: 1, right: -1, yaw: Math.fround(7.123456), pitch: Math.fround(-0.4321),
     jump: true, walk: false, crouch: true, fire: false, use: true, reload: true, slot: 2, swap: true, aim: true,
     viewTime: 98765.4321
 };
-const SNAP_HEAD = 75 + 5 + 7 * WEAPON_COUNT + 3;
+/** Self state, loadout (5 + 7 per gun + 2 for the defender knife), ghost knife (2), player count (1). */
+const SNAP_HEAD = 75 + 5 + 7 * GUN_COUNT + 2 + 2 + 1;
 
 describe('wire format', () => {
-    it('is protocol version 8', () => {
-        expect(PROTOCOL_VERSION).toBe(8);
+    it('is protocol version 9', () => {
+        expect(PROTOCOL_VERSION).toBe(9);
     });
 
     it('round-trips a command exactly, in 25 bytes', () => {
@@ -68,7 +69,8 @@ describe('wire format', () => {
                     guns: [
                         { mag: 17, reserve: 90, reload: 132, cooldown: 6, burst: 29, sinceShot: 255, shots: 201 },
                         { mag: 11, reserve: 36, reload: 84, cooldown: 9, burst: 11, sinceShot: 3, shots: 255 }
-                    ]
+                    ],
+                    knife: { cooldown: 30, windup: 7 }
                 },
                 knife: { cooldown: 41, windup: 12 }
             },
@@ -112,16 +114,28 @@ describe('wire format', () => {
     it('carries every loadout counter at its one-byte limits exactly', () => {
         for (const v of [0, 1, 127, 128, 254, 255]) {
             const loadout = createLoadout();
-            loadout.slot = loadout.prev = v % WEAPON_COUNT;
+            loadout.slot = loadout.prev = v % SLOT_COUNT;
             loadout.draw = loadout.aim = v;
             loadout.trigger = v & 1;
             for (const g of loadout.guns) { g.mag = g.reserve = g.reload = g.cooldown = g.burst = g.sinceShot = g.shots = v; }
+            loadout.knife.cooldown = v;
+            loadout.knife.windup = 255 - v; // the defender knife's two counters, independently of the ghost knife's
             const back = decodeServer(encodeServer({
                 type: 'snap', time: 1, ack: 2, players: [],
-                me: { team: 'defenders', action: 0, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, crouched: false, health: 100, alive: true, respawnAt: 0, loadout, knife: createKnifeState() }
+                me: { team: 'defenders', action: 0, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, crouched: false, health: 100, alive: true, respawnAt: 0, loadout, knife: { cooldown: 255 - v, windup: v } }
             }) as Uint8Array);
             expect(back.type === 'snap' && back.me.loadout).toEqual(loadout);
+            expect(back.type === 'snap' && back.me.knife).toEqual({ cooldown: 255 - v, windup: v });
         }
+    });
+
+    it('tells others a defender holds the knife (slot 3)', () => {
+        const back = decodeServer(encodeServer({
+            type: 'snap', time: 1, ack: 2,
+            me: { team: 'defenders', action: 0, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, crouched: false, health: 100, alive: true, respawnAt: 0, loadout: createLoadout(), knife: createKnifeState() },
+            players: [{ id: 3, team: 'defenders', pos: [0, 0, 0], yaw: 0, pitch: 0, crouched: false, alive: true, vis: 1, reloading: false, weapon: SLOT_KNIFE, switching: true, aiming: false }]
+        }) as Uint8Array);
+        expect(back.type === 'snap' && back.players[0]).toMatchObject({ weapon: SLOT_KNIFE, switching: true });
     });
 
     it('keeps an acknowledgement of -1 (nothing simulated yet)', () => {

@@ -554,22 +554,23 @@ describe('damage events', () => {
         expect(d.dir).toBeCloseTo(0, 5);
         expect(d).toMatchObject({ amount: 34, kind: 'shot', weapon: 0 }); // the rifle's slot
         expect(d.killed).toBeUndefined();
-        expect(defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'body' });
+        expect(defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'shot', zone: 'torso', kill: false });
         r.run(ticks(3000)); // recoil recovers in commands, so keep sending them
         r.run(1, c => (c === defender ? { fire: true } : null));
         const k = dmgs(ghost).at(-1)!;
-        expect(k).toMatchObject({ killed: true, by: defender.id, kind: 'headshot', amount: 66 });
+        expect(k).toMatchObject({ killed: true, by: defender.id, kind: 'shot', zone: 'head', amount: 66 });
         expect(k.dist).toBeCloseTo(20, 0);
-        expect(defender.last('hitconfirm').kind).toBe('kill');
+        expect(defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'shot', zone: 'head', kill: true });
     });
 
-    it('uses "head" for a non-lethal headshot is impossible, so head only appears on a killing blow; knife hits say body', () => {
+    it('confirms a knife hit with its kind and no zone', () => {
         const r = room(makeMap(-8.5, -10));
         const [ghost, defender] = r.clients;
         r.live();
         r.run(14, c => (c === ghost ? { fire: true } : {}));
-        expect(ghost.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'body' });
+        expect(ghost.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'knife', kill: false });
         expect(defender.all('dmg')[0]).toMatchObject({ amount: 55, kind: 'knife' });
+        expect(defender.all('dmg')[0].zone).toBeUndefined();
     });
 
     it('gives a defender hit by a knife only a bearing and amount, never a position', () => {
