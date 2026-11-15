@@ -4,6 +4,8 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { TICK_RATE } from '../../shared/constants';
 import { DEFAULT_PORT, decodeClient, encodeServer } from '../../shared/protocol';
 import { defaultMapId, loadMaps } from './maps';
+import { handleReportRequest } from './report-http';
+import { ConnectionReportLimit, Reports, originAllowed, routeClientMessage } from './reports';
 import { Rooms, cleanRoomId } from './rooms';
 
 // Not PORT: dev tooling sets that for the web client, and the two must not collide.
@@ -13,6 +15,16 @@ const mapsDir = process.env.SB_MAPS_DIR ?? fileURLToPath(new URL('../../client/p
 const allowedOrigins = (process.env.SB_ALLOWED_ORIGINS ?? '').split(',').map(s => s.trim().replace(/\/$/, '')).filter(Boolean);
 /** Behind a reverse proxy the socket's address is the proxy's; the real one is in X-Forwarded-For. */
 const trustProxy = process.env.SB_TRUST_PROXY === '1';
+
+/** Where feedback notes and error reports are appended, one JSON line each (also printed). Empty writes only to the console. */
+const feedbackFile = process.env.SB_FEEDBACK_FILE ?? 'feedback.log';
+const reports = new Reports(feedbackFile);
+
+/** The caller's address as the server counts it: X-Forwarded-For only behind a trusted proxy. */
+function clientIp(req: { headers: Record<string, string | string[] | undefined>; socket: { remoteAddress?: string } }): string {
+    const forwarded = trustProxy ? String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() : '';
+    return forwarded || req.socket.remoteAddress || 'unknown';
+}
 
 const TICK_MS = 1000 / TICK_RATE;
 const MAX_ROOMS = 50;
@@ -41,16 +53,16 @@ const http = createServer((req, res) => {
         res.end(JSON.stringify({ ok: true, rooms: rooms.rooms.size, players: rooms.playerCount() }));
         return;
     }
+    if (handleReportRequest(req, res, { reports, allowedOrigins, clientIp })) return;
     res.writeHead(404).end();
 });
 
-const wss = new WebSocketServer({ server: http, maxPayload: 1024 });
+// 4096 bytes: a 500 character note in a non-Latin script, or an error with a stack, is larger than a chat line.
+const wss = new WebSocketServer({ server: http, maxPayload: 4096 });
 wss.on('connection', (ws, req) => {
-    const origin = (req.headers.origin ?? '').replace(/\/$/, '');
-    if (allowedOrigins.length > 0 && !allowedOrigins.includes(origin)) { ws.close(1008, 'Origin not allowed'); return; }
+    if (!originAllowed(req.headers.origin, allowedOrigins)) { ws.close(1008, 'Origin not allowed'); return; }
 
-    const forwarded = trustProxy ? String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() : '';
-    const ip = forwarded || req.socket.remoteAddress || 'unknown';
+    const ip = clientIp(req);
     const open = perIp.get(ip) ?? 0;
     if (open >= MAX_CONNECTIONS_PER_IP) { ws.close(1013, 'Too many connections'); return; }
 
@@ -72,6 +84,7 @@ wss.on('connection', (ws, req) => {
     let tokens = MSG_BURST;
     let refilledAt = performance.now();
     let dropped = 0;
+    const reportLimit = new ConnectionReportLimit();
     ws.on('message', (data, isBinary) => {
         const now = performance.now();
         tokens = Math.min(MSG_BURST, tokens + ((now - refilledAt) / 1000) * TICK_RATE * 1.25);
@@ -82,7 +95,11 @@ wss.on('connection', (ws, req) => {
         }
         tokens--;
         try {
-            room.handleMessage(id, decodeClient(isBinary ? (data as Buffer) : data.toString()));
+            // Reports are answered here and never reach the game.
+            routeClientMessage(decodeClient(isBinary ? (data as Buffer) : data.toString()), room, id, report => {
+                const p = room.players.get(id);
+                void reports.submit(report, { via: 'ws', room: roomId, map: room.map.name, team: p?.team, playerId: id, name: p?.name }, reportLimit);
+            });
         } catch {
             // Malformed input from a client is ignored, never fatal.
         }
@@ -131,6 +148,6 @@ process.on('SIGINT', shutdown);
 http.listen(port, () => {
     console.log(
         `Stillblade server: maps ${[...maps.keys()].join(', ')} (default ${rooms.defaultMap}), ${TICK_RATE} Hz, port ${port}, ` +
-        `origins ${allowedOrigins.length ? allowedOrigins.join(' ') : 'any'}`
+        `origins ${allowedOrigins.length ? allowedOrigins.join(' ') : 'any'}, feedback ${feedbackFile || 'console only'}`
     );
 });
