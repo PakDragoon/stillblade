@@ -1,10 +1,12 @@
 import './ui.css';
 import { CHAT_MAX_CHARS, type ChatMsg, type RosterEntry, type SummaryMsg, type Team } from '@shared/protocol';
 import type { MapListEntry } from '@shared/maps';
+import { DEFAULT_ROOM_OPTIONS, type RoomOptions } from '@shared/room-options';
 import type { Phase } from '@shared/rules';
 import type { Settings, SettingsStore } from './settings';
 
-export interface JoinChoice { name: string; room: string; map: string }
+/** `suppressed` is a room option: it only applies when this join creates the room ("Create room"). */
+export interface JoinChoice { name: string; room: string; map: string; suppressed?: boolean }
 
 /** What the menus ask the game to do. The Ui itself never touches the network or the simulation. */
 export interface UiHooks {
@@ -90,6 +92,7 @@ export class Ui {
     private room = '';
     private mapId = '';
     private mapName = '';
+    private options: RoomOptions = { ...DEFAULT_ROOM_OPTIONS };
     private lobbyMsg: HTMLElement | null = null;
     private startBtn: HTMLButtonElement | null = null;
     private resultCountdown: HTMLElement | null = null;
@@ -238,6 +241,12 @@ export class Ui {
         const map = h('select', '', '', mapL);
         for (const m of maps) map.add(new Option(m.name, m.id));
         map.value = maps.some(m => m.id === defaults.map) ? defaults.map : maps[0]?.id ?? '';
+        // Room options for "Create room" (shared/room-options.ts); joining keeps the room's own.
+        const supL = h('label', 'opt', '', card);
+        const sup = h('input', '', '', supL);
+        sup.type = 'checkbox'; sup.id = 'opt-suppressed'; sup.checked = false;
+        supL.append('Suppressed weapons');
+        h('small', 'dim', 'Quieter gunshots, smaller muzzle flash', supL);
         const create = h('button', 'primary', 'Create room', card);
         const orRow = h('p', 'or', 'or join friends', card);
         void orRow;
@@ -266,12 +275,12 @@ export class Ui {
         setTimeout(() => (defaults.room ? code : name).focus(), 0);
 
         return new Promise(resolve => {
-            const go = (room: string, mapId: string): void => {
+            const go = (room: string, mapId: string, suppressed = false): void => {
                 const n = name.value.trim();
                 try { localStorage.setItem('sb-name', n); localStorage.setItem('sb-howto', '1'); } catch { /* not remembered */ }
-                resolve({ name: n, room, map: mapId });
+                resolve({ name: n, room, map: mapId, suppressed });
             };
-            create.addEventListener('click', e => { e.preventDefault(); go(makeRoomCode(), map.value); });
+            create.addEventListener('click', e => { e.preventDefault(); go(makeRoomCode(), map.value, sup.checked); });
             join.addEventListener('click', e => {
                 e.preventDefault();
                 const c = code.value.trim();
@@ -308,12 +317,13 @@ export class Ui {
     }
 
     /** The match is on: hides the pre-game screens and shows the lobby while the room is in warmup. */
-    enterGame(room: string, mapId: string, mapName: string): void {
+    enterGame(room: string, mapId: string, mapName: string, options: RoomOptions = DEFAULT_ROOM_OPTIONS): void {
         this.hideScreens();
         this.inGame = true;
         this.room = room;
         this.mapId = mapId;
         this.mapName = mapName;
+        this.options = { ...options };
         this.refreshStrip();
         if (this.phase === 'warmup' && !this.quiet) this.openLobby();
         else this.refreshHint();
@@ -384,6 +394,9 @@ export class Ui {
         const head = h('div', 'head', '', card);
         h('span', 'code', this.room || 'public', head);
         h('span', 'dim', this.mapName, head);
+        // Room options, read-only: the creator chose them when creating the room.
+        h('span', this.options.suppressed ? 'opt on' : 'opt', this.options.suppressed ? 'Suppressed weapons' : 'Unsuppressed weapons', head)
+            .title = 'Chosen by the room creator when the room was made';
         h('span', 'sp', '', head);
         button('Copy invite link', '', head, () => {
             const url = this.inviteUrl();

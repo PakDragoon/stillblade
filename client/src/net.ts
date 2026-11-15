@@ -1,9 +1,10 @@
 import { INTERP_DELAY_MS } from '@shared/constants';
 import {
     PROTOCOL_VERSION, decodeServer, encodeClient, type ChatMsg, type ClientMsg, type DamageMsg, type HitConfirmMsg,
-    type NetCmd, type PlayerSnap, type SelfSnap, type RosterEntry, type RoundMsg, type ServerMsg, type ShotEvent,
+    type KillMsg, type NetCmd, type PlayerSnap, type SelfSnap, type RosterEntry, type RoundMsg, type ServerMsg, type ShotEvent,
     type SlashEvent, type SoundEvent, type SummaryMsg, type Team
 } from '@shared/protocol';
+import { DEFAULT_ROOM_OPTIONS, type RoomOptions } from '@shared/room-options';
 import type { Vec3 } from '@shared/types';
 import type { RemoteView } from './presenter-api';
 
@@ -21,6 +22,8 @@ export interface NetHandlers {
     notice(text: string): void;
     damage(msg: DamageMsg): void;
     hitConfirm(msg: HitConfirmMsg): void;
+    /** Someone in the room was killed (the kill feed). */
+    kill(msg: KillMsg): void;
 }
 
 interface Sample {
@@ -51,6 +54,8 @@ export interface Welcome {
     /** Map id: maps/<map>.json and maps/<map>.glb. */
     map: string;
     mapName: string;
+    /** The room's options, chosen by its creator. */
+    options: RoomOptions;
 }
 
 const MAX_SAMPLES = 24;
@@ -128,7 +133,10 @@ export class Net {
             this.id = msg.id;
             this.team = msg.team;
             this.welcomed = true;
-            this.resolveWelcome({ id: msg.id, team: msg.team, map: msg.map, mapName: msg.mapName ?? msg.map });
+            this.resolveWelcome({
+                id: msg.id, team: msg.team, map: msg.map, mapName: msg.mapName ?? msg.map,
+                options: { ...DEFAULT_ROOM_OPTIONS, ...msg.options }
+            });
         } else if (this.handlers) {
             this.receive(msg);
         } else {
@@ -220,6 +228,9 @@ export class Net {
                 break;
             case 'hitconfirm':
                 handlers.hitConfirm(msg);
+                break;
+            case 'kill':
+                handlers.kill(msg);
                 break;
         }
     }

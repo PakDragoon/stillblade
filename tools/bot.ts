@@ -4,6 +4,8 @@
 //   --pistol      hold the pistol (slot 2) instead of the rifle; with --shoot it taps one shot every
 //                 12 commands (a new trigger press each, as semi-automatic fire needs)
 //   --aim         hold aim down sights
+//   --knife       hold the knife (slot 3) and keep swinging (with or without --shoot)
+//   --suppressed  create the room with suppressed weapons (only if the bot creates the room)
 //   --map <id>    map for the room if the bot creates it (default: the server's default map)
 //   --room <code> room to join (default: the public room)
 //   --still       stand still instead of walking (handy as a target)
@@ -21,11 +23,13 @@ const mapArg = argValue('--map');
 const roomArg = argValue('--room');
 if (mapArg) query.set('map', mapArg);
 if (roomArg) query.set('room', roomArg);
+if (process.argv.includes('--suppressed')) query.set('suppressed', '1');
 const url = process.env.SB_SERVER_URL ?? `ws://localhost:${DEFAULT_PORT}/?${query}`;
 const shoot = process.argv.includes('--shoot');
 const still = process.argv.includes('--still');
 const pistol = process.argv.includes('--pistol');
 const aimDown = process.argv.includes('--aim');
+const knife = process.argv.includes('--knife');
 /** Pistol fire: press for one command, release, every this many commands (the minimum interval is 9). */
 const TAP_EVERY = 12;
 const WALK_IN_TICKS = 4 * TICK_RATE;
@@ -42,22 +46,23 @@ let serverTime = 0;
 let ticksSinceSpawn = 0;
 let mag = 0, reserve = 0, reloading = false, outOfAmmo = false;
 
-ws.on('open', () => console.log(`bot connected to ${url}${shoot ? ' (shooting)' : ''}${pistol ? ' (pistol)' : ''}`));
+ws.on('open', () => console.log(`bot connected to ${url}${shoot ? ' (shooting)' : ''}${pistol ? ' (pistol)' : ''}${knife ? ' (knife)' : ''}`));
 ws.on('close', (code, reason) => { console.log(`bot disconnected (${code}${reason.length ? ` ${reason}` : ''})`); process.exit(code === 1008 ? 1 : 0); });
 ws.on('error', err => { console.error(`bot could not connect: ${err.message}`); process.exit(1); });
 ws.on('message', (data, isBinary) => {
     const msg = decodeServer(isBinary ? (data as Buffer) : data.toString());
     if (msg.type === 'welcome') {
-        console.log(`bot is player ${msg.id} on ${msg.team}, map ${msg.map} (${msg.mapName})`);
+        console.log(`bot is player ${msg.id} on ${msg.team}, map ${msg.map} (${msg.mapName}), ${msg.options?.suppressed ? 'suppressed' : 'unsuppressed'} weapons`);
         // Rooms wait in warmup until everyone is ready (or the creator starts): a bot is always ready.
         if (!process.argv.includes('--unready')) ws.send(encodeClient({ type: 'ready', ready: true }));
     }
     else if (msg.type === 'snap') {
         serverTime = msg.time;
-        const gun = msg.me.loadout.guns[msg.me.loadout.slot];
+        // With the knife in hand there is no magazine to watch.
+        const gun = msg.me.loadout.guns[msg.me.loadout.slot] ?? { mag: 0, reserve: 0, reload: 0 };
         ({ mag, reserve } = gun);
         reloading = gun.reload > 0;
-        if (shoot && mag === 0 && reserve === 0 && !outOfAmmo) console.log('bot is out of ammunition until it respawns');
+        if (shoot && !knife && mag === 0 && reserve === 0 && !outOfAmmo) console.log('bot is out of ammunition until it respawns');
         outOfAmmo = mag === 0 && reserve === 0;
     }
     else if (msg.type === 'round' && msg.phase === 'warmup' && !process.argv.includes('--unready')) {
@@ -76,12 +81,13 @@ setInterval(() => {
         forward: still || strafing ? 0 : 1,
         right: still || !strafing ? 0 : Math.floor((t - WALK_IN_TICKS) / STRAFE_TICKS) % 2 === 0 ? 1 : -1,
         yaw, pitch: 0, jump: false, walk: false, crouch: false,
-        fire: shoot && inBurst && !reloading && (!pistol || t % TAP_EVERY === 0),
+        // The knife swings for as long as the trigger is held (one swing per cooldown).
+        fire: knife ? t > TICK_RATE : shoot && inBurst && !reloading && (!pistol || t % TAP_EVERY === 0),
         // The server ignores R with a full magazine or an empty reserve, so it is safe to send.
-        reload: shoot && !inBurst && mag < RELOAD_BELOW,
+        reload: !knife && shoot && !inBurst && mag < RELOAD_BELOW,
         use: false, viewTime: serverTime,
         // Asking for the slot it already holds does nothing, so it is safe to send every command.
-        slot: pistol ? 2 : 1, swap: false, aim: aimDown
+        slot: knife ? 3 : pistol ? 2 : 1, swap: false, aim: aimDown
     };
     ws.send(encodeClient({ type: 'cmd', cmd }));
 }, 1000 / TICK_RATE);

@@ -4,10 +4,11 @@ import {
     SHOT_RANGE, STEP_DISTANCE, STEP_LOUD_CROUCH, STEP_LOUD_RUN, STEP_LOUD_WALK, TICK_DT
 } from '@shared/constants';
 import {
-    GUN_DRY, GUN_RELOAD, aimFraction, copyLoadout, createLoadout, heldGun, heldWeapon, justSwitched, recoilPitch,
-    recoilScale, recoilYaw, resetLoadout, sameLoadout, shotDirectionFor, spreadAngle, stepLoadout
+    GUN_DRY, GUN_RELOAD, MELEE_SLASH, MELEE_SWING, aimFraction, copyLoadout, createLoadout, heldGun, heldWeapon,
+    justSwitched, recoilPitch, recoilScale, recoilYaw, resetLoadout, sameLoadout, shotDirectionFor, spreadAngle, stepLoadout
 } from '@shared/gun';
-import { WEAPONS, WEAPON_COUNT } from '@shared/weapons';
+import { DEFENDER_KNIFE, GUN_COUNT, SLOT_COUNT, SLOT_KNIFE, WEAPONS, slotLabel } from '@shared/weapons';
+import { roomOptionsQuery } from '@shared/room-options';
 import {
     KNIFE_SLASH, KNIFE_SWING, copyKnifeState, createKnifeState, resetKnife, sameKnifeState, stepKnife
 } from '@shared/knife';
@@ -197,6 +198,8 @@ async function start(): Promise<void> {
     if (choice.room) query.set('room', choice.room);
     if (choice.name) query.set('name', choice.name);
     if (choice.map) query.set('map', choice.map);
+    // Options only matter when this join creates the room; an existing room keeps its own.
+    roomOptionsQuery({ suppressed: choice.suppressed === true }, query);
     const serverUrl = `${serverBase}/?${query}`;
 
     // The room decides the map: connect, learn it from the welcome, load it, then start simulating.
@@ -254,7 +257,7 @@ async function start(): Promise<void> {
     /** Visual-only offset that hides prediction corrections by blending them out over a few frames. */
     const errorOffset: Vec3 = [0, 0, 0];
     let seq = 0;
-    /** Predicted defender weapons (both guns, switch, aim, trigger), reconciled and replayed with movement. */
+    /** Predicted defender weapons (both guns, the knife, switch, aim, trigger), reconciled and replayed with movement. */
     const loadout = createLoadout();
     const loadoutBefore = createLoadout();
     /** Snapshots whose replayed weapon state (any field of the loadout) differed from the prediction (should stay 0). */
@@ -285,6 +288,9 @@ async function start(): Promise<void> {
     const eyePos: Vec3 = [0, 0, 0];
     const aim: Vec3 = [0, 0, 0];
     const shotEnd: Vec3 = [0, 0, 0];
+    /** The room's suppressed-weapons option, from the welcome. */
+    const suppressed = welcome.options.suppressed;
+    presenter.setSuppressed(suppressed);
 
     net.start({
         snapshot(me: SelfSnap, ack: number): void {
@@ -317,7 +323,8 @@ async function start(): Promise<void> {
                 else stepKnife(knife, c.fire, c.armed);
             }
             if (defender && !sameLoadout(loadout, loadoutBefore)) gunMismatches++;
-            if (!defender && !sameKnifeState(knife, knifeBefore)) knifeMismatches++;
+            // Knife timing: the ghost's own, or the defender knife inside the loadout (also counted above).
+            if (defender ? !sameKnifeState(loadout.knife, loadoutBefore.knife) : !sameKnifeState(knife, knifeBefore)) knifeMismatches++;
 
             const ex = bx - curr.pos[0], ey = by - curr.pos[1], ez = bz - curr.pos[2];
             if (ex === 0 && ey === 0 && ez === 0) return;
@@ -344,24 +351,32 @@ async function start(): Promise<void> {
         },
         shot(ev: ShotEvent): void {
             // Our own tracer was drawn the moment we fired; the server only tells us what it hit.
+            // A shot out of earshot but in sight arrives `silent`: seen, not heard.
             if (ev.shooter !== net.id) {
                 presenter.shot(ev.from, ev.to, false, ev.weapon ?? 0);
-                audio.gunshot(ev.from, false, ev.weapon ?? 0);
-                audio.impact(ev.to);
+                if (!ev.silent) {
+                    audio.gunshot(ev.from, false, ev.weapon ?? 0, suppressed);
+                    audio.impact(ev.to);
+                }
             }
-            if (ev.killed && ev.victim !== undefined) presenter.killFeed(ev.shooter, ev.victim, ev.head ? 'headshot' : 'shot', WEAPONS[ev.weapon]?.label);
         },
         slash(ev: SlashEvent): void {
             const hit = ev.victim !== undefined;
             // Our own swing already made its whoosh when it was predicted; only a confirmed hit adds to it.
             if (ev.attacker !== net.id) audio.knifeSlash(ev.pos, hit, false);
             else if (hit) audio.knifeSlash(ev.pos, true, true);
-            if (ev.killed && ev.victim !== undefined) presenter.killFeed(ev.attacker, ev.victim, ev.backstab ? 'backstab' : 'knife');
+        },
+        kill(ev): void {
+            presenter.killFeed(ev.killer, ev.victim, ev.kind, ev.zone ?? null,
+                ev.weapon !== undefined ? WEAPONS[ev.weapon]?.label : ev.kind === 'shot' ? undefined : DEFENDER_KNIFE.label);
         },
         sound(ev: SoundEvent): void {
             if (ev.kind === 'step') audio.step(ev.pos, ev.loud, false);
             else if (ev.kind === 'reload') audio.reload(ev.pos, false, ev.weapon ?? 0);
-            else audio.knifeWindup(ev.pos, false);
+            else {
+                audio.knifeWindup(ev.pos, false);
+                presenter.remoteSwing(ev.id);
+            }
         },
         round(msg: RoundMsg): void {
             const was = match.phase;
@@ -398,14 +413,17 @@ async function start(): Promise<void> {
         damage(msg): void {
             presenter.damaged(msg.amount, msg.dir);
             audio.hurt();
-            if (msg.killed) presenter.died(rosterNames.get(msg.by ?? -1) ?? 'Someone', msg.kind, msg.dist ?? 0, msg.weapon !== undefined ? WEAPONS[msg.weapon]?.label : undefined);
+            if (msg.killed) {
+                presenter.died(rosterNames.get(msg.by ?? -1) ?? 'Someone', msg.kind, msg.zone ?? null, msg.dist ?? 0,
+                    msg.weapon !== undefined ? WEAPONS[msg.weapon]?.label : msg.kind === 'shot' ? undefined : DEFENDER_KNIFE.label);
+            }
         },
         hitConfirm(msg): void {
-            presenter.hitConfirm(msg.kind === 'head', msg.kind === 'kill');
-            audio.hitMarker(msg.kind);
+            presenter.hitConfirm(msg.zone ?? null, msg.kill);
+            audio.hitMarker(msg.kill ? 'kill' : msg.zone === 'head' ? 'head' : 'body');
         }
     });
-    ui.enterGame(choice.room || 'public', welcome.map, welcome.mapName);
+    ui.enterGame(choice.room || 'public', welcome.map, welcome.mapName, welcome.options);
 
     const local: LocalView = {
         id: 0, team: 'ghosts', health: MAX_HEALTH, alive: false, respawnIn: 0, connected: false, ping: 0, firing: false, vis: 0,
@@ -414,7 +432,7 @@ async function start(): Promise<void> {
         yaw: 0, spectating: null, spectateId: -1, overview: false
     };
     const slotViews = local.weapons as WeaponSlotView[];
-    for (let i = 0; i < WEAPON_COUNT; i++) slotViews.push({ mag: 0, reserve: 0 });
+    for (let i = 0; i < SLOT_COUNT; i++) slotViews.push({ mag: 0, reserve: 0 });
     const listener: ListenerView = { pos: [0, 0, 0], yaw: 0, pitch: 0, team: 'ghosts', alive: false };
     let accumulator = 0;
     let eye = EYE_HEIGHT;
@@ -507,7 +525,7 @@ async function start(): Promise<void> {
             viewTime: net.renderTime(), live: alive, armed: false
         };
         input.sample(cmd);
-        input.sampleWeapons(cmd, loadout.slot, WEAPON_COUNT);
+        input.sampleWeapons(cmd, loadout.slot, SLOT_COUNT);
         // Rooted during the freeze and while planting or defusing: the server applies the same rule,
         // and zeroing the command here keeps replays of it consistent.
         const acting = alive && cmd.use && canAct(net.team, match.phase, curr, mapData, match.bombPos);
@@ -548,10 +566,15 @@ async function start(): Promise<void> {
                     shotEnd[1] = eyePos[1] + aim[1] * dist;
                     shotEnd[2] = eyePos[2] + aim[2] * dist;
                     presenter.shot(eyePos, shotEnd, true, loadout.slot);
-                    audio.gunshot(eyePos, true, loadout.slot);
+                    audio.gunshot(eyePos, true, loadout.slot, suppressed);
                     audio.impact(shotEnd);
                 } else if (r === GUN_RELOAD) audio.reload(curr.pos, true, loadout.slot);
                 else if (r === GUN_DRY) audio.dryFire();
+                // The defender knife: the same windup and landing as the ghosts' (only the damage differs).
+                else if (r === MELEE_SWING) {
+                    presenter.knifeSwing(DEFENDER_KNIFE.windupTicks * TICK_DT);
+                    audio.knifeWindup(curr.pos, true);
+                } else if (r === MELEE_SLASH) audio.knifeSlash(curr.pos, false, true);
             } else {
                 // The same knife step the server runs for this command (shared/knife.ts).
                 const k = stepKnife(knife, cmd.fire, cmd.armed);
@@ -564,10 +587,10 @@ async function start(): Promise<void> {
         }
         // The camera shows the recoil the next shot will carry, so the crosshair is honest. Taken
         // after any reconciliation, so it always follows the corrected gun state.
-        const kicking = alive && net.team === 'defenders';
-        const held = heldWeapon(loadout), scale = recoilScale(loadout);
-        kickPitch = kicking ? recoilPitch(held, heldGun(loadout).burst) * scale : 0;
-        kickYaw = kicking ? recoilYaw(held, heldGun(loadout).burst) * scale : 0;
+        const held = heldWeapon(loadout), heldState = heldGun(loadout), scale = recoilScale(loadout);
+        const kicking = alive && net.team === 'defenders' && held !== null && heldState !== null;
+        kickPitch = kicking ? recoilPitch(held, heldState.burst) * scale : 0;
+        kickYaw = kicking ? recoilYaw(held, heldState.burst) * scale : 0;
         aimCurr = kicking ? aimFraction(loadout) : 0;
         net.send(cmd);
     };
@@ -599,7 +622,7 @@ async function start(): Promise<void> {
         // Aiming down sights narrows the view by the held weapon's zoom, and slows mouse look to match.
         const held = heldWeapon(loadout);
         const aimNow = aimPrev + (aimCurr - aimPrev) * a;
-        const zoom = 1 + (held.adsZoom - 1) * aimNow;
+        const zoom = held ? 1 + (held.adsZoom - 1) * aimNow : 1;
         const fov = zoom === 1 ? BASE_FOV : (2 * Math.atan(TAN_HALF_FOV / zoom)) / RAD;
         if (camera.camera!.fov !== fov) camera.camera!.fov = fov;
         input.lookScale = 1 / zoom;
@@ -619,16 +642,17 @@ async function start(): Promise<void> {
         local.vis = vis;
         const gun = heldGun(loadout);
         local.weapon = loadout.slot;
-        for (let i = 0; i < WEAPON_COUNT; i++) {
+        for (let i = 0; i < GUN_COUNT; i++) {
             slotViews[i].mag = loadout.guns[i].mag;
             slotViews[i].reserve = loadout.guns[i].reserve;
         }
-        local.mag = gun.mag;
-        local.magSize = held.magSize;
-        local.reserve = gun.reserve;
-        local.reload = gun.reload > 0 ? 1 - gun.reload / held.reloadTicks : 0;
-        local.spread = spreadAngle(curr, held, aimFraction(loadout));
-        local.draw = loadout.draw / held.drawTicks;
+        // The knife slot (SLOT_KNIFE) keeps mag and reserve at 0: it has no ammunition.
+        local.mag = gun ? gun.mag : 0;
+        local.magSize = held ? held.magSize : 0;
+        local.reserve = gun ? gun.reserve : 0;
+        local.reload = gun && held && gun.reload > 0 ? 1 - gun.reload / held.reloadTicks : 0;
+        local.spread = held ? spreadAngle(curr, held, aimFraction(loadout)) : 0;
+        local.draw = loadout.draw / (held ? held.drawTicks : DEFENDER_KNIFE.drawTicks);
         local.aim = aimNow;
         const remotes = net.interpolate();
         // Dead in a round: follow a living teammate in first person, or look at the whole map.
@@ -691,7 +715,8 @@ async function start(): Promise<void> {
             loadout, knife,
             stats: () => ({
                 fps, resScale, alive, health, vis, pending: pending.length, error: Math.hypot(...errorOffset),
-                loadout: structuredClone(loadout), gun: { ...heldGun(loadout) }, gunMismatches,
+                loadout: structuredClone(loadout), gun: heldGun(loadout) ? { ...heldGun(loadout)! } : null,
+                held: slotLabel(loadout.slot), knifeSlot: SLOT_KNIFE, gunMismatches,
                 knife: { ...knife }, knifeMismatches
             })
         }

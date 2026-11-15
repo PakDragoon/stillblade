@@ -14,10 +14,11 @@
  *   master(Gain 0.8) -> DynamicsCompressor (gentle limiter) -> destination
  */
 import {
-    BREATH_RANGE, EYE_HEIGHT, GHOST_MAX_VIS, KNIFE_SOUND_RANGE, RELOAD_SOUND_RANGE, STEP_RANGE, TICK_RATE
+    BREATH_RANGE, EYE_HEIGHT, GHOST_MAX_VIS, GUNSHOT_RANGE, GUNSHOT_RANGE_SUPPRESSED, KNIFE_SOUND_RANGE, RELOAD_SOUND_RANGE,
+    STEP_RANGE, TICK_RATE
 } from '@shared/constants';
 import { rayWorld } from '@shared/raycast';
-import { WEAPONS, type WeaponId } from '@shared/weapons';
+import { DEFENDER_KNIFE, SLOT_KNIFE, WEAPONS, type WeaponId } from '@shared/weapons';
 import type { Box, Vec3 } from '@shared/types';
 import type { AudioEngine, BombView, CreateAudio, CueKind, ListenerView } from './audio-api';
 import type { RemoteView } from './presenter-api';
@@ -29,7 +30,6 @@ import type { RemoteView } from './presenter-api';
 const MASTER_GAIN = 0.8;
 /** Simultaneous one-shot voices; breathing loops are not counted. */
 const MAX_VOICES = 24;
-const GUN_RANGE = 45;
 const IMPACT_RANGE = 25;
 /** Fade for breathing loops starting/stopping, seconds. */
 const LOOP_FADE = 0.15;
@@ -254,6 +254,66 @@ const synthGun: Synth = (v, t) => {
     const click = v.gain(v.input);
     v.noise(v.bank.white, tc, 0.03, v.filter('bandpass', 3000, 4, click));
     env(click.gain, tc, 0.0005, 0.35, 0.015);
+};
+
+/**
+ * Unsuppressed rifle (room option off): a sharp crack, a heavy low-passed muzzle blast, a falling low boom
+ * and a long dull tail (the report rolling off walls), then the action cycling. About 0.9 s in all.
+ */
+const synthLoudRifle: Synth = (v, t) => {
+    const crack = v.gain(v.input);
+    v.noise(v.bank.white, t, 0.05, v.filter('highpass', 3000, 0.7, crack));
+    env(crack.gain, t, 0.0004, 1.1, 0.03);
+
+    const blast = v.gain(v.input);
+    v.noise(v.bank.pink, t, 0.3, v.filter('lowpass', 2400 * jitter(0.05), 0.8, blast));
+    env(blast.gain, t, 0.001, 1.5, 0.16);
+
+    const boom = v.gain(v.input);
+    const o = v.osc('sine', 120 * jitter(0.04), t, 0.36, boom);
+    o.frequency.exponentialRampToValueAtTime(38, t + 0.26);
+    env(boom.gain, t, 0.002, 1.2, 0.3);
+
+    const tt = t + 0.03;
+    const tail = v.gain(v.input);
+    v.noise(v.bank.brown, tt, 0.9, v.filter('lowpass', 650, 0.7, tail));
+    tail.gain.setValueAtTime(0, tt);
+    tail.gain.linearRampToValueAtTime(0.55, tt + 0.06);
+    tail.gain.exponentialRampToValueAtTime(0.0001, tt + 0.88);
+
+    const tc = t + 0.045;
+    const click = v.gain(v.input);
+    v.noise(v.bank.white, tc, 0.03, v.filter('bandpass', 3000, 4, click));
+    env(click.gain, tc, 0.0005, 0.3, 0.015);
+};
+
+/** Unsuppressed pistol: a higher, snappier crack and blast, a shorter boom and tail, the slide. About 0.65 s. */
+const synthLoudPistol: Synth = (v, t) => {
+    const crack = v.gain(v.input);
+    v.noise(v.bank.white, t, 0.04, v.filter('highpass', 3800, 0.7, crack));
+    env(crack.gain, t, 0.0003, 1.15, 0.022);
+
+    const blast = v.gain(v.input);
+    v.noise(v.bank.pink, t, 0.22, v.filter('lowpass', 3200 * jitter(0.05), 0.9, blast));
+    env(blast.gain, t, 0.0008, 1.35, 0.11);
+
+    const boom = v.gain(v.input);
+    const o = v.osc('sine', 175 * jitter(0.04), t, 0.24, boom);
+    o.frequency.exponentialRampToValueAtTime(55, t + 0.16);
+    env(boom.gain, t, 0.0015, 0.95, 0.19);
+
+    const tt = t + 0.025;
+    const tail = v.gain(v.input);
+    v.noise(v.bank.brown, tt, 0.62, v.filter('lowpass', 800, 0.7, tail));
+    tail.gain.setValueAtTime(0, tt);
+    tail.gain.linearRampToValueAtTime(0.42, tt + 0.05);
+    tail.gain.exponentialRampToValueAtTime(0.0001, tt + 0.6);
+
+    const back = t + 0.03;
+    const click = v.gain(v.input);
+    v.noise(v.bank.white, back, 0.025, v.filter('bandpass', 3600, 4, click));
+    env(click.gain, back, 0.0004, 0.35, 0.012);
+    metalClick(v, back + 0.03, 4400, 0.25);
 };
 
 /** Bullet impact: very short high-passed crack, a tiny random-pitch tick, a dull low knock. */
@@ -719,7 +779,9 @@ interface Breather {
 // ---------------------------------------------------------------------------------------------
 
 const STEP_CFG: ShotCfg = { range: STEP_RANGE, ref: 1, hrtf: true, occLift: 0.4 };
-const GUN_CFG: ShotCfg = { range: GUN_RANGE, ref: 2, hrtf: false, occLift: 0 };
+/** Gunshots fade to silence exactly where the server stops sending them as sounds (shared/constants.ts). */
+const GUN_CFG: ShotCfg = { range: GUNSHOT_RANGE_SUPPRESSED, ref: 2, hrtf: false, occLift: 0 };
+const LOUD_GUN_CFG: ShotCfg = { range: GUNSHOT_RANGE, ref: 4, hrtf: false, occLift: 0 };
 const IMPACT_CFG: ShotCfg = { range: IMPACT_RANGE, ref: 1, hrtf: false, occLift: 0 };
 const KNIFE_CFG: ShotCfg = { range: KNIFE_SOUND_RANGE, ref: 1, hrtf: true, occLift: 0 };
 const BOMB_CFG: ShotCfg = { range: BOMB_RANGE, ref: 2, hrtf: true, occLift: 0 };
@@ -731,10 +793,10 @@ const CUE_CFG: ShotCfg = { range: 1, ref: 1, hrtf: false, occLift: 0 };
 /** Scratch config for footsteps, whose range depends on loudness. */
 const stepCfg: ShotCfg = { ...STEP_CFG };
 
-/** Each weapon's shot and reload sounds, by id, then per slot of the weapon table. */
-const WEAPON_SOUNDS: Record<WeaponId, { shot: Synth; reload: Synth }> = {
-    rifle: { shot: synthGun, reload: synthReload },
-    pistol: { shot: synthPistol, reload: synthPistolReload }
+/** Each gun's suppressed and unsuppressed shot and its reload, by id, then per slot of the weapon table. */
+const WEAPON_SOUNDS: Record<WeaponId, { shot: Synth; loud: Synth; reload: Synth }> = {
+    rifle: { shot: synthGun, loud: synthLoudRifle, reload: synthReload },
+    pistol: { shot: synthPistol, loud: synthLoudPistol, reload: synthPistolReload }
 };
 const SLOT_SOUNDS = WEAPONS.map(w => WEAPON_SOUNDS[w.id]);
 
@@ -1109,11 +1171,18 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
             try { stepSound(pos, l, isLocal); } finally { stepMode = false; }
         },
 
-        gunshot(pos: Vec3, isLocal: boolean, weapon: number): void {
-            oneShot(isLocal ? null : pos, GUN_CFG, isLocal ? 0.7 : 1, SLOT_SOUNDS[slotOf(weapon)].shot, 0, false);
+        gunshot(pos: Vec3, isLocal: boolean, weapon: number, suppressed: boolean): void {
+            const snd = SLOT_SOUNDS[slotOf(weapon)];
+            if (suppressed) oneShot(isLocal ? null : pos, GUN_CFG, isLocal ? 0.7 : 1, snd.shot, 0, false);
+            else oneShot(isLocal ? null : pos, LOUD_GUN_CFG, isLocal ? 0.7 : 1, snd.loud, 0, false, 2);
         },
 
         weaponSwitch(weapon: number): void {
+            // The knife: the light holster sound, over its own draw time.
+            if (weapon === SLOT_KNIFE) {
+                oneShot(null, CUE_CFG, 0.4, synthSwitch, DEFENDER_KNIFE.drawTicks / TICK_RATE, true);
+                return;
+            }
             const s = slotOf(weapon);
             oneShot(null, CUE_CFG, 0.4, synthSwitch, WEAPONS[s].drawTicks / TICK_RATE, WEAPONS[s].id === 'pistol');
         },
