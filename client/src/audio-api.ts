@@ -70,6 +70,11 @@ export interface AudioEngine {
     knifeWindup(pos: Vec3, isLocal: boolean): void;
     /** A knife swing landing; `hit` when it connected with a player. */
     knifeSlash(pos: Vec3, hit: boolean, isLocal: boolean): void;
+    /**
+     * The bomb was dropped onto the floor (`drop`: a short thud) or picked up (`pickup`: a quiet rattle) at
+     * `pos`. Heard within BOMB_SOUND_RANGE (shared/bomb.ts), about 8 m, fading to silence there.
+     */
+    bomb(kind: 'drop' | 'pickup', pos: Vec3, isLocal: boolean): void;
     /** The local player was hurt (non-positional). */
     hurt(): void;
     /** The local player's attack landed: a short tick, distinct for a headshot and a kill (non-positional). */

@@ -14,14 +14,17 @@ import {
 } from '@shared/knife';
 import { copyPlayerState, createPlayerState, horizontalSpeed, stepPlayer } from '@shared/movement';
 import {
-    DEFAULT_PORT, type NetCmd, type RosterEntry, type RoundMsg, type SelfSnap, type ShotEvent, type SlashEvent,
+    CARRY_DROPPED, CARRY_NONE, CARRY_PICKED, copyCarry, createCarry, resetCarry, restingPoint, sameCarry, stepCarry
+} from '@shared/bomb';
+import {
+    DEFAULT_PORT, type BombMsg, type NetCmd, type RosterEntry, type RoundMsg, type SelfSnap, type ShotEvent, type SlashEvent,
     type SoundEvent
 } from '@shared/protocol';
 import { DEFAULT_MAP, isMapId, type MapListEntry } from '@shared/maps';
 import { QUALITY_RES, SettingsStore } from './settings';
 import { Radar } from './radar';
 import { Ui, type JoinChoice } from './ui';
-import { canAct, movementLocked } from '@shared/rules';
+import { DEFUSE_TICKS, PLANT_TICKS, canAct, insideSite, movementLocked, type Phase } from '@shared/rules';
 import { rayWorld } from '@shared/raycast';
 import type { Box, MapData, Vec3 } from '@shared/types';
 import { createAudio } from './audio';
@@ -48,6 +51,8 @@ interface PendingCmd extends NetCmd {
     live: boolean;
     /** The trigger could act (not frozen, hands not busy planting or defusing). */
     armed: boolean;
+    /** Holding the use key planted or defused on this command (the server decides the same: `canAct`). */
+    acting: boolean;
 }
 
 const params = new URLSearchParams(location.search);
@@ -278,13 +283,37 @@ async function start(): Promise<void> {
     const knifeBefore = createKnifeState();
     /** Snapshots whose replayed knife timing differed from what we had predicted (should stay 0). */
     let knifeMismatches = 0;
+    /**
+     * The bomb, predicted like the weapons (shared/bomb.ts): whether we carry it and the repick wait,
+     * stepped for every command we simulate and replayed from each snapshot. `droppedPred` is where we
+     * believe a dropped bomb lies right now (our own predicted drop or pickup applied); `serverDropped`
+     * is the last position the server told us.
+     */
+    const carry = createCarry();
+    const carryBefore = createCarry();
+    let droppedPred: Vec3 | null = null;
+    let serverDropped: Vec3 | null = null;
+    const droppedBuf: Vec3 = [0, 0, 0];
+    const lastGround: Vec3 = [0, 0, 0];
+    /** Who carries the bomb (ghosts are told; 0 for nobody, always 0 for defenders). */
+    let carrierId = 0;
+    /**
+     * Commands spent planting or defusing, exactly as the server counts them, so we predict the command a
+     * plant or defuse completes and stop rooting ourselves from then on (`phaseOverride` stands in for the
+     * round message still on its way).
+     */
+    let actionTicks = 0;
+    let actionBefore = 0;
+    let phaseOverride: Phase | null = null;
+    /** Snapshots whose replayed bomb carry or plant count differed from the prediction (should stay 0). */
+    let bombMismatches = 0;
     let stepAccum = 0;
     let vis = 0;
     let action = 0;
     /** Server time (ms) the current phase ends; 0 in warmup. */
     let phaseEndsAt = 0;
     const match: MatchView = {
-        phase: 'warmup', timeLeft: 0, round: 1, scoreGhosts: 0, scoreDefenders: 0, bombPos: null,
+        phase: 'warmup', timeLeft: 0, round: 1, scoreGhosts: 0, scoreDefenders: 0, bombPos: null, droppedBomb: null, carrierId: 0,
         winner: null, reason: null, matchOver: false
     };
     const bombView: BombView = { pos: [0, 0, 0], timeLeft: 0 };
@@ -299,13 +328,35 @@ async function start(): Promise<void> {
     const suppressed = welcome.options.suppressed;
     presenter.setSuppressed(suppressed);
 
+    /**
+     * The plant or defuse counter and the bomb carry for one simulated command, in the server's order
+     * (`Game.handleCmd`: the carry step, then the plant or defuse count). Used by prediction and replay.
+     */
+    const stepObjective = (c: PendingCmd, ghost: boolean): number => {
+        let r = CARRY_NONE;
+        if (ghost) {
+            if (curr.onGround) { lastGround[0] = curr.pos[0]; lastGround[1] = curr.pos[1]; lastGround[2] = curr.pos[2]; }
+            r = stepCarry(carry, c.drop, c.acting, curr, droppedPred);
+            if (r === CARRY_DROPPED) droppedPred = restingPoint(curr, boxes, lastGround, droppedBuf);
+            else if (r === CARRY_PICKED) droppedPred = null;
+        }
+        if (!c.acting) actionTicks = 0;
+        else if (++actionTicks >= (ghost ? PLANT_TICKS : DEFUSE_TICKS)) {
+            actionTicks = 0;
+            // Planted (nobody carries it any more) or defused (the round is over): no more rooting.
+            if (ghost) carry.carrier = false;
+            phaseOverride = ghost ? 'planted' : 'over';
+        }
+        return r;
+    };
+
     net.start({
         snapshot(me: SelfSnap, ack: number): void {
             health = me.health;
             alive = me.alive;
             respawnAt = me.respawnAt;
             vis = me.vis;
-            action = me.action;
+            action = me.actionTicks / (me.team === 'ghosts' ? PLANT_TICKS : DEFUSE_TICKS);
             let drop = 0;
             while (drop < pending.length && pending[drop].seq <= ack) drop++;
             if (drop > 0) pending.splice(0, drop);
@@ -321,6 +372,12 @@ async function start(): Promise<void> {
             copyLoadout(loadout, me.loadout);
             copyKnifeState(knifeBefore, knife);
             copyKnifeState(knife, me.knife);
+            copyCarry(carryBefore, carry);
+            copyCarry(carry, me.carry);
+            actionBefore = actionTicks;
+            actionTicks = me.actionTicks;
+            droppedPred = serverDropped;
+            phaseOverride = null;
             const defender = me.team === 'defenders';
             for (let i = 0; i < pending.length; i++) {
                 const c = pending[i];
@@ -328,8 +385,10 @@ async function start(): Promise<void> {
                 if (!c.live) continue;
                 if (defender) stepLoadout(loadout, c, c.armed);
                 else stepKnife(knife, c.fire, c.armed);
+                stepObjective(c, !defender);
             }
             if (defender && !sameLoadout(loadout, loadoutBefore)) gunMismatches++;
+            if (!sameCarry(carry, carryBefore) || actionTicks !== actionBefore) bombMismatches++;
             // Knife timing: the ghost's own, or the defender knife inside the loadout (also counted above).
             if (defender ? !sameKnifeState(loadout.knife, loadoutBefore.knife) : !sameKnifeState(knife, knifeBefore)) knifeMismatches++;
 
@@ -353,6 +412,11 @@ async function start(): Promise<void> {
             health = MAX_HEALTH;
             resetKnife(knife);
             resetLoadout(loadout);
+            // The server resets the carry at every spawn and hands the bomb out just after (snapshot and `bomb`).
+            resetCarry(carry);
+            actionTicks = 0;
+            phaseOverride = null;
+            lastGround[0] = pos[0]; lastGround[1] = pos[1]; lastGround[2] = pos[2];
             kickPitchPrev = kickYawPrev = kickPitch = kickYaw = 0;
             aimPrev = aimCurr = 0;
             stepAccum = 0;
@@ -381,6 +445,8 @@ async function start(): Promise<void> {
         sound(ev: SoundEvent): void {
             if (ev.kind === 'step') audio.step(ev.pos, ev.loud, false);
             else if (ev.kind === 'reload') audio.reload(ev.pos, false, ev.weapon ?? 0);
+            else if (ev.kind === 'bombDrop') audio.bomb('drop', ev.pos, false);
+            else if (ev.kind === 'bombPickup') audio.bomb('pickup', ev.pos, false);
             else {
                 audio.knifeWindup(ev.pos, false);
                 presenter.remoteSwing(ev.id);
@@ -393,6 +459,7 @@ async function start(): Promise<void> {
             match.scoreGhosts = msg.score.ghosts;
             match.scoreDefenders = msg.score.defenders;
             match.bombPos = msg.bomb;
+            phaseOverride = null; // the server's own word on the phase has arrived
             match.winner = msg.winner ?? null;
             match.reason = msg.reason ?? null;
             match.matchOver = msg.matchOver === true;
@@ -429,6 +496,26 @@ async function start(): Promise<void> {
         hitConfirm(msg): void {
             presenter.hitConfirm(msg.zone ?? null, msg.kill);
             audio.hitMarker(msg.kill ? 'kill' : msg.zone === 'head' ? 'head' : 'body');
+        },
+        bomb(msg: BombMsg): void {
+            serverDropped = msg.dropped ? [msg.dropped[0], msg.dropped[1], msg.dropped[2]] : null;
+            // Ghosts are told who carries it; a defender never gets `carrier`.
+            carrierId = msg.carrier ?? 0;
+            // Handing out the bomb at the round start, and clearing it (warmup, plant), happen outside any
+            // command, like a spawn: take them as they come (the next snapshot agrees).
+            if (msg.carrier !== undefined && (msg.event === undefined || msg.event === 'assign')) carry.carrier = msg.carrier === net.id;
+            // A drop or pickup we already predicted ourselves is reconciled by the next snapshot; anything
+            // else (a teammate's drop or pickup, a reset) applies now.
+            if (!carry.carrier) droppedPred = serverDropped;
+            if (msg.event && msg.by !== undefined) {
+                const me = msg.by === net.id;
+                const who = rosterNames.get(msg.by) ?? `Player ${msg.by}`;
+                const text = msg.event === 'assign' ? (me ? 'You have the bomb' : `${who} has the bomb`)
+                    : msg.event === 'pickup' ? (me ? 'You picked up the bomb' : `${who} picked up the bomb`)
+                    : msg.event === 'drop' ? (me ? 'You dropped the bomb' : `${who} dropped the bomb`)
+                    : me ? 'You lost the bomb' : `Bomb dropped: ${who} lost it`;
+                if (msg.event !== 'assign' || msg.by !== 0) presenter.bombNotice(text);
+            }
         }
     });
     reporter.mapName = welcome.mapName;
@@ -436,7 +523,7 @@ async function start(): Promise<void> {
 
     const local: LocalView = {
         id: 0, team: 'ghosts', health: MAX_HEALTH, alive: false, respawnIn: 0, connected: false, ping: 0, firing: false, vis: 0,
-        canAct: false, action: 0, showScores: false, weapon: 0, weapons: [] as WeaponSlotView[],
+        canAct: false, carrier: false, siteNoBomb: false, action: 0, showScores: false, weapon: 0, weapons: [] as WeaponSlotView[],
         mag: WEAPONS[0].magSize, magSize: WEAPONS[0].magSize, reserve: 0, reload: 0, spread: 0, draw: 0, aim: 0,
         yaw: 0, spectating: null, spectateId: -1, overview: false
     };
@@ -533,20 +620,24 @@ async function start(): Promise<void> {
         const cmd: PendingCmd = {
             seq: seq++, forward: 0, right: 0, yaw: 0, jump: false, walk: false, crouch: false,
             pitch: Math.fround(input.pitch), fire: input.fire, use: input.use, reload: input.reload,
-            slot: 0, swap: false, aim: false,
-            viewTime: net.renderTime(), live: alive, armed: false
+            slot: 0, swap: false, aim: false, drop: false,
+            viewTime: net.renderTime(), live: alive, armed: false, acting: false
         };
         input.sample(cmd);
         input.sampleWeapons(cmd, loadout.slot, SLOT_COUNT);
+        cmd.drop = input.takeDrop();
         // Rooted during the freeze and while planting or defusing: the server applies the same rule,
-        // and zeroing the command here keeps replays of it consistent.
-        const acting = alive && cmd.use && canAct(net.team, match.phase, curr, mapData, match.bombPos);
-        if (alive && movementLocked(cmd.use, net.team, match.phase, curr, mapData, match.bombPos)) {
+        // and zeroing the command here keeps replays of it consistent. Only the carrier can plant, and a
+        // plant or defuse we predict has completed stops the rooting before the round message arrives.
+        const phase = phaseOverride ?? match.phase;
+        const acting = alive && cmd.use && canAct(net.team, phase, curr, mapData, match.bombPos, carry.carrier);
+        if (alive && movementLocked(cmd.use, net.team, phase, curr, mapData, match.bombPos, carry.carrier)) {
             cmd.forward = 0;
             cmd.right = 0;
             cmd.jump = false;
         }
-        cmd.armed = !acting && match.phase !== 'freeze';
+        cmd.armed = !acting && phase !== 'freeze';
+        cmd.acting = acting;
         pending.push(cmd);
         if (pending.length > 120) pending.shift(); // server silent for 2 s: stop hoarding
         kickPitchPrev = kickPitch;
@@ -596,6 +687,10 @@ async function start(): Promise<void> {
                     audio.knifeWindup(curr.pos, true);
                 }
             }
+            // The bomb and the plant or defuse count, as the server will step them for this command.
+            const b = stepObjective(cmd, net.team === 'ghosts');
+            if (b === CARRY_DROPPED) audio.bomb('drop', curr.pos, true);
+            else if (b === CARRY_PICKED) audio.bomb('pickup', curr.pos, true);
         }
         // The camera shows the recoil the next shot will carry, so the crosshair is honest. Taken
         // after any reconciliation, so it always follows the corrected gun state.
@@ -644,7 +739,17 @@ async function start(): Promise<void> {
         local.health = health;
         local.alive = alive;
         local.respawnIn = alive || match.phase !== 'warmup' ? 0 : Math.max(0, (respawnAt - net.serverTime()) / 1000);
-        local.canAct = alive && canAct(net.team, match.phase, curr, mapData, match.bombPos);
+        const ghostHere = net.team === 'ghosts';
+        if (!ghostHere) carrierId = 0; // a side swap: defenders are never told who carries it
+        const shownCarry = alive && ghostHere && carry.carrier;
+        const phaseNow = phaseOverride ?? match.phase;
+        local.canAct = alive && canAct(net.team, phaseNow, curr, mapData, match.bombPos, carry.carrier);
+        local.carrier = shownCarry;
+        local.siteNoBomb = alive && ghostHere && !carry.carrier && phaseNow === 'live' && curr.onGround && insideSite(curr.pos, mapData);
+        // Ghosts see our own predicted drop or pickup at once; defenders only what the server showed them.
+        match.droppedBomb = ghostHere ? droppedPred : serverDropped;
+        // Our own pickup shows straight away; the server's word follows in a moment.
+        match.carrierId = !ghostHere ? 0 : shownCarry ? net.id : carrierId === net.id && !carry.carrier ? 0 : carrierId;
         local.action = action;
         local.showScores = input.scores;
         match.timeLeft = phaseEndsAt > 0 ? Math.max(0, (phaseEndsAt - net.serverTime()) / 1000) : 0;
@@ -695,7 +800,7 @@ async function start(): Promise<void> {
         radarSubject.pos[0] = subject[0]; radarSubject.pos[1] = subject[1]; radarSubject.pos[2] = subject[2];
         radarSubject.yaw = local.yaw;
         radarSubject.team = net.team;
-        radar.update(dt, radarSubject, remotes, match.phase === 'planted' ? match.bombPos : null);
+        radar.update(dt, radarSubject, remotes, match.phase === 'planted' ? match.bombPos : null, match.droppedBomb);
         ui.tick(net.serverTime());
         listener.team = net.team;
         listener.alive = alive;
@@ -729,7 +834,9 @@ async function start(): Promise<void> {
                 fps, resScale, alive, health, vis, pending: pending.length, error: Math.hypot(...errorOffset),
                 loadout: structuredClone(loadout), gun: heldGun(loadout) ? { ...heldGun(loadout)! } : null,
                 held: slotLabel(loadout.slot), knifeSlot: SLOT_KNIFE, gunMismatches,
-                knife: { ...knife }, knifeMismatches
+                knife: { ...knife }, knifeMismatches,
+                carry: { ...carry }, carrierId, dropped: droppedPred ? [...droppedPred] : null,
+                serverDropped: serverDropped ? [...serverDropped] : null, actionTicks, bombMismatches
             })
         }
     });

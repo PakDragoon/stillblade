@@ -17,6 +17,7 @@ import {
     BREATH_RANGE, EYE_HEIGHT, GHOST_MAX_VIS, GUNSHOT_RANGE, GUNSHOT_RANGE_SUPPRESSED, KNIFE_SOUND_RANGE, RELOAD_SOUND_RANGE,
     STEP_RANGE, TICK_RATE
 } from '@shared/constants';
+import { BOMB_SOUND_RANGE } from '@shared/bomb';
 import { rayWorld } from '@shared/raycast';
 import { DEFENDER_KNIFE, SLOT_KNIFE, WEAPONS, type WeaponId } from '@shared/weapons';
 import type { Box, Vec3 } from '@shared/types';
@@ -539,6 +540,27 @@ const synthDry: Synth = (v, t) => {
     env(tick.gain, t, 0.001, 0.25, 0.018);
 };
 
+/** The bomb dropped onto the floor: a dull case thud and a small rattle of its straps. */
+const synthBombDrop: Synth = (v, t) => {
+    const thud = v.gain(v.input);
+    const o = v.osc('sine', 120, t, 0.16, thud);
+    o.frequency.exponentialRampToValueAtTime(60, t + 0.12);
+    env(thud.gain, t, 0.002, 0.7, 0.12);
+    const body = v.gain(v.input);
+    v.noise(v.bank.brown, t, 0.12, v.filter('bandpass', 420, 1.4, body));
+    env(body.gain, t, 0.002, 0.6, 0.09);
+    metalClick(v, t + 0.05, 2600, 0.25);
+};
+
+/** The bomb picked up: two quick strap and buckle clicks over a short cloth scuff. */
+const synthBombPickup: Synth = (v, t) => {
+    const scuff = v.gain(v.input);
+    v.noise(v.bank.pink, t, 0.14, v.filter('bandpass', 1400, 1.2, scuff));
+    env(scuff.gain, t, 0.01, 0.3, 0.1);
+    metalClick(v, t + 0.04, 3400, 0.35);
+    metalClick(v, t + 0.11, 3900, 0.3);
+};
+
 /** Hurt: a short, felt-more-than-heard low thump. */
 const synthHurt: Synth = (v, t) => {
     const thump = v.gain(v.input);
@@ -818,6 +840,8 @@ const LOUD_GUN_CFG: ShotCfg = { range: GUNSHOT_RANGE, ref: 4, hrtf: false, occLi
 const IMPACT_CFG: ShotCfg = { range: IMPACT_RANGE, ref: 1, hrtf: false, occLift: 0 };
 const KNIFE_CFG: ShotCfg = { range: KNIFE_SOUND_RANGE, ref: 1, hrtf: true, occLift: 0 };
 const BOMB_CFG: ShotCfg = { range: BOMB_RANGE, ref: 2, hrtf: true, occLift: 0 };
+/** Dropping and picking up the bomb: quiet, heard within BOMB_SOUND_RANGE like a soft footstep. */
+const BOMB_HANDLE_CFG: ShotCfg = { range: BOMB_SOUND_RANGE, ref: 1, hrtf: true, occLift: 0.3 };
 /** Reload: emitted from about hand height (RELOAD_LIFT above the feet); HRTF so it can be placed. */
 const RELOAD_LIFT = 1.0;
 const RELOAD_CFG: ShotCfg = { range: RELOAD_SOUND_RANGE, ref: 1, hrtf: true, occLift: 0 };
@@ -1269,6 +1293,10 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
 
         hurt(): void {
             oneShot(null, STEP_CFG, 0.9, synthHurt, 0, false);
+        },
+
+        bomb(kind: 'drop' | 'pickup', pos: Vec3, isLocal: boolean): void {
+            oneShot(isLocal ? null : pos, BOMB_HANDLE_CFG, isLocal ? 0.5 : 1, kind === 'drop' ? synthBombDrop : synthBombPickup, 0, false);
         },
 
         cue(kind: CueKind): void {

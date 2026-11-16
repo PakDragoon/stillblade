@@ -146,7 +146,7 @@ describe('shipped maps', () => {
                         seqs.set(pid, seq + 1);
                         game.handleCmd(pid, {
                             seq, forward: 0, right: 0, yaw: 0, pitch: 0, jump: false, walk: false, crouch: false,
-                            fire: false, reload: false, use: false, slot: 0, swap: false, aim: false, viewTime: game.now, ...cmd(pid)
+                            fire: false, reload: false, use: false, slot: 0, swap: false, aim: false, drop: false, viewTime: game.now, ...cmd(pid)
                         });
                     }
                 };

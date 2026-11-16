@@ -46,7 +46,7 @@ class Client {
     cmd(over: Partial<NetCmd> = {}): void {
         this.game.handleCmd(this.id, {
             seq: this.seq++, forward: 0, right: 0, yaw: this.yaw, pitch: 0, jump: false, walk: false, crouch: false,
-            fire: false, use: false, reload: false, slot: 0, swap: false, aim: false, viewTime: this.game.now, ...over
+            fire: false, use: false, reload: false, slot: 0, swap: false, aim: false, drop: false, viewTime: this.game.now, ...over
         });
     }
     last<T extends ServerMsg['type']>(type: T): Extract<ServerMsg, { type: T }> {
@@ -672,7 +672,7 @@ describe('rounds and the bomb', () => {
         run(PLANT_TICKS - 20, c => (c === ghost ? { use: true, forward: 1 } : {}));
         expect(G.state.pos[2]).toBeCloseTo(10, 5); // cannot walk while planting
         expect(G.vis).toBeGreaterThan(0.5);
-        expect(ghost.last('snap').me.action).toBeGreaterThan(0.8);
+        expect(ghost.last('snap').me.actionTicks).toBeGreaterThan(0.8 * PLANT_TICKS);
         run(5); // let go: progress is lost
         run(PLANT_TICKS - 20, c => (c === ghost ? { use: true } : {}));
         expect(game.phase).toBe('live');

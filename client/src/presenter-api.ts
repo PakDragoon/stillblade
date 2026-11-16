@@ -53,8 +53,18 @@ export interface LocalView {
     firing: boolean;
     /** The local player's own visibility, same scale as RemoteView.vis. Only meaningful for ghosts. */
     vis: number;
-    /** True when holding the use key (E) would plant (ghosts) or defuse (defenders) right now. */
+    /**
+     * True when holding the use key (E) would plant (ghosts) or defuse (defenders) right now. For ghosts
+     * only the bomb carrier can plant, so this is never true for a ghost without the bomb.
+     */
     canAct: boolean;
+    /** A living ghost carrying the bomb (show "You have the bomb"). Always false for defenders. */
+    carrier: boolean;
+    /**
+     * A living ghost standing where the carrier could plant (in a site, on the ground, live round) without
+     * the bomb: show "Only the bomb carrier can plant" instead of the plant prompt.
+     */
+    siteNoBomb: boolean;
     /** Plant or defuse progress 0..1; 0 when not doing either. */
     action: number;
     /** True while the scoreboard key (Tab) is held. */
@@ -118,6 +128,17 @@ export interface MatchView {
     scoreDefenders: number;
     /** World position of the planted bomb (on the floor), or null. Stays set through `over` if it was planted. */
     bombPos: Vec3 | null;
+    /**
+     * World position (on the floor) of a dropped bomb the local player knows about, or null: ghosts always
+     * know where it lies; defenders only while it is in their line of sight. Never set together with a
+     * planted `bombPos`. Drawn with the same model as the planted bomb, unlit.
+     */
+    droppedBomb: Vec3 | null;
+    /**
+     * Player id of the ghost carrying the bomb, for the scoreboard mark and the match bar; 0 when nobody
+     * carries it or the local player is a defender (defenders are never told).
+     */
+    carrierId: number;
     /** Who won the round; only during `over`. */
     winner: Team | null;
     reason: RoundReason | null;
@@ -169,6 +190,11 @@ export interface Presenter {
     died(killerName: string, kind: KillKind, zone: HitZone | null, distance: number, weapon?: string): void;
     /** Player crosshair choice (settings). */
     setCrosshair(c: CrosshairConfig): void;
+    /**
+     * A short line about the bomb for a ghost ("Ana has the bomb", "Bomb dropped", "Picked up by Ana"),
+     * shown under the crosshair area for a few seconds. A newer one replaces it.
+     */
+    bombNotice(text: string): void;
     /** A kill anywhere in the room. `zone` as in `died`. */
     killFeed(killerId: number, victimId: number, kind: KillKind, zone: HitZone | null, weapon?: string): void;
 }

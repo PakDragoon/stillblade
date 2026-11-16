@@ -36,7 +36,7 @@ class Client {
     cmd(over: Partial<NetCmd> = {}): void {
         this.game.handleCmd(this.id, {
             seq: this.seq++, forward: 0, right: 0, yaw: this.yaw, pitch: 0, jump: false, walk: false, crouch: false,
-            fire: false, use: false, reload: false, slot: 0, swap: false, aim: false, viewTime: this.game.now, ...over
+            fire: false, use: false, reload: false, slot: 0, swap: false, aim: false, drop: false, viewTime: this.game.now, ...over
         });
     }
     all<T extends ServerMsg['type']>(type: T): Extract<ServerMsg, { type: T }>[] {
