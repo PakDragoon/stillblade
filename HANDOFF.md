@@ -1,6 +1,6 @@
 # Stillblade — handoff
 
-Last rewritten 2026-11-15 on `main` (game code as of commit `51aa489`; later commits are documents and the Cloudflare config) (pushed to github.com/PakDragoon/stillblade). **Updated 2026-11-16 on branch `claude/combat-core-c154af` (package A, combat core: defender knife, body-part damage, suppressor room option, protocol 9), built and tested there but not yet reviewed or merged to `main`.** Until it merges, `main` is still protocol 8 without these features; everything below describes the branch.
+Last rewritten 2026-11-15 on `main` (game code as of commit `51aa489`; later commits are documents and the Cloudflare config) (pushed to github.com/PakDragoon/stillblade). **Updated 2026-11-16 on branch `wave-1`: wave 1 (package A, combat core, protocol 9; package B, client utilities, protocol 10) is built, reviewed and combined there, not yet merged to `main`.** Until it merges, `main` is still protocol 8 without these features; everything below describes `wave-1`.
 
 **If you are a new session:** this file tells you what exists, what has and has not been verified, the rules that must not be broken, and how the owner wants work done. `ROADMAP.md` tells you what to build next and what is already decided. Read both before changing anything. `DEPLOY.md` covers hosting. You need nothing else: no memory files or earlier conversations are assumed.
 
