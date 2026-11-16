@@ -34,6 +34,9 @@
 #ui button[disabled] { opacity: .4; cursor: default; }
 #ui input[type=text], #ui select { font: 600 16px var(--face); padding: 10px 12px; border: 1px solid var(--line); background: #10151b; color: var(--bone); width: 100%; }
 #ui label.f { display: grid; gap: 6px; font-size: 13px; color: var(--dim); }
+#ui label.opt { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 14px; color: var(--bone); cursor: pointer; }
+#ui label.opt input { width: 18px; height: 18px; margin: 0; accent-color: var(--go); }
+#ui label.opt small { flex-basis: 100%; padding-left: 28px; font-size: 12px; }
 #ui .row { display: flex; gap: 10px; align-items: center; }
 #ui .stack { display: grid; gap: 12px; }
 #ui .sp { flex: 1; }
@@ -66,6 +69,9 @@
 #lobby-screen .card { width: min(760px, calc(100vw - 32px)); }
 #lobby-screen .head { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: baseline; margin-bottom: 14px; }
 #lobby-screen .code { font: 800 28px var(--face); letter-spacing: .12em; }
+#lobby-screen .head .opt { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim);
+    border: 1px solid rgba(255,255,255,.18); padding: 2px 8px; }
+#lobby-screen .head .opt.on { color: var(--bone); border-color: var(--go); }
 #lobby-screen .teams { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 14px 0; }
 #lobby-screen .team { border-top: 3px solid currentColor; background: rgba(255,255,255,.03); padding: 10px 12px 12px; min-height: 130px; }
 #lobby-screen .team.ghosts { color: var(--ghost); } #lobby-screen .team.defenders { color: var(--def); }

@@ -1,7 +1,7 @@
 import * as pc from 'playcanvas';
-import { WEAPONS } from '@shared/weapons';
+import { SLOT_COUNT, SLOT_KNIFE, WEAPONS } from '@shared/weapons';
 import type { RemoteView } from './presenter-api';
-import { instantiateWeapon, WEAPON_MESH, type WeaponModel } from './weapons';
+import { instantiateWeapon, WEAPON_MESH, type WeaponInstance, type WeaponModel } from './weapons';
 
 /**
  * Animated remote-player characters.
@@ -26,9 +26,12 @@ import { instantiateWeapon, WEAPON_MESH, type WeaponModel } from './weapons';
  *   - Ally ghost: the same shader, steady violet, fixed opacity.
  *
  * Weapons (weapons.ts) hang from the "socket_gun" / "socket_knife" nodes on the right wrist bone:
- *   - Defenders carry every weapon in the table (shared/weapons.ts; same vertex-colour material as the body),
+ *   - Defenders carry every gun in the table (shared/weapons.ts; same vertex-colour material as the body),
  *     all in socket_gun with only the one in hand (RemoteView.weapon) enabled, and hold it with the "aim" pose
  *     on the upper layer at full weight; a remote shot plays "shoot" (a recoil that ends on the aim pose).
+ *     With the knife (slot SLOT_KNIFE) they hold it in socket_knife with the body's material, no gun pose, and
+ *     play "slash" when they swing (`swing`, driven by the windup sound the server sends).
+ *     Guns are drawn bare or suppressed by the room option (`setSuppressed`, weapons.ts): one mesh either way.
  *     After the animation is applied, the spine is bent by the aim pitch; the same bones also dip the gun to a
  *     low hold while RemoteView.reloading, dip it briefly while switching, and bring the head down to the gun
  *     while aiming (procedural, no clips).
@@ -283,13 +286,16 @@ export class Character {
     private armed = false;
     private tint: Float32Array | null = null;
     private fixedVis = 1;
-    /** One instance per weapon slot (only the held one enabled), and their muzzles. */
+    /** One instance per gun (only the held one enabled), each with its muzzle for the current look. */
     private readonly guns: pc.Entity[] = [];
-    private readonly gunMuzzles: (pc.GraphNode | null)[] = [];
-    /** Slot in hand. */
+    private readonly gunInstances: WeaponInstance[] = [];
+    /** Slot in hand (a gun, or SLOT_KNIFE). */
     private slot = 0;
+    /** The ghost's knife (ghost material) and the defender's (defender material), both in socket_knife. */
     private knife: pc.Entity | null = null;
     private knifeMi: pc.MeshInstance | null = null;
+    private defenderKnife: pc.Entity | null = null;
+    private suppressed = false;
     private readonly pitchBones: pc.GraphNode[] = [];
     private readonly pitchShare: number[] = [];
     private readonly reloadDip: number[] = [];
@@ -360,9 +366,10 @@ export class Character {
             // Every gun's origin is its grip, so all share the socket; still one draw call, as only one is enabled.
             for (let i = 0; i < WEAPONS.length; i++) {
                 const g = instantiateWeapon(w, WEAPON_MESH[WEAPONS[i].id], this.model.defenderMat);
+                g.setSuppressed(this.suppressed);
                 gs.addChild(g.entity);
                 this.guns.push(g.entity);
-                this.gunMuzzles.push(g.muzzle);
+                this.gunInstances.push(g);
             }
         }
         if (ks) {
@@ -370,8 +377,22 @@ export class Character {
             ks.addChild(k.entity);
             this.knife = k.entity;
             this.knifeMi = k.meshInstance;
+            const dk = instantiateWeapon(w, 'knife', this.model.defenderMat);
+            ks.addChild(dk.entity);
+            this.defenderKnife = dk.entity;
         }
         this.applyWeaponLook();
+    }
+
+    /** The room's suppressed-weapons option: suppressors on both guns, or bare muzzles. */
+    setSuppressed(on: boolean): void {
+        this.suppressed = on;
+        for (const g of this.gunInstances) g.setSuppressed(on);
+    }
+
+    /** A defender holding the knife started a swing: the slash on the upper body. */
+    swing(): void {
+        if (this.armed && this.alive && this.slot === SLOT_KNIFE) this.playUpper(U_SLASH);
     }
 
     setLook(look: CharLook, tint: Float32Array | null, fixedVis: number): void {
@@ -394,6 +415,7 @@ export class Character {
     private applyWeaponLook(): void {
         const ghost = this.look === CharLook.EnemyGhost || this.look === CharLook.AllyGhost;
         for (let i = 0; i < this.guns.length; i++) this.guns[i].enabled = this.look === CharLook.Defender && i === this.slot;
+        if (this.defenderKnife) this.defenderKnife.enabled = this.look === CharLook.Defender && this.slot === SLOT_KNIFE;
         if (this.knife && this.knifeMi) {
             this.knife.enabled = ghost;
             // Same material and parameters as the body: the knife is never more visible than its owner.
@@ -410,11 +432,11 @@ export class Character {
         this.holdPose();
     }
 
-    /** Upper layer at rest: the gun hold for defenders, nothing for ghosts. */
+    /** Upper layer at rest: the gun hold for defenders with a gun, nothing for ghosts or a defender's knife. */
     private holdPose(): void {
         if (!this.upper) return;
         this.upperT = -1;
-        if (this.armed && this.alive) {
+        if (this.armed && this.alive && this.slot !== SLOT_KNIFE) {
             this.upper.play(U_AIM);
             this.upper.weight = 1;
         } else {
@@ -424,14 +446,14 @@ export class Character {
 
     /** A remote shot by this player: recoil on the upper body. False if it cannot be shown. */
     shoot(): boolean {
-        if (!this.armed || !this.alive || !this.upper) return false;
+        if (!this.armed || !this.alive || !this.upper || this.slot === SLOT_KNIFE) return false;
         this.upper.play(U_SHOOT);
         return true;
     }
 
     /** World position of the held gun's muzzle, or null without a gun in hand. Valid until the next change. */
     muzzle(): pc.Vec3 | null {
-        const m = this.armed ? this.gunMuzzles[this.slot] : null;
+        const m = this.armed ? this.gunInstances[this.slot]?.muzzle ?? null : null;
         return m ? m.getPosition() : null;
     }
 
@@ -579,10 +601,12 @@ export class Character {
             }
         }
         if (this.armed) {
-            const slot = v.weapon >= 0 && v.weapon < this.guns.length ? v.weapon : 0;
+            const slot = v.weapon >= 0 && v.weapon < SLOT_COUNT ? v.weapon : 0;
             if (slot !== this.slot) {
+                const knifeChange = (slot === SLOT_KNIFE) !== (this.slot === SLOT_KNIFE);
                 this.slot = slot;
                 this.applyWeaponLook();
+                if (knifeChange) this.holdPose(); // gun hold on or off
             }
             this.reloadW = blendTo(this.reloadW, v.reloading, dt / RELOAD_BLEND);
             this.switchW = blendTo(this.switchW, v.switching, dt / SWITCH_BLEND);

@@ -46,17 +46,21 @@ export interface AudioEngine {
     /** A footstep. `loud` is 0..1 (1 running, about 0.3 walking, about 0.18 crouched). */
     step(pos: Vec3, loud: number, isLocal: boolean): void;
     /**
-     * A silenced gunshot at the shooter's position from the weapon in slot `weapon` (index into WEAPONS,
-     * shared/weapons.ts: each weapon has its own sound).
+     * A gunshot at the shooter's position from the gun in slot `weapon` (index into WEAPONS, shared/weapons.ts:
+     * each gun has its own sound). `suppressed` (the room option): the quiet suppressed shot, fading to silence
+     * at GUNSHOT_RANGE_SUPPRESSED; otherwise a loud, longer report fading out at GUNSHOT_RANGE (shared/constants.ts).
      */
-    gunshot(pos: Vec3, isLocal: boolean, weapon: number): void;
+    gunshot(pos: Vec3, isLocal: boolean, weapon: number, suppressed: boolean): void;
     /**
      * A defender started a reload at `pos` of the weapon in slot `weapon`: one call covers the whole
      * sequence, scheduled from the moment of the call and fitted to that weapon's reload time (rifle
      * about 2.2 s: magazine out, magazine in, bolt; pistol about 1.4 s: magazine out, magazine in, slide).
      */
     reload(pos: Vec3, isLocal: boolean, weapon: number): void;
-    /** The local player switched to the weapon in slot `weapon` (non-positional; it is drawn over 0.25 to 0.4 s). */
+    /**
+     * The local player switched to the weapon in slot `weapon`: a gun, or SLOT_KNIFE for the knife (non-positional;
+     * it is drawn over 0.25 to 0.4 s).
+     */
     weaponSwitch(weapon: number): void;
     /** The local player pulled the trigger on an empty gun with no spare rounds (non-positional click). */
     dryFire(): void;

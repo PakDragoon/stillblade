@@ -22,7 +22,6 @@ export const MATCH_OVER_MS = 20_000;
 export const IDLE_ROUNDS = 2;
 /** A match that lost a whole team is held this long, waiting for players to return, before the room resets. */
 export const GRACE_MS = 60_000;
-export const IDLE_MS = 90_000;
 /** Hold times, counted in the player's own commands (60 per second). */
 export const PLANT_TICKS = 180;
 export const DEFUSE_TICKS = 300;

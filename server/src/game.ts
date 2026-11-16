@@ -1,17 +1,18 @@
 import {
-    BREATH_RANGE, EYE_HEIGHT, EYE_HEIGHT_CROUCHED, HEAD_ZONE,
+    BREATH_RANGE, EYE_HEIGHT, EYE_HEIGHT_CROUCHED, GUNSHOT_RANGE, GUNSHOT_RANGE_SUPPRESSED,
     HULL_HALF_WIDTH, HULL_HEIGHT, HULL_HEIGHT_CROUCHED, KNIFE_BACKSTAB_DAMAGE, KNIFE_CONE_COS,
     KNIFE_DAMAGE, KNIFE_RANGE, KNIFE_SOUND_RANGE, MAX_HEALTH,
     MAX_REWIND_MS, RELOAD_SOUND_RANGE, RESPAWN_MS, SHOT_RANGE, STEP_DISTANCE, STEP_LOUD_CROUCH, STEP_LOUD_RUN, STEP_LOUD_WALK,
     STEP_RANGE, TICK_DT, TICK_RATE, VIS_HURT_SPIKE, VIS_SWING_SPIKE
 } from '../../shared/constants';
 import {
-    GUN_RELOAD, aimFraction, cancelReloads, createLoadout, heldGun, heldWeapon, resetLoadout, shotDirectionFor, stepLoadout
+    GUN_RELOAD, MELEE_SLASH, MELEE_SWING, aimFraction, cancelReloads, createLoadout, heldGun, resetLoadout, shotDirectionFor,
+    stepLoadout
 } from '../../shared/gun';
 import { KNIFE_SLASH, KNIFE_SWING, createKnifeState, resetKnife, stepKnife } from '../../shared/knife';
 import { createPlayerState, horizontalSpeed, stepPlayer } from '../../shared/movement';
 import {
-    PROTOCOL_VERSION, SNAPSHOT_RATE, type ClientMsg, type DamageKind, type MatchStats, type NetCmd, type PlayerSnap,
+    PROTOCOL_VERSION, SNAPSHOT_RATE, type ClientMsg, type DamageKind, type KillMsg, type MatchStats, type NetCmd, type PlayerSnap,
     type RosterEntry, type RoundMsg, type ServerMsg, type ShotEvent, type SlashEvent, type SoundEvent, type SummaryMsg,
     type Team
 } from '../../shared/protocol';
@@ -22,8 +23,11 @@ import {
 import { cleanChat } from '../../shared/chat';
 import { ASSIST_MS, emptyStats, pickMvp } from '../../shared/stats';
 import { rayBox, rayWorld, viewDir } from '../../shared/raycast';
+import { DEFAULT_ROOM_OPTIONS, type RoomOptions } from '../../shared/room-options';
 import type { MapData, PlayerState, Vec3 } from '../../shared/types';
 import { ghostVisTarget, stepVis } from '../../shared/visibility';
+import { DEFENDER_KNIFE, WEAPONS } from '../../shared/weapons';
+import { hitZone, zoneDamage, type HitZone } from '../../shared/zones';
 
 export interface Connection {
     send(msg: ServerMsg): void;
@@ -53,7 +57,7 @@ export class Player {
     credits = MAX_CMD_CREDITS;
     /** The defender's weapons (shared/gun.ts, shared/weapons.ts); reset at every spawn. */
     readonly loadout = createLoadout();
-    /** Ghost knife timing, counted in commands processed for this player (shared/knife.ts). */
+    /** Ghost knife timing, counted in commands processed for this player (shared/knife.ts). Defenders use `loadout.knife`. */
     readonly knife = createKnifeState();
     /** 0..1 opacity: always 1 for defenders. */
     vis: number;
@@ -198,10 +202,14 @@ export class Game {
     private readonly hmax: Vec3 = [0, 0, 0];
     private readonly target: Vec3 = [0, 0, 0];
 
+    /** The creator's choices (shared/room-options.ts), fixed for the life of the room and sent in `welcome`. */
+    readonly options: Readonly<RoomOptions>;
+
     /** `rounds: false` keeps the match in warmup (free roam with respawns), for tests of the core mechanics. */
-    constructor(readonly map: MapData, opts: { rounds?: boolean; lobby?: boolean } = {}) {
+    constructor(readonly map: MapData, opts: { rounds?: boolean; lobby?: boolean; options?: RoomOptions } = {}) {
         this.rounds = opts.rounds ?? true;
         this.lobby = opts.lobby ?? false;
+        this.options = { ...DEFAULT_ROOM_OPTIONS, ...opts.options };
     }
 
     private teamOf(group: 0 | 1): Team {
@@ -280,7 +288,7 @@ export class Game {
         this.players.set(id, player);
         conn.send({
             type: 'welcome', version: PROTOCOL_VERSION, id, team, map: this.map.name,
-            mapName: this.map.displayName ?? this.map.name, time: this.now
+            mapName: this.map.displayName ?? this.map.name, time: this.now, options: { ...this.options }
         });
         conn.send(this.roundMsg());
         if (this.summary && this.phase === 'over') conn.send(this.summary); // joined during the result screen
@@ -416,11 +424,11 @@ export class Game {
         return Math.atan2(-(to[0] - from[0]), -(to[2] - from[2]));
     }
 
-    /** Stats for one landed hit, and the hit messages to both sides. */
-    private recordHit(victim: Player, attacker: Player, dealt: number, kind: DamageKind, weapon?: number): void {
+    /** Stats for one landed hit, and the hit messages to both sides. `zone` only for shots. */
+    private recordHit(victim: Player, attacker: Player, dealt: number, kind: DamageKind, weapon?: number, zone?: HitZone): void {
         if (!this.held) { // warmup play while a match is held must not change its statistics
             attacker.stats.damage += dealt;
-            if (kind === 'headshot') attacker.stats.headshots++;
+            if (zone === 'head') attacker.stats.headshots++;
             else if (kind === 'backstab') attacker.stats.backstabs++;
         }
         victim.hurtBy.set(attacker.id, this.now);
@@ -429,17 +437,19 @@ export class Game {
         // who and how far (a knife kill is within reach, so already inside breathing range).
         const dmg: ServerMsg = { type: 'dmg', dir: this.bearing(victim.state.pos, attacker.state.pos), amount: dealt, kind };
         if (weapon !== undefined) dmg.weapon = weapon;
+        if (zone !== undefined) dmg.zone = zone;
         if (killed) {
             dmg.killed = true;
             dmg.by = attacker.id;
             dmg.dist = Math.round(dist(victim.state.pos, attacker.state.pos) * 10) / 10;
         }
         victim.conn.send(dmg);
-        attacker.conn.send({ type: 'hitconfirm', kind: killed ? 'kill' : kind === 'headshot' ? 'head' : 'body' });
+        const confirm: ServerMsg = { type: 'hitconfirm', kind, kill: killed };
+        if (zone !== undefined) confirm.zone = zone;
+        attacker.conn.send(confirm);
     }
 
-    private recordKill(victim: Player, attacker: Player, kind: DamageKind): void {
-        void kind;
+    private recordKill(victim: Player, attacker: Player): void {
         if (this.held) return;
         victim.stats.deaths++;
         attacker.stats.kills++;
@@ -525,6 +535,9 @@ export class Game {
             const r = stepLoadout(p.loadout, cmd, armed);
             if (r >= 0) this.fire(p, cmd, r);
             else if (r === GUN_RELOAD) this.emitSound(p, 'reload', 1, RELOAD_SOUND_RANGE, p.loadout.slot);
+            // The defender knife: the same windup warning and the same landing as a ghost's swing.
+            else if (r === MELEE_SWING) this.emitSound(p, 'windup', 1, KNIFE_SOUND_RANGE);
+            else if (r === MELEE_SLASH) this.slash(p, cmd);
         } else {
             const k = stepKnife(p.knife, cmd.fire, armed);
             if (k === KNIFE_SLASH) this.slash(p, cmd);
@@ -562,11 +575,11 @@ export class Game {
         }
     }
 
-    private damage(victim: Player, amount: number, attacker: Player, kind: DamageKind, weapon?: number): boolean {
+    private damage(victim: Player, amount: number, attacker: Player, kind: DamageKind, weapon?: number, zone?: HitZone): boolean {
         const dealt = Math.min(amount, victim.health);
         victim.health = Math.max(0, victim.health - amount);
         if (victim.team === 'ghosts') victim.vis = Math.max(victim.vis, VIS_HURT_SPIKE);
-        this.recordHit(victim, attacker, dealt, kind, weapon);
+        this.recordHit(victim, attacker, dealt, kind, weapon, zone);
         if (victim.health > 0) return false;
         victim.alive = false;
         // Only warmup has respawns; in a round the dead wait for the next one.
@@ -574,7 +587,12 @@ export class Game {
         resetKnife(victim.knife);
         cancelReloads(victim.loadout); // death cancels a reload
         victim.actionTicks = 0;
-        this.recordKill(victim, attacker, kind);
+        this.recordKill(victim, attacker);
+        // The kill feed: who and how, never where, so everyone may have it.
+        const kill: KillMsg = { type: 'kill', killer: attacker.id, victim: victim.id, kind };
+        if (weapon !== undefined) kill.weapon = weapon;
+        if (zone !== undefined) kill.zone = zone;
+        this.broadcast(kill);
         this.sendRoster();
         return true;
     }
@@ -597,7 +615,7 @@ export class Game {
 
     /** `shot` is the recoil pattern index from `stepLoadout`. */
     private fire(shooter: Player, cmd: NetCmd, shot: number): void {
-        const { eye, dir, hmin, hmax } = this;
+        const { eye, dir, feet, hmin, hmax, target } = this;
         this.aimFrom(shooter, cmd);
         // The view plus recoil plus spread, exactly as the client predicted it.
         shotDirectionFor(shooter.loadout, shooter.state, cmd.yaw, cmd.pitch, shot, shooter.id, dir);
@@ -605,7 +623,7 @@ export class Game {
         const viewTime = clamp(cmd.viewTime, this.now - MAX_REWIND_MS, this.now);
         let range = rayWorld(this.map.boxes, eye, dir, SHOT_RANGE);
         let victim: Player | undefined;
-        let head = false;
+        let zone: HitZone = 'torso';
         for (const other of this.players.values()) {
             if (other === shooter || !other.alive || other.team === shooter.team) continue;
             this.rewoundHull(other, viewTime);
@@ -613,27 +631,52 @@ export class Game {
             if (t < range) {
                 range = t;
                 victim = other;
-                head = eye[1] + dir[1] * t >= hmax[1] - HEAD_ZONE;
+                // Where on the (rewound) body it landed: shared/zones.ts.
+                for (let k = 0; k < 3; k++) target[k] = eye[k] + dir[k] * t;
+                zone = hitZone(target, feet, hmax[1] - hmin[1], dir);
             }
         }
 
+        const slot = shooter.loadout.slot;
         const event: ShotEvent = {
-            type: 'shot', shooter: shooter.id, weapon: shooter.loadout.slot,
+            type: 'shot', shooter: shooter.id, weapon: slot,
             from: [eye[0], eye[1], eye[2]],
             to: [eye[0] + dir[0] * range, eye[1] + dir[1] * range, eye[2] + dir[2] * range]
         };
         if (victim) {
-            const def = heldWeapon(shooter.loadout);
-            const amount = head ? def.headDamage : def.bodyDamage;
+            const amount = zoneDamage(WEAPONS[slot], zone);
             event.victim = victim.id;
-            event.head = head;
+            event.zone = zone;
             event.damage = amount;
-            if (this.damage(victim, amount, shooter, head ? 'headshot' : 'shot', shooter.loadout.slot)) event.killed = true;
+            if (this.damage(victim, amount, shooter, 'shot', slot, zone)) event.killed = true;
         }
-        this.broadcast(event);
+        this.sendShot(shooter, victim, event);
     }
 
-    /** Resolves a knife swing: the nearest enemy inside the reach and cone, not behind a wall. */
+    /**
+     * A gunshot is a sound: heard within GUNSHOT_RANGE (GUNSHOT_RANGE_SUPPRESSED in a suppressed
+     * room), like footsteps within theirs. Further away it is only seen, by players whose eye has a
+     * clear line to the shooter's eye, and sent flagged silent. Nobody else receives it. Only
+     * defenders shoot, and defenders are always known to everyone, so this reveals no position the
+     * recipient was not already sent (see the note on `victim` and `to` in HANDOFF.md).
+     */
+    private sendShot(shooter: Player, victim: Player | undefined, event: ShotEvent): void {
+        const range = this.options.suppressed ? GUNSHOT_RANGE_SUPPRESSED : GUNSHOT_RANGE;
+        const from = event.from;
+        let silent: ShotEvent | undefined;
+        for (const p of this.players.values()) {
+            if (p === shooter || p === victim || dist(p.state.pos, shooter.state.pos) <= range) p.conn.send(event);
+            else if (this.lineClear(p.state.pos[0], p.eyeY, p.state.pos[2], from[0], from[1], from[2])) {
+                p.conn.send(silent ??= { ...event, silent: true });
+            }
+        }
+    }
+
+    /**
+     * Resolves a knife swing, a ghost's or a defender's: the nearest enemy inside the reach and cone,
+     * not behind a wall, against the same lag-compensated positions shots use. Defenders' knives hit
+     * for less (DEFENDER_KNIFE); zones do not apply to the knife.
+     */
     private slash(attacker: Player, cmd: NetCmd): void {
         const { eye, dir, hmin, hmax, target } = this;
         this.aimFrom(attacker, cmd);
@@ -661,14 +704,23 @@ export class Game {
         if (victim) {
             // From behind: attacker and victim are facing roughly the same way.
             const backstab = Math.cos(cmd.yaw - victim.yaw) > 0.5;
-            const amount = backstab ? KNIFE_BACKSTAB_DAMAGE : KNIFE_DAMAGE;
+            const defender = attacker.team === 'defenders';
+            const amount = backstab
+                ? (defender ? DEFENDER_KNIFE.backstabDamage : KNIFE_BACKSTAB_DAMAGE)
+                : (defender ? DEFENDER_KNIFE.damage : KNIFE_DAMAGE);
             event.victim = victim.id;
             event.damage = amount;
             event.backstab = backstab;
             if (this.damage(victim, amount, attacker, backstab ? 'backstab' : 'knife')) event.killed = true;
         }
+        // Heard within knife range. Who was hit is told only to the two players involved and to those
+        // who already know where the victim is: a defender's slash must not point out a ghost to the
+        // other defenders nearby (a ghost's victim is a defender, whom everyone knows about anyway).
+        let bare: SlashEvent | undefined;
         for (const p of this.players.values()) {
-            if (p === attacker || p === victim || dist(p.state.pos, attacker.state.pos) <= KNIFE_SOUND_RANGE) p.conn.send(event);
+            if (p !== attacker && p !== victim && dist(p.state.pos, attacker.state.pos) > KNIFE_SOUND_RANGE) continue;
+            if (!victim || p === attacker || p === victim || this.knowsAbout(p, victim)) p.conn.send(event);
+            else p.conn.send(bare ??= { type: 'slash', attacker: event.attacker, pos: event.pos });
         }
     }
 
@@ -847,7 +899,7 @@ export class Game {
         const armed = p.alive && p.team === 'defenders';
         return {
             weapon: armed ? p.loadout.slot : 0,
-            reloading: armed && heldGun(p.loadout).reload > 0,
+            reloading: armed && (heldGun(p.loadout)?.reload ?? 0) > 0,
             switching: armed && p.loadout.draw > 0,
             aiming: armed && aimFraction(p.loadout) > 0.5
         };

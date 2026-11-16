@@ -1,4 +1,4 @@
-import { TICK_RATE } from './constants';
+import { KNIFE_COOLDOWN_TICKS, KNIFE_WINDUP_TICKS, TICK_RATE } from './constants';
 
 /**
  * Every defender weapon's numbers, in one table. The rules that use them live in `shared/gun.ts`;
@@ -6,7 +6,8 @@ import { TICK_RATE } from './constants';
  *
  * Timings are counted in the shooter's own processed commands (60 per second), like movement, so
  * client and server agree on them exactly. Every counter travels in one byte of the snapshot: keep
- * magazine, reserve, reload, draw, aim and fire-interval values at or below 255 (a test checks).
+ * magazine, reserve, reload, draw, aim and fire-interval values at or below 255 (a test checks), and
+ * the knife's draw, windup and cooldown too.
  */
 export interface WeaponDef {
     /** Stable name used by the presentation (models, sounds). */
@@ -24,8 +25,8 @@ export interface WeaponDef {
     readonly reloadTicks: number;
     /** Commands from selecting this weapon until it can fire (the switch). */
     readonly drawTicks: number;
+    /** Damage of a torso hit; other body parts scale it by `ZONE_MULTIPLIER` (shared/zones.ts). */
     readonly bodyDamage: number;
-    readonly headDamage: number;
     /** Spread cone half-angles (radians): standing still, crouched still, added at full run, in the air. */
     readonly spreadStill: number;
     readonly spreadCrouched: number;
@@ -54,7 +55,7 @@ const ticks = (ms: number): number => Math.round((ms / 1000) * TICK_RATE);
 const RIFLE: WeaponDef = {
     id: 'rifle', label: 'Rifle', auto: true,
     fireInterval: ticks(100), magSize: 30, reserve: 90, reloadTicks: ticks(2200), drawTicks: ticks(400),
-    bodyDamage: 34, headDamage: 100,
+    bodyDamage: 34,
     spreadStill: 0.004, spreadCrouched: 0.002, spreadMoving: 0.035, spreadAir: 0.06,
     recoilRecoverTicks: 9, recoilDecayTicks: 2,
     // Climbs for the first shots, then wanders right, left and right again: learnable.
@@ -73,7 +74,7 @@ const RIFLE: WeaponDef = {
 const PISTOL: WeaponDef = {
     id: 'pistol', label: 'Pistol', auto: false,
     fireInterval: ticks(150), magSize: 12, reserve: 36, reloadTicks: ticks(1400), drawTicks: ticks(250),
-    bodyDamage: 26, headDamage: 100,
+    bodyDamage: 26,
     spreadStill: 0.003, spreadCrouched: 0.0015, spreadMoving: 0.02, spreadAir: 0.05,
     // Recovery starts one command after the minimum interval and undoes a row every command:
     // measured taps stay accurate, spamming at the limit climbs.
@@ -85,8 +86,60 @@ const PISTOL: WeaponDef = {
     adsTicks: 8, adsZoom: 1.2, adsSpread: 0.6, adsRecoil: 0.85
 };
 
-/** Indexed by slot: slot 0 is key 1, slot 1 is key 2. Every defender carries all of them. */
+/**
+ * The guns, indexed by slot: slot 0 is key 1, slot 1 is key 2. Every defender carries all of them.
+ * Guns only: the knife (slot 3, `DEFENDER_KNIFE` below) has no magazine, recoil or aim, so it sits
+ * beside this table rather than in it. Code that walks the guns uses `GUN_COUNT`; code that walks
+ * every slot a defender can hold uses `SLOT_COUNT` and treats `SLOT_KNIFE` itself.
+ */
 export const WEAPONS: readonly WeaponDef[] = [RIFLE, PISTOL];
-export const WEAPON_COUNT = WEAPONS.length;
+export const GUN_COUNT = WEAPONS.length;
 export const SLOT_RIFLE = 0;
 export const SLOT_PISTOL = 1;
+
+/** The defender's knife: melee, the same timing rule as the ghosts' knife (shared/knife.ts), weaker. */
+export interface MeleeDef {
+    readonly id: 'knife';
+    readonly label: string;
+    /** Commands from selecting it until it can swing (the switch). */
+    readonly drawTicks: number;
+    /** Commands from the start of a swing until it lands, and from the start until the next may start. */
+    readonly windupTicks: number;
+    readonly cooldownTicks: number;
+    readonly damage: number;
+    readonly backstabDamage: number;
+}
+
+/** Slot 3 (key 3). Reach, cone and timing are the ghost knife's; only the damage is lower. */
+export const DEFENDER_KNIFE: MeleeDef = {
+    id: 'knife', label: 'Knife',
+    drawTicks: ticks(300),
+    // stepKnife (shared/knife.ts) counts these; they are listed here so the table states the whole weapon.
+    windupTicks: KNIFE_WINDUP_TICKS, cooldownTicks: KNIFE_COOLDOWN_TICKS,
+    damage: 35, backstabDamage: 70
+};
+
+/** Slot index of the defender knife: right after the guns. */
+export const SLOT_KNIFE = GUN_COUNT;
+/** Every slot a defender holds: the guns, then the knife. */
+export const SLOT_COUNT = GUN_COUNT + 1;
+
+export type SlotId = WeaponId | 'knife';
+
+/** Whether a slot is a gun (has an entry in WEAPONS). */
+export const isGunSlot = (slot: number): boolean => slot >= 0 && slot < GUN_COUNT;
+
+/** Presentation id of a slot (models, sounds); out-of-range slots read as the first gun. */
+export function slotId(slot: number): SlotId {
+    return slot === SLOT_KNIFE ? 'knife' : WEAPONS[isGunSlot(slot) ? slot : 0].id;
+}
+
+/** HUD and kill-feed name of a slot. */
+export function slotLabel(slot: number): string {
+    return slot === SLOT_KNIFE ? DEFENDER_KNIFE.label : WEAPONS[isGunSlot(slot) ? slot : 0].label;
+}
+
+/** Commands it takes to draw the weapon in a slot. */
+export function drawTicksOf(slot: number): number {
+    return slot === SLOT_KNIFE ? DEFENDER_KNIFE.drawTicks : WEAPONS[slot].drawTicks;
+}

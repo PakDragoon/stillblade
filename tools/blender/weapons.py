@@ -7,9 +7,12 @@ Stillblade weapon pipeline: CC0 source models -> client/public/models/weapons.gl
 Source: "Character Soldier" by Quaternius (CC0 1.0, poly.pizza model PpLF4rt4ah), already downloaded for the
 character work into tools/blender/source-art/characters/quaternius-soldier/CharacterSoldier.glb (see
 client/public/models/CREDITS.md). It carries a set of hand-held props; three are used:
-  - "SMG"     : compact SMG with an integral suppressor (1,006 triangles, 4 flat-colour materials): the rifle
+  - "SMG"     : compact SMG with an integral suppressor (1,006 triangles, 4 flat-colour materials): the rifle.
+                The suppressor is every face with the "Black" material (nine parts, nothing else uses it); it is
+                split off into its own node, and a short 12-sided barrel stub is added where it met the receiver
+                (inside the suppressor's collar, so it is hidden when the suppressor is on).
   - "Pistol"  : semi-automatic pistol (990 triangles, 3 flat-colour materials); it has no suppressor, so a
-                12-sided cylinder is added at the muzzle (defenders' guns are all silenced)
+                12-sided cylinder is generated at the muzzle as its own node
   - "Knife_1" : combat knife with a serrated spine (687 triangles, 4 flat-colour materials)
 
 What it does:
@@ -19,10 +22,16 @@ What it does:
      knife 0.30 m).
   3. Bakes the material colours into a vertex-colour attribute (a dark tactical palette), welds, decimates
      the knife to <= 400 triangles, removes UVs, and gives both meshes ONE shared vertex-colour material.
-  4. Adds empties "gun_muzzle" / "pistol_muzzle" (children of "gun" / "pistol") at the centre of each
-     suppressor's front face.
-  5. Exports a GLB with five nodes: gun (mesh), gun_muzzle (empty), pistol (mesh), pistol_muzzle (empty),
-     knife (mesh).
+  4. Adds, as children of "gun" / "pistol": the suppressor mesh "gun_suppressor" / "pistol_suppressor" (vertices
+     in the gun's own frame, identity local transform), the empty "gun_muzzle" / "pistol_muzzle" at the centre of
+     the suppressor's front face, and the empty "gun_muzzle_bare" / "pistol_muzzle_bare" at the centre of the bare
+     barrel's front face.
+  5. Exports a GLB with nine nodes: gun (mesh) with gun_suppressor (mesh), gun_muzzle and gun_muzzle_bare (empties);
+     pistol (mesh) with pistol_suppressor (mesh), pistol_muzzle and pistol_muzzle_bare (empties); knife (mesh).
+
+Suppressor option (rooms choose it; client/src/weapons.ts): the client draws a gun either bare (the gun mesh alone,
+tracers and flash from *_muzzle_bare) or suppressed (gun + its suppressor, merged into ONE mesh at load so a gun is
+still one draw call, tracers and flash from *_muzzle). Gun body plus suppressor is exactly the earlier single mesh.
 
 Axis convention (glTF / engine space, for both meshes), origin = centre of the hand's grip:
   -Z forward (gun: muzzle direction; knife: blade tip direction)
@@ -47,6 +56,7 @@ DEFAULT_OUT = os.path.join(ROOT, 'client', 'public', 'models', 'weapons.glb')
 GUN_LENGTH = 0.66
 PISTOL_LENGTH = 0.20
 PISTOL_SUPPRESSOR = (0.11, 0.015)            # length, radius (m)
+GUN_BARREL_STUB = (0.045, 0.0105)            # bare SMG barrel: length, radius (m)
 KNIFE_LENGTH = 0.30
 KNIFE_MAX_TRIS = 400
 
@@ -185,40 +195,66 @@ def front_face(obj):
     return (min(p.x for p in front) + max(p.x for p in front)) / 2, ymax, (lo + hi) / 2, hi - lo
 
 
-def add_muzzle(obj, name):
-    """Empty child of `obj` at the centre of its front face (where tracers and flashes start)."""
-    mx, ymax, mz, _ = front_face(obj)
-    e = bpy.data.objects.new(name, None)
-    bpy.context.scene.collection.objects.link(e)
-    e.parent = obj
-    e.location = (mx, ymax, mz)
-    return e
-
-
-def add_suppressor(obj, length, radius):
-    """
-    Joins a 12-sided cylinder onto the front of `obj` (shipped frame, Y forward), centred on the forward-most
-    face (the barrel tip), with a material named "Black" (baked like the others).
-    """
-    mx, ymax, bore_z, _ = front_face(obj)
-    r = radius
-    me = bpy.data.meshes.new('suppressor')
+def cylinder(name, centre_x, back_y, centre_z, length, radius, material):
+    """A 12-sided capped cylinder along +Y (shipped frame) from back_y to back_y + length, as its own object."""
+    me = bpy.data.meshes.new(name)
     bm = bmesh.new()
-    bmesh.ops.create_cone(bm, cap_ends=True, cap_tris=False, segments=12, radius1=r, radius2=r, depth=length)
-    # The cone is built along Z: turn it to +Y and push it out in front of the slide (slight overlap).
+    bmesh.ops.create_cone(bm, cap_ends=True, cap_tris=False, segments=12, radius1=radius, radius2=radius, depth=length)
+    # The cone is built along Z: turn it to +Y and move it into place.
     bmesh.ops.rotate(bm, verts=bm.verts, cent=(0, 0, 0), matrix=Matrix.Rotation(math.radians(-90), 3, 'X'))
-    bmesh.ops.translate(bm, verts=bm.verts, vec=(mx, ymax + length / 2 - 0.004, bore_z))
+    bmesh.ops.translate(bm, verts=bm.verts, vec=(centre_x, back_y + length / 2, centre_z))
     bm.to_mesh(me)
     bm.free()
-    me.materials.append(bpy.data.materials.new('Black'))
-    sup = bpy.data.objects.new('suppressor', me)
-    bpy.context.scene.collection.objects.link(sup)
+    me.materials.append(bpy.data.materials.new(material))
+    obj = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
+
+
+def join_into(obj, part):
     for o in bpy.context.scene.objects:
-        o.select_set(o in (obj, sup))
+        o.select_set(o in (obj, part))
     bpy.context.view_layer.objects.active = obj
-    with bpy.context.temp_override(active_object=obj, selected_editable_objects=[obj, sup]):
+    with bpy.context.temp_override(active_object=obj, selected_editable_objects=[obj, part]):
         bpy.ops.object.join()
-    log('pistol suppressor radius', round(r, 4), 'length', length, 'bore z', round(bore_z, 4))
+
+
+def make_suppressor(obj, length, radius):
+    """
+    A 12-sided cylinder in front of `obj` (shipped frame, Y forward), centred on the forward-most face (the barrel
+    tip), with a material named "Black" (baked like the others). Returned as its own object, not joined.
+    """
+    mx, ymax, bore_z, _ = front_face(obj)
+    sup = cylinder('suppressor', mx, ymax - 0.004, bore_z, length, radius, 'Black')
+    log('pistol suppressor radius', round(radius, 4), 'length', length, 'bore z', round(bore_z, 4))
+    return sup
+
+
+def split_off(obj, prefix, name):
+    """Moves every face whose material name starts with `prefix` from `obj` into a new object (same frame)."""
+    names = [m.name if m else '' for m in obj.data.materials]
+    part = bpy.data.objects.new(name, obj.data.copy())
+    bpy.context.scene.collection.objects.link(part)
+    for o, keep in ((obj, False), (part, True)):
+        bm = bmesh.new()
+        bm.from_mesh(o.data)
+        dead = [f for f in bm.faces if names[f.material_index].startswith(prefix) != keep]
+        bmesh.ops.delete(bm, geom=dead, context='FACES')
+        loose = [v for v in bm.verts if not v.link_faces]
+        bmesh.ops.delete(bm, geom=loose, context='VERTS')
+        bm.to_mesh(o.data)
+        bm.free()
+        o.data.update()
+    log('split', name, 'off', obj.name, ':', tris(part.data), 'tris moved,', tris(obj.data), 'left')
+    return part
+
+
+def add_empty(parent, name, loc):
+    e = bpy.data.objects.new(name, None)
+    bpy.context.scene.collection.objects.link(e)
+    e.parent = parent
+    e.location = loc
+    return e
 
 
 def main():
@@ -236,6 +272,8 @@ def main():
     for o in list(bpy.data.objects):
         if o not in (gun, pistol, knife):
             bpy.data.objects.remove(o)
+    # Muzzle points (shipped frame), found below: suppressed (suppressor front) and bare (barrel front).
+    muzzles = {}
 
     # --- Gun --------------------------------------------------------------------------------------
     pts = [v.co.copy() for v in gun.data.vertices]
@@ -254,6 +292,20 @@ def main():
     gun.data.update()
     log('gun: source length', round(length, 4), 'scale', round(s, 5), 'grip (source)', tuple(round(c, 3) for c in grip),
         'grip top/bottom/receiver', round(top, 3), round(bottom, 3), round(receiver_bottom, 3))
+    # The integral suppressor (the length above, and so the scale, still includes it: suppressed is unchanged).
+    gun_sup = split_off(gun, 'Black', 'gun_suppressor')
+    sp = [v.co for v in gun_sup.data.vertices]
+    bore_x = (min(p.x for p in sp) + max(p.x for p in sp)) / 2
+    bore_z = (min(p.z for p in sp) + max(p.z for p in sp)) / 2
+    mx, ymax, mz, _ = front_face(gun_sup)
+    muzzles['gun_muzzle'] = (mx, ymax, mz)
+    # Bare barrel: a short stub from the receiver's front on the suppressor's axis.
+    front = max(v.co.y for v in gun.data.vertices)
+    stub_len, stub_r = GUN_BARREL_STUB
+    join_into(gun, cylinder('barrel', bore_x, front - 0.004, bore_z, stub_len, stub_r, 'Grey2'))
+    muzzles['gun_muzzle_bare'] = (bore_x, front - 0.004 + stub_len, bore_z)
+    log('gun: receiver front', round(front, 4), 'bore', round(bore_x, 4), round(bore_z, 4),
+        'suppressor front', round(ymax, 4))
 
     # --- Pistol ---------------------------------------------------------------------------------
     me = pistol.data
@@ -300,7 +352,12 @@ def main():
     log('pistol: roll corrected by', round(math.degrees(roll), 2), 'deg; slide/foot x after', round(a.x - x0, 4), round(b.x - x0, 4))
     log('pistol: source length', round(length, 4), 'scale', round(s, 5), 'grip (source)',
         tuple(round(c, 3) for c in grip), 'grip top/bottom', round(top, 3), round(bottom, 3))
-    add_suppressor(pistol, *PISTOL_SUPPRESSOR)
+    mx, ymax, mz, _ = front_face(pistol)
+    muzzles['pistol_muzzle_bare'] = (mx, ymax, mz)
+    pistol_sup = make_suppressor(pistol, *PISTOL_SUPPRESSOR)
+    pistol_sup.name = 'pistol_suppressor'
+    mx, ymax, mz, _ = front_face(pistol_sup)
+    muzzles['pistol_muzzle'] = (mx, ymax, mz)
 
     # --- Knife ----------------------------------------------------------------------------------
     pts = [v.co.copy() for v in knife.data.vertices]
@@ -319,9 +376,11 @@ def main():
 
     # --- Colours, weld, budget, one material ---------------------------------------------------
     bake_colours(gun, GUN_PALETTE)
+    bake_colours(gun_sup, GUN_PALETTE)
     bake_colours(pistol, PISTOL_PALETTE)
+    bake_colours(pistol_sup, PISTOL_PALETTE)
     bake_colours(knife, KNIFE_PALETTE)
-    for o in (gun, pistol, knife):
+    for o in (gun, gun_sup, pistol, pistol_sup, knife):
         weld(o)
     decimate(knife, KNIFE_MAX_TRIS)
 
@@ -334,24 +393,29 @@ def main():
     nt.links.new(ca.outputs['Color'], bsdf.inputs['Base Color'])
     bsdf.inputs['Roughness'].default_value = 0.55
     bsdf.inputs['Metallic'].default_value = 0.0
-    for o, name in ((gun, 'gun'), (pistol, 'pistol'), (knife, 'knife')):
+    for o, name in ((gun, 'gun'), (gun_sup, 'gun_suppressor'), (pistol, 'pistol'), (pistol_sup, 'pistol_suppressor'),
+                    (knife, 'knife')):
         o.name = name
         o.data.name = name
         o.data.materials.append(mat)
         o.data.set_sharp_from_angle(angle=math.radians(40))
 
-    # --- Muzzles: centre of the front face of each suppressor ----------------------------------
-    muzzle = add_muzzle(gun, 'gun_muzzle')
-    pmuzzle = add_muzzle(pistol, 'pistol_muzzle')
+    # --- Suppressors as children; muzzles: suppressor front and bare barrel front -----------------
+    # Both meshes are in the gun's own frame and the gun object sits at the origin, so the child keeps an
+    # identity local transform (the client merges the two meshes for the suppressed look).
+    gun_sup.parent = gun
+    pistol_sup.parent = pistol
+    empties = [add_empty(gun, n, muzzles[n]) for n in ('gun_muzzle', 'gun_muzzle_bare')]
+    empties += [add_empty(pistol, n, muzzles[n]) for n in ('pistol_muzzle', 'pistol_muzzle_bare')]
 
     # --- Report ---------------------------------------------------------------------------------
-    for o in (gun, pistol, knife):
+    for o in (gun, gun_sup, pistol, pistol_sup, knife):
         p = [v.co for v in o.data.vertices]
         lo = Vector((min(v.x for v in p), min(v.y for v in p), min(v.z for v in p)))
         hi = Vector((max(v.x for v in p), max(v.y for v in p), max(v.z for v in p)))
         log(o.name, 'tris', tris(o.data), 'verts', len(o.data.vertices),
             'bounds (Blender X right, Y forward, Z up) lo', tuple(round(c, 3) for c in lo), 'hi', tuple(round(c, 3) for c in hi))
-    for m in (muzzle, pmuzzle):
+    for m in empties:
         x, y, z = m.location
         log(m.name, '(Blender)', tuple(round(c, 4) for c in m.location), '-> glTF',
             (round(x, 4), round(z, 4), round(-y, 4)))
