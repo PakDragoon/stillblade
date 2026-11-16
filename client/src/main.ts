@@ -477,7 +477,7 @@ async function start(): Promise<void> {
     let phaseEndsAt = 0;
     const match: MatchView = {
         phase: 'warmup', timeLeft: 0, round: 1, scoreGhosts: 0, scoreDefenders: 0, bombPos: null, droppedBomb: null, carrierId: 0,
-        winner: null, reason: null, matchOver: false
+        winner: null, reason: null, matchOver: false, roundsToWin: welcome.options.roundsToWin
     };
     const bombView: BombView = { pos: [0, 0, 0], timeLeft: 0 };
     let alive = false;
@@ -492,6 +492,9 @@ async function start(): Promise<void> {
     /** A practice range: the server keeps reserves full, so prediction does too (shared/gun.ts fillReserves). */
     const practice = welcome.practice;
     presenter.setSuppressed(suppressed);
+    /** The scoreboard's vote-out buttons exist only while a vote can be called (three or more people, none running). */
+    const callVoteKick = (id: number): void => net.sendMsg({ type: 'votekick', target: id });
+    const syncVoteKick = (): void => presenter.setVoteKick(ui.canVoteKick ? callVoteKick : null);
 
     /**
      * The plant or defuse counter and the bomb carry for one simulated command, in the server's order
@@ -697,6 +700,7 @@ async function start(): Promise<void> {
             rosterNames.clear();
             for (const p of players) rosterNames.set(p.id, p.name);
             ui.setRoster(players, net.id);
+            syncVoteKick();
         },
         summary(msg): void { ui.showSummary(msg, net.id); },
         chat(msg): void { ui.chat(msg, alive, match.phase === 'freeze' || match.phase === 'live' || match.phase === 'planted'); },
@@ -736,10 +740,12 @@ async function start(): Promise<void> {
         },
         options(o): void {
             suppressed = o.suppressed;
+            match.roundsToWin = o.roundsToWin;
             presenter.setSuppressed(o.suppressed);
             ui.setOptions(o);
         },
-        kickVote(msg): void { ui.setKickVote(msg.vote, net.serverTime()); },
+        kickVote(msg): void { ui.setKickVote(msg.vote, net.serverTime()); syncVoteKick(); },
+        pings(list): void { presenter.setPings(list); },
         mapVote(msg): void { ui.setMapVote(msg); },
         map(msg): Promise<void> { return swapMap(msg.map, msg.mapName); }
     });

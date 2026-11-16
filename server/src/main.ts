@@ -1,3 +1,4 @@
+import { PingProbe } from './ping-probe';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -50,6 +51,8 @@ const rooms = new Rooms(maps, defaultMapId(maps, process.env.SB_DEFAULT_MAP), {
 const roomList = new RoomListCache();
 const perIp = new Map<string, number>();
 const alive = new WeakSet<WebSocket>();
+/** When each connection's latest measuring ping went out (transport measurement only; wall-clock time is fine here). */
+const probes = new WeakMap<WebSocket, PingProbe>();
 let ticks = 0;
 
 // Plain HTTP on the same port for uptime checks and load balancers.
@@ -125,7 +128,11 @@ wss.on('connection', (ws, req) => {
             // Malformed input from a client is ignored, never fatal.
         }
     });
-    ws.on('pong', () => alive.add(ws));
+    ws.on('pong', (payload: Buffer) => {
+        alive.add(ws);
+        const rtt = probes.get(ws)?.pong(payload, performance.now());
+        if (rtt !== undefined) room.setPing(id, rtt);
+    });
     ws.on('close', (code, reason) => {
         rooms.leave(roomId, id);
         const left = (perIp.get(ip) ?? 1) - 1;
@@ -144,6 +151,17 @@ const heartbeat = setInterval(() => {
     }
 }, HEARTBEAT_MS);
 
+// Measure each connection's round trip every 2 s and tell each room every 3 s (the scoreboard's ping column).
+const pinger = setInterval(() => {
+    for (const ws of wss.clients) {
+        let probe = probes.get(ws);
+        if (!probe) probes.set(ws, probe = new PingProbe());
+        if (probe.busy) continue; // the last one is still out
+        ws.ping(probe.start(performance.now()));
+    }
+}, 2000);
+const pingTell = setInterval(() => { for (const game of rooms.rooms.values()) game.sendPings(); }, 3000);
+
 // Timers are coarse (about 15 ms on Windows), so run however many ticks are due each wake-up.
 const started = performance.now();
 const loop = setInterval(() => {
@@ -159,6 +177,8 @@ function shutdown(): void {
     console.log('Shutting down');
     clearInterval(loop);
     clearInterval(heartbeat);
+    clearInterval(pinger);
+    clearInterval(pingTell);
     for (const ws of wss.clients) ws.close(1001, 'Server restarting');
     http.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 2000).unref();

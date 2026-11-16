@@ -30,6 +30,8 @@ export interface NetHandlers {
     options(options: RoomOptions): void;
     /** The vote to remove a player started, changed or ended (`vote` is null). */
     kickVote(msg: KickVoteMsg): void;
+    /** Every human player's ping, measured by the server. */
+    pings(pings: readonly [number, number][]): void;
     /** The map vote on the result card changed. */
     mapVote(msg: MapVoteMsg): void;
     /**
@@ -269,6 +271,9 @@ export class Net {
                 break;
             case 'kickvote':
                 handlers.kickVote(msg);
+                break;
+            case 'pings':
+                handlers.pings(msg.pings);
                 break;
             case 'mapvote':
                 handlers.mapVote(msg);

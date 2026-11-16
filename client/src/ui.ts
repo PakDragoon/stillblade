@@ -7,10 +7,11 @@ import type { MapListEntry } from '@shared/maps';
 import { DEFAULT_ROOM_OPTIONS, type RoomOptions } from '@shared/room-options';
 import type { Phase } from '@shared/rules';
 import {
-    ACTIONS, GROUPS, assignBinding, bindings, clearSecondary, conflictsWith, findConflicts, fullText, hintText,
+    ACTIONS, GROUPS, assignBinding, bindings, clearSecondary, conflictsWith, findConflicts, hintText,
     inputFromKeyEvent, inputLabel, inputMatches, mouseInput, actionDef, type ActionId, type Slot
 } from './bindings';
-import { optionChips, optionControls, roomListView } from './community-ui';
+import { optionControls, optionSummary, roomListView, segmented } from './community-ui';
+import { PageNav, canCallVoteKick, type PageId } from './menu-logic';
 import { button, h } from './dom';
 import { reporter } from './report';
 import type { Settings, SettingsStore } from './settings';
@@ -59,14 +60,7 @@ export function makeRoomCode(): string {
     return `${pick(WORDS_A)}-${pick(WORDS_B)}-${10 + Math.floor(Math.random() * 90)}`;
 }
 
-/** Rows of the controls page: what each input does now, from the live bindings, plus the inputs that cannot be rebound. */
-function controlRows(): [string, string][] {
-    const map = bindings().value;
-    const rows: [string, string][] = [['Mouse', 'Look'], ['Mouse wheel', 'Cycle weapons (fixed)']];
-    for (const a of ACTIONS) rows.push([fullText(map, a.id), a.label]);
-    rows.push(['Esc', 'Pause menu: resume, settings, leave (fixed)']);
-    return rows;
-}
+type SettingsTab = 'general' | 'controls' | 'video' | 'audio';
 
 const TEAM_NAME: Record<Team, string> = { ghosts: 'Ghosts', defenders: 'Defenders' };
 
@@ -78,7 +72,7 @@ export class Ui {
     private readonly lobby = h('div', 'screen', '', this.root);
     private readonly pause = h('div', 'screen', '', this.root);
     private readonly settingsScreen = h('div', 'screen', '', this.root);
-    private readonly controls = h('div', 'screen', '', this.root);
+    private readonly settingsPanel = h('div', 'card settings');
     private readonly result = h('div', 'screen', '', this.root);
     private readonly feedback = h('div', 'screen', '', this.root);
     private readonly strip = h('div', '', '', this.root);
@@ -114,6 +108,9 @@ export class Ui {
     private capture: { id: ActionId; slot: Slot } | null = null;
     private pendingBind: { id: ActionId; slot: Slot; input: string; others: ActionId[] } | null = null;
     private bindList: HTMLElement | null = null;
+    private settingsTab: SettingsTab = 'general';
+    /** Where Back goes: a menu page before a match, the pause menu during one. */
+    private settingsBack: () => void = () => { /* set when the panel is placed */ };
     private feedbackBox: HTMLTextAreaElement | null = null;
     /** The vote to remove a player that is running, the result card's map vote, and the pieces that show them. */
     private kickInfo: KickVoteInfo | null = null;
@@ -133,7 +130,7 @@ export class Ui {
         document.body.appendChild(this.root);
         this.menu.id = 'menu-screen'; this.loading.id = 'loading-screen'; this.error.id = 'error-screen';
         this.lobby.id = 'lobby-screen'; this.pause.id = 'pause-screen'; this.settingsScreen.id = 'settings-screen';
-        this.controls.id = 'controls-screen'; this.result.id = 'result-screen'; this.feedback.id = 'feedback-screen';
+        this.result.id = 'result-screen'; this.feedback.id = 'feedback-screen';
         this.strip.id = 'lobby-strip'; this.chatLog.id = 'chat-log'; this.chatForm.id = 'chat-form'; this.hint.id = 'click-hint';
         this.toastEl.id = 'toast';
         this.voteBanner.id = 'vote-banner';
@@ -148,8 +145,6 @@ export class Ui {
         });
         this.hint.addEventListener('click', () => this.hooks.lock());
         this.buildPause();
-        this.buildSettings();
-        this.buildControls();
         this.buildFeedback();
         document.addEventListener('keydown', e => this.onKey(e));
         document.addEventListener('mousedown', e => {
@@ -164,13 +159,13 @@ export class Ui {
 
     /** True while something on screen needs the mouse pointer (so the game must not hold it). */
     get cursorNeeded(): boolean {
-        return this.typing || [this.menu, this.loading, this.error, this.lobby, this.pause, this.settingsScreen, this.controls, this.result, this.feedback]
+        return this.typing || [this.menu, this.loading, this.error, this.lobby, this.pause, this.settingsScreen, this.result, this.feedback]
             .some(s => s.classList.contains('open'));
     }
 
     /** A game-only overlay is open (not the pre-game menu, loading or error screens). */
     private get modalOpen(): boolean {
-        return [this.lobby, this.pause, this.settingsScreen, this.controls, this.result, this.feedback].some(s => s.classList.contains('open'));
+        return [this.lobby, this.pause, this.settingsScreen, this.result, this.feedback].some(s => s.classList.contains('open'));
     }
 
     private open(screen: HTMLElement): void {
@@ -188,7 +183,7 @@ export class Ui {
     /** The mouse was captured or released (pointerlockchange). Losing it with nothing else open means Esc: pause. */
     onLockChange(locked: boolean): void {
         if (locked) {
-            for (const s of [this.pause, this.settingsScreen, this.controls, this.lobby, this.feedback]) s.classList.remove('open');
+            for (const s of [this.pause, this.settingsScreen, this.lobby, this.feedback]) s.classList.remove('open');
             this.refreshHint();
             return;
         }
@@ -204,7 +199,7 @@ export class Ui {
 
     private resume(): void {
         this.cancelBinding();
-        for (const s of [this.pause, this.settingsScreen, this.controls, this.lobby, this.feedback]) s.classList.remove('open');
+        for (const s of [this.pause, this.settingsScreen, this.lobby, this.feedback]) s.classList.remove('open');
         this.refreshHint();
         this.hooks.lock();
     }
@@ -212,6 +207,11 @@ export class Ui {
     // ---- keyboard ---------------------------------------------------------------------------
 
     private onKey(e: KeyboardEvent): void {
+        if (!this.inGame && this.menuBack && this.menu.classList.contains('open')) {
+            // Pre-game menu: Esc goes back one page (also from a text box or a list).
+            if (e.code === 'Escape' && !this.capture) { e.preventDefault(); this.menuBack(); }
+            return;
+        }
         if (e.target === this.chatInput || e.target instanceof HTMLTextAreaElement) return; // the feedback box handles its own keys
         if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) {
             if (e.key === 'Escape' && this.inGame) this.escape();
@@ -261,8 +261,8 @@ export class Ui {
         if (this.capture || this.pendingBind) { this.cancelBinding(); return; }
         if (this.feedback.classList.contains('open')) { this.closeFeedback(); return; }
         if (this.summaryOpen) return;
-        if (this.settingsScreen.classList.contains('open') || this.controls.classList.contains('open')) {
-            this.close(this.settingsScreen); this.close(this.controls); this.open(this.pause);
+        if (this.settingsScreen.classList.contains('open')) {
+            this.settingsBack();
         } else if (this.pause.classList.contains('open') || this.lobby.classList.contains('open')) this.resume();
         else this.open(this.pause);
     }
@@ -273,91 +273,182 @@ export class Ui {
         for (const s of [this.menu, this.loading, this.error]) s.classList.remove('open');
     }
 
-    /** The name, room and map choices. `prefillRoom` comes from an invite link. */
+    /** Esc on a menu page: cancels a rebinding in progress, else goes back one page. Null outside the menu. */
+    private menuBack: (() => void) | null = null;
+
+    /** The name, then Quick play, Rooms, Practice range, Settings, How to play; each opens its own page. `defaults.room` comes from an invite link. */
     showMenu(maps: MapListEntry[], defaults: { name: string; room: string; map: string },
         loadRooms: () => Promise<RoomListEntry[]> = () => Promise.resolve([])): Promise<JoinChoice> {
         this.hideScreens();
         this.menu.replaceChildren();
-        const wrap = h('div', 'wrap', '', this.menu);
-        const brand = h('div', 'brand', '', wrap);
+        const shell = h('div', 'shell', '', this.menu);
+        const brand = h('div', 'brand', '', shell);
         const rings = h('div', 'rings', '', brand);
         for (let i = 0; i < 3; i++) h('i', '', '', rings);
         h('h1', '', 'STILLBLADE', brand);
         h('p', '', 'Ghosts vanish when they stand still. Defenders have to listen.', brand);
 
-        const card = h('form', 'card stack', '', wrap);
-        card.autocomplete = 'off';
-        const nameL = h('label', 'f', 'Your name', card);
-        const name = h('input', '', '', nameL);
-        name.type = 'text'; name.maxLength = 16; name.placeholder = 'Player'; name.spellcheck = false; name.value = defaults.name;
-        const mapL = h('label', 'f', 'Map for a new room', card);
-        const map = h('select', '', '', mapL);
-        for (const m of maps) map.add(new Option(m.name, m.id));
-        map.value = maps.some(m => m.id === defaults.map) ? defaults.map : maps[0]?.id ?? '';
-        // Room options for "Create room" (shared/room-options.ts); joining keeps the room's own. Private unless ticked.
-        let chosen: RoomOptions = { ...DEFAULT_ROOM_OPTIONS };
-        const create = h('button', 'primary', 'Create private room', card);
-        optionControls(card, chosen, patch => {
-            chosen = { ...chosen, ...patch };
-            create.textContent = chosen.public ? 'Create public room' : 'Create private room';
-        }, 'opt-');
-        card.insertBefore(create, null);
-        const orRow = h('p', 'or', 'or join friends', card);
-        void orRow;
-        const joinRow = h('div', 'row', '', card);
-        const code = h('input', '', '', joinRow);
-        code.type = 'text'; code.maxLength = 24; code.placeholder = 'Room code'; code.spellcheck = false; code.value = defaults.room;
-        code.setAttribute('aria-label', 'Room code');
-        const join = h('button', defaults.room ? 'primary' : '', 'Join room', joinRow);
-        const quick = h('button', '', 'Quick play (public room)', card);
-        h('p', 'or', 'or practise alone', card);
-        const practiceRow = h('div', 'row', '', card);
-        const practiceDef = h('button', '', 'Practice range: defender', practiceRow);
-        const practiceGhost = h('button', '', 'Practice range: ghost', practiceRow);
-        practiceDef.title = 'Shoot at targets that stand and move, with unlimited spare ammunition, on the map chosen above';
-        practiceGhost.title = 'Knife targets that stand and move, on the map chosen above';
-        const err = h('p', 'dim', '', card);
-
-        const side = h('div', 'stack', '', wrap);
-        const how = h('aside', 'card', '', side);
-        how.id = 'howto';
         let seen = false;
         try { seen = localStorage.getItem('sb-howto') === '1'; } catch { /* storage blocked: show it */ }
-        h('h3', '', 'How a match works', how);
+        // What the pages choose; read when one of them joins.
+        const state = {
+            map: maps.some(m => m.id === defaults.map) ? defaults.map : maps[0]?.id ?? '',
+            options: { ...DEFAULT_ROOM_OPTIONS } as RoomOptions,
+            side: 'defenders' as Team
+        };
+        const nav = new PageNav(seen || defaults.room ? 'home' : 'howto');
+        let go!: (room: string, mapId: string, options?: RoomOptions, quick?: boolean, practice?: Team) => void;
+        const page = (id: PageId, title: string, wide = false): HTMLElement => {
+            const c = h('section', wide ? 'card page wide' : 'card page', '', shell);
+            c.dataset.page = id;
+            if (title) h('h2', '', title, c);
+            return c;
+        };
+        const footer = (c: HTMLElement): HTMLElement => h('div', 'row foot', '', c);
+
+        // ---- home
+        const home = page('home', '');
+        home.classList.add('home');
+        const nameL = h('label', 'f', 'Your name', home);
+        const name = h('input', '', '', nameL);
+        name.type = 'text'; name.maxLength = 16; name.placeholder = 'Player'; name.spellcheck = false; name.value = defaults.name;
+        name.autocomplete = 'off';
+        const menuBtn = (cls: string, title: string, hint: string, onClick: () => void): HTMLButtonElement => {
+            const b = button('', `menubtn ${cls}`.trim(), home, onClick);
+            h('b', '', title, b);
+            h('small', '', hint, b);
+            return b;
+        };
+        const invite = defaults.room ? menuBtn('primary', `Join ${defaults.room}`, 'You were invited to this room', () => go(defaults.room, '')) : null;
+        const quick = menuBtn(invite ? '' : 'primary', 'Quick play', 'Join the fullest public room with space', () => go('', state.map, undefined, true));
+        menuBtn('', 'Rooms', 'Browse public rooms, join by code, or create your own', () => open('rooms'));
+        menuBtn('', 'Practice range', 'Aim at targets on your own', () => open('practice'));
+        menuBtn('', 'Settings', 'Controls, video and audio', () => open('settings'));
+        menuBtn('', 'How to play', 'A short guide to a match', () => open('howto'));
+        name.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); (invite ?? quick).click(); } });
+
+        // ---- rooms
+        const rooms = page('rooms', 'Rooms', true);
+        const rhead = h('div', 'row head', '', rooms);
+        h('h3', '', 'Public rooms', rhead);
+        h('span', 'sp', '', rhead);
+        const roomList = roomListView(rooms, rhead, loadRooms, c => go(c, ''), () => { state.options = { ...state.options, public: true }; open('create'); });
+        const joinBox = h('form', 'row joinbox', '', rooms);
+        const code = h('input', '', '', joinBox);
+        code.type = 'text'; code.maxLength = 24; code.placeholder = 'Room code, for example quiet-heron-42'; code.spellcheck = false;
+        code.value = defaults.room; code.autocomplete = 'off';
+        code.setAttribute('aria-label', 'Room code');
+        const joinBtn = h('button', '', 'Join by code', joinBox);
+        joinBtn.type = 'submit';
+        const joinErr = h('p', 'dim small err', '', rooms);
+        joinBox.addEventListener('submit', e => {
+            e.preventDefault();
+            const c = code.value.trim();
+            if (!c) { joinErr.textContent = 'Enter the room code your friend sent you.'; code.focus(); return; }
+            go(c, '');
+        });
+        const rfoot = footer(rooms);
+        button('Back', '', rfoot, () => back());
+        h('span', 'sp', '', rfoot);
+        button('Create room', 'primary', rfoot, () => open('create'));
+
+        // ---- create (the form is drawn again each time the page opens, so it shows what was last chosen)
+        const create = page('create', 'Create a room', true);
+        const formHost = h('div', '', '', create);
+        h('p', 'dim small', 'You land in the lobby first. You can still change any of this there until the match starts.', create);
+        const cfoot = footer(create);
+        button('Back', '', cfoot, () => back());
+        h('span', 'sp', '', cfoot);
+        const createBtn = button('Create private room', 'primary', cfoot, () => go(makeRoomCode(), state.map, state.options));
+        const renderCreate = (): void => {
+            formHost.replaceChildren();
+            createBtn.textContent = state.options.public ? 'Create public room' : 'Create private room';
+            optionControls(formHost, state.options, patch => {
+                state.options = { ...state.options, ...patch };
+                createBtn.textContent = state.options.public ? 'Create public room' : 'Create private room';
+            }, 'opt-', { list: maps, value: state.map, name: '', onPick: id => { state.map = id; } });
+        };
+
+        // ---- practice
+        const practice = page('practice', 'Practice range');
+        h('p', 'dim', 'A private room of your own with targets that stand and move. Nobody else joins.', practice);
+        const pmapL = h('label', 'f', 'Map', practice);
+        const pmap = h('select', '', '', pmapL);
+        pmap.id = 'practice-map';
+        for (const m of maps) pmap.add(new Option(m.name, m.id));
+        pmap.value = state.map;
+        pmap.addEventListener('change', () => { state.map = pmap.value; });
+        const sideL = h('div', 'f', '', practice);
+        h('span', '', 'Your side', sideL);
+        segmented<Team>(sideL, [
+            { value: 'defenders', title: 'Defender', hint: 'Guns and unlimited spare ammunition' },
+            { value: 'ghosts', title: 'Ghost', hint: 'A knife; the targets cannot see you while you stand still' }
+        ], state.side, v => { state.side = v; }, 'Your side');
+        const pfoot = footer(practice);
+        button('Back', '', pfoot, () => back());
+        h('span', 'sp', '', pfoot);
+        button('Start', 'primary', pfoot, () => go('', state.map, undefined, false, state.side));
+
+        // ---- settings (the panel is built once and moves between here and the pause menu)
+        const settings = h('div', 'settingshost', '', shell);
+        settings.dataset.page = 'settings';
+        this.settingsBack = () => back();
+        settings.appendChild(this.settingsPanel);
+        this.renderSettings();
+
+        // ---- how to play
+        const how = page('howto', 'How a match works');
+        how.id = 'howto';
         const dl = h('dl', '', '', how);
         const item = (cls: string, t: string, d: string): void => { h('dt', cls, t, dl); h('dd', '', d, dl); };
         item('g', 'Ghosts', 'Invisible while still, carrying only a knife. Plant the bomb on a site, then keep it alive until it blows.');
         item('d', 'Defenders', 'Always visible, armed with guns. You cannot see a standing ghost: follow footsteps, breathing and the knife windup.');
-        item('', 'Rounds', 'Four seconds to set up, two minutes to play. First side to six rounds wins; sides swap after round five.');
+        item('', 'Rounds', 'Four seconds to set up, two minutes to play. The first side to win six rounds wins the match (a room can choose three or nine instead); sides swap one round before the end.');
         const keys = bindings().value;
         item('', 'Keys', `Move ${hintText(keys, 'forward')} ${hintText(keys, 'left')} ${hintText(keys, 'back')} ${hintText(keys, 'right')}, attack ${hintText(keys, 'fire')}, aim ${hintText(keys, 'aim')}, reload ${hintText(keys, 'reload')}, plant or defuse ${hintText(keys, 'use')}. You can change every key in Settings.`);
-        const gotIt = button('Got it', '', how, () => { how.style.display = 'none'; try { localStorage.setItem('sb-howto', '1'); } catch { /* shown again next time */ } });
-        if (seen) how.style.display = 'none';
-        void gotIt;
+        const hfoot = footer(how);
+        h('span', 'sp', '', hfoot);
+        button('Got it', 'primary', hfoot, () => {
+            try { localStorage.setItem('sb-howto', '1'); } catch { /* shown again next time */ }
+            nav.reset('home');
+            render();
+        });
+
+        // ---- navigation
+        const pages = [home, rooms, create, practice, settings, how];
+        const render = (): void => {
+            for (const p of pages) p.classList.toggle('active', p.dataset.page === nav.page);
+            shell.classList.toggle('sub', nav.page !== 'home');
+            if (nav.page === 'create') renderCreate();
+            if (nav.page === 'practice') pmap.value = state.map;
+            // Focus the first useful control of the page that opened, so the keyboard starts there.
+            const active = pages.find(p => p.dataset.page === nav.page);
+            const first = nav.page === 'home' ? (defaults.room ? invite : name)
+                : nav.page === 'rooms' ? code
+                : active?.querySelector<HTMLElement>('select, button.primary');
+            setTimeout(() => first?.focus(), 0);
+        };
+        const open = (id: PageId): void => {
+            if (id === 'rooms') roomList.refresh();
+            this.cancelBinding();
+            nav.go(id);
+            render();
+        };
+        const back = (): void => { this.cancelBinding(); if (nav.back()) render(); };
+        this.menuBack = () => { if (this.capture || this.pendingBind) this.cancelBinding(); else back(); };
+
         this.menu.classList.add('open');
-        setTimeout(() => (defaults.room ? code : name).focus(), 0);
+        render();
 
         return new Promise(resolve => {
-            const go = (room: string, mapId: string, options?: RoomOptions, quick = false, practice?: Team): void => {
+            go = (room, mapId, options, quickPlay = false, practiceSide) => {
                 const n = name.value.trim();
                 try { localStorage.setItem('sb-name', n); localStorage.setItem('sb-howto', '1'); } catch { /* not remembered */ }
-                const choice: JoinChoice = { name: n, room, map: mapId, options, quick };
-                if (practice) choice.practice = practice;
+                const choice: JoinChoice = { name: n, room, map: mapId, options, quick: quickPlay };
+                if (practiceSide) choice.practice = practiceSide;
+                this.menuBack = null;
                 resolve(choice);
             };
-            practiceDef.addEventListener('click', e => { e.preventDefault(); go('', map.value, undefined, false, 'defenders'); });
-            practiceGhost.addEventListener('click', e => { e.preventDefault(); go('', map.value, undefined, false, 'ghosts'); });
-            const list = roomListView(side, loadRooms, code => go(code, ''));
-            side.insertBefore(list.el, how);
-            create.addEventListener('click', e => { e.preventDefault(); go(makeRoomCode(), map.value, chosen); });
-            join.addEventListener('click', e => {
-                e.preventDefault();
-                const c = code.value.trim();
-                if (!c) { err.textContent = 'Enter the room code your friend sent you.'; code.focus(); return; }
-                go(c, '');
-            });
-            quick.addEventListener('click', e => { e.preventDefault(); go('', map.value, undefined, true); });
-            card.addEventListener('submit', e => { e.preventDefault(); (code.value.trim() ? join : quick).click(); });
         });
     }
 
@@ -444,6 +535,11 @@ export class Ui {
         this.refreshStrip();
     }
 
+    /** A vote to remove a player can be called now (the scoreboard shows its vote-out buttons only then). */
+    get canVoteKick(): boolean {
+        return canCallVoteKick(this.roster, this.localId, this.kickInfo !== null);
+    }
+
     private me(): RosterEntry | undefined {
         return this.roster.find(p => p.id === this.localId);
     }
@@ -497,7 +593,6 @@ export class Ui {
         const card = h('div', 'card', '', this.lobby);
         const head = h('div', 'head', '', card);
         h('span', 'code', this.room || 'public', head);
-        h('span', 'dim', this.mapName, head);
         h('span', 'sp', '', head);
         button('Copy invite link', '', head, () => {
             const url = this.inviteUrl();
@@ -507,12 +602,8 @@ export class Ui {
         });
         // Options: the creator edits them in warmup (the server checks again); everyone else sees them as tags.
         const optRow = h('div', 'optrow', '', card);
-        if (me?.creator && this.phase === 'warmup') optionControls(optRow, this.options, patch => this.hooks.options(patch), 'lobby-opt-');
-        else {
-            const tags = h('div', 'tags', '', optRow);
-            optionChips(tags, this.options);
-            tags.title = 'Chosen by the room creator';
-        }
+        if (me?.creator && this.phase === 'warmup') optionControls(optRow, this.options, patch => this.hooks.options(patch), 'lobby-opt-', { value: this.mapId, name: this.mapName });
+        else optionSummary(optRow, this.options, this.mapName);
         const teams = h('div', 'teams', '', card);
         for (const team of ['ghosts', 'defenders'] as const) {
             const col = h('div', `team ${team}`, '', teams);
@@ -556,7 +647,7 @@ export class Ui {
         const people = this.roster.filter(o => !o.bot).length; // bots never count for removals
         if (people === 2 && me?.creator && this.phase === 'warmup') {
             button('Remove', 'mini danger', row, () => this.hooks.removePlayer(p.id));
-        } else if (people >= 3 && !this.kickInfo) {
+        } else if (this.canVoteKick) {
             button('Vote out', 'mini', row, () => this.hooks.voteKick(p.id)).title = 'Start a vote to remove this player from the room';
         }
     }
@@ -680,87 +771,123 @@ export class Ui {
         const stack = h('div', 'stack', '', card);
         stack.style.marginTop = '16px';
         button('Resume', 'primary', stack, () => this.resume());
-        button('Settings', '', stack, () => { this.close(this.pause); this.open(this.settingsScreen); });
-        button('Controls', '', stack, () => { this.renderControls(); this.close(this.pause); this.open(this.controls); });
+        button('Settings', '', stack, () => this.openSettings());
+        button('Controls', '', stack, () => this.openSettings('controls'));
         button('Send feedback', '', stack, () => this.openFeedback());
         button('Leave room', 'danger', stack, () => this.hooks.leave());
         this.pausePlayers = h('div', 'plist', '', card);
     }
 
-    private buildControls(): void {
-        const card = h('div', 'card', '', this.controls);
-        h('h2', '', 'Controls', card);
-        h('dl', '', '', card);
-        this.renderControls();
-        const row = h('div', 'row', '', card);
-        button('Back', 'primary', row, () => { this.close(this.controls); this.open(this.pause); });
-        button('Change keys', '', row, () => { this.close(this.controls); this.open(this.settingsScreen); });
+    /** The in-game settings screen (from the pause menu), on `tab` if given. */
+    private openSettings(tab?: SettingsTab): void {
+        if (tab) this.settingsTab = tab;
+        this.settingsBack = () => { this.cancelBinding(); this.close(this.settingsScreen); this.open(this.pause); };
+        if (this.settingsPanel.parentElement !== this.settingsScreen) this.settingsScreen.appendChild(this.settingsPanel);
+        this.renderSettings();
+        this.close(this.pause);
+        this.open(this.settingsScreen);
     }
 
-    /** Fills the controls page from the live bindings (called whenever it opens). */
-    private renderControls(): void {
-        const dl = this.controls.querySelector('dl');
-        if (!dl) return;
-        dl.replaceChildren();
-        for (const [k, d] of controlRows()) { h('dt', '', k, dl); h('dd', '', d, dl); }
+    // ---- settings: four tabs ----------------------------------------------------------------------
+
+    /**
+     * Draws the settings panel: General, Controls, Video and Audio, one tab showing. Every setting appears in exactly one
+     * tab. The panel is one element that lives in the menu's settings page before a match and in the settings screen
+     * during one, so both always show the same thing.
+     */
+    private renderSettings(): void {
+        this.cancelBinding();
+        this.bindList = null;
+        const panel = this.settingsPanel;
+        panel.replaceChildren();
+        const head = h('div', 'row sethead', '', panel);
+        h('h2', '', 'Settings', head);
+        h('span', 'dim', 'Saved on this device and applied straight away.', head);
+        const tabs = h('div', 'tabs', '', panel);
+        tabs.setAttribute('role', 'tablist');
+        const names: [SettingsTab, string][] = [['general', 'General'], ['controls', 'Controls'], ['video', 'Video'], ['audio', 'Audio']];
+        const buttons: HTMLButtonElement[] = [];
+        for (const [id, label] of names) {
+            const b = button(label, id === this.settingsTab ? 'tab on' : 'tab', tabs, () => { this.settingsTab = id; this.renderSettings(); });
+            b.setAttribute('role', 'tab');
+            b.setAttribute('aria-selected', String(id === this.settingsTab));
+            b.id = `settings-tab-${id}`;
+            b.tabIndex = id === this.settingsTab ? 0 : -1;
+            b.addEventListener('keydown', e => {
+                const i = names.findIndex(n => n[0] === id);
+                const to = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : -1;
+                if (to < 0) return;
+                e.preventDefault();
+                this.settingsTab = names[(to + names.length) % names.length][0];
+                this.renderSettings();
+                document.getElementById(`settings-tab-${this.settingsTab}`)?.focus();
+            });
+            buttons.push(b);
+        }
+        const body = h('div', `tabbody ${this.settingsTab}`, '', panel);
+        body.setAttribute('role', 'tabpanel');
+        body.setAttribute('aria-labelledby', `settings-tab-${this.settingsTab}`);
+        if (this.settingsTab === 'general') this.tabGeneral(body);
+        else if (this.settingsTab === 'controls') this.tabControls(body);
+        else if (this.settingsTab === 'video') this.tabVideo(body);
+        else this.tabAudio(body);
+        const foot = h('div', 'row foot', '', panel);
+        button('Back', 'primary', foot, () => { this.cancelBinding(); this.settingsBack(); });
     }
 
-    private buildSettings(): void {
-        const card = h('div', 'card', '', this.settingsScreen);
-        h('h2', '', 'Settings', card);
-        h('p', 'dim', 'Saved on this device and applied straight away.', card);
-        const grid = h('div', 'grid', '', card);
+    private slider(grid: HTMLElement, label: string, key: 'sensitivity' | 'aimSensitivity' | 'fov' | 'master' | 'effects' | 'footsteps' | 'crosshairSize',
+        min: number, max: number, step: number, fmt: (v: number) => string): void {
         const s = this.settings;
-        const slider = (label: string, key: 'sensitivity' | 'aimSensitivity' | 'fov' | 'master' | 'effects' | 'footsteps' | 'crosshairSize',
-            min: number, max: number, step: number, fmt: (v: number) => string): void => {
-            const c = h('div', 'ctl', '', grid);
-            const l = h('label', '', label, c);
-            const out = h('output', '', fmt(s.value[key]), c);
-            const r = h('input', '', '', c);
-            r.type = 'range'; r.min = String(min); r.max = String(max); r.step = String(step); r.value = String(s.value[key]);
-            l.htmlFor = r.id = `set-${key}`;
-            r.addEventListener('input', () => { const v = Number(r.value); out.textContent = fmt(v); s.set(key, v); });
-        };
-        const toggle = (label: string, key: 'invertY' | 'showStats'): void => {
-            const c = h('div', 'ctl', '', grid);
-            const l = h('label', '', label, c);
-            const i = h('input', '', '', c);
-            i.type = 'checkbox'; i.checked = s.value[key];
-            l.htmlFor = i.id = `set-${key}`;
-            i.addEventListener('change', () => s.set(key, i.checked));
-        };
-        h('h3', 'group', 'Mouse and view', grid);
-        slider('Mouse sensitivity', 'sensitivity', 0.1, 4, 0.05, v => `${v.toFixed(2)}x`);
-        toggle('Invert vertical look', 'invertY');
-        slider('Field of view', 'fov', 60, 110, 1, v => `${v}°`);
-        h('h3', 'group', 'Sound', grid);
-        const pct = (v: number): string => `${Math.round(v * 100)}%`;
-        slider('Master volume', 'master', 0, 1, 0.05, pct);
-        slider('Effects volume', 'effects', 0, 1, 0.05, pct);
-        slider('Footstep volume', 'footsteps', 0, 1, 0.05, pct);
-        h('h3', 'group', 'Crosshair', grid);
-        const sel = (label: string, key: 'crosshairStyle' | 'quality', options: [string, string][]): void => {
-            const c = h('div', 'ctl', '', grid);
-            const l = h('label', '', label, c);
-            const e = h('select', '', '', c);
-            for (const [v, t] of options) e.add(new Option(t, v));
-            e.value = s.value[key];
-            l.htmlFor = e.id = `set-${key}`;
-            e.addEventListener('change', () => s.set(key, e.value as never));
-        };
-        sel('Style', 'crosshairStyle', [['dot', 'Dot'], ['cross', 'Cross'], ['ring', 'Ring']]);
-        const colour = h('div', 'ctl', '', grid);
-        const cl = h('label', '', 'Colour', colour);
-        const ci = h('input', '', '', colour);
-        ci.type = 'color'; ci.value = s.value.crosshairColor;
-        cl.htmlFor = ci.id = 'set-crosshairColor';
-        ci.addEventListener('input', () => s.set('crosshairColor', ci.value));
-        slider('Size', 'crosshairSize', 2, 12, 1, v => `${v}px`);
-        h('h3', 'group', 'Display', grid);
-        toggle('Show FPS and ping', 'showStats');
-        sel('Graphics quality', 'quality', [['auto', 'Auto (measured while loading)'], ['low', 'Low (laptops, integrated graphics)'], ['gpu', 'High (graphics card)']]);
-        h('h3', 'group', 'Controls', grid);
-        slider('Aim sensitivity (while aiming)', 'aimSensitivity', 0.25, 2, 0.05, v => `${v.toFixed(2)}x`);
+        const c = h('div', 'ctl', '', grid);
+        const l = h('label', '', label, c);
+        const out = h('output', '', fmt(s.value[key]), c);
+        const r = h('input', '', '', c);
+        r.type = 'range'; r.min = String(min); r.max = String(max); r.step = String(step); r.value = String(s.value[key]);
+        l.htmlFor = r.id = `set-${key}`;
+        r.addEventListener('input', () => { const v = Number(r.value); out.textContent = fmt(v); s.set(key, v); });
+    }
+
+    private toggle(grid: HTMLElement, label: string, key: 'invertY' | 'showStats'): void {
+        const s = this.settings;
+        const c = h('div', 'ctl check', '', grid);
+        const l = h('label', '', label, c);
+        const i = h('input', '', '', c);
+        i.type = 'checkbox'; i.checked = s.value[key];
+        l.htmlFor = i.id = `set-${key}`;
+        i.addEventListener('change', () => s.set(key, i.checked));
+    }
+
+    private select(grid: HTMLElement, label: string, key: 'crosshairStyle' | 'quality', options: [string, string][]): void {
+        const s = this.settings;
+        const c = h('div', 'ctl', '', grid);
+        const l = h('label', '', label, c);
+        const e = h('select', '', '', c);
+        for (const [v, t] of options) e.add(new Option(t, v));
+        e.value = s.value[key];
+        l.htmlFor = e.id = `set-${key}`;
+        e.addEventListener('change', () => s.set(key, e.value as never));
+    }
+
+    private tabGeneral(body: HTMLElement): void {
+        h('h3', 'group', 'Display', body);
+        const grid = h('div', 'grid', '', body);
+        this.toggle(grid, 'Show FPS and ping', 'showStats');
+        h('h3', 'group', 'Help', body);
+        const help = h('div', 'row wrap', '', body);
+        if (this.inGame) button('Send feedback', '', help, () => this.openFeedback());
+        else h('span', 'dim', 'Feedback can be sent from the pause menu during a match.', help);
+        h('h3', 'group', 'Reset', body);
+        const reset = h('div', 'row', '', body);
+        button('Reset to defaults', '', reset, () => { this.settings.reset(); this.renderSettings(); });
+        h('span', 'dim', 'Puts every slider and switch back as it was. Key bindings are reset in the Controls tab.', reset);
+    }
+
+    private tabControls(body: HTMLElement): void {
+        const s = this.settings;
+        const grid = h('div', 'grid', '', body);
+        this.slider(grid, 'Mouse sensitivity', 'sensitivity', 0.1, 4, 0.05, v => `${v.toFixed(2)}x`);
+        this.slider(grid, 'Aim sensitivity (while aiming)', 'aimSensitivity', 0.25, 2, 0.05, v => `${v.toFixed(2)}x`);
+        this.toggle(grid, 'Invert vertical look', 'invertY');
         const mode = (label: string, key: 'crouchToggle' | 'walkToggle' | 'aimToggle'): void => {
             const c = h('div', 'ctl', '', grid);
             const l = h('label', '', label, c);
@@ -773,17 +900,42 @@ export class Ui {
         mode('Crouch', 'crouchToggle');
         mode('Quiet walk', 'walkToggle');
         mode('Aim down sights', 'aimToggle');
-        h('p', 'dim bind-help', 'Click a key, then press the new key or mouse button. Esc cancels. Backspace or Delete on the second column clears it. The mouse wheel always cycles weapons.', grid);
-        this.bindList = h('div', 'bindings', '', grid);
+        const bar = h('div', 'row bindbar', '', body);
+        h('p', 'dim bind-help', 'Click a key, then press the new key or mouse button. Esc cancels. Backspace or Delete on the second column clears it. Fixed: mouse look, the wheel cycles weapons, Esc pauses.', bar);
+        button('Reset controls to defaults', '', bar, () => { this.cancelBinding(); bindings().reset(); this.renderBindings(); });
+        this.bindList = h('div', 'bindings', '', body);
         this.renderBindings();
-        const row = h('div', 'row', '', card);
-        button('Back', 'primary', row, () => { this.cancelBinding(); this.close(this.settingsScreen); this.open(this.pause); });
-        button('Reset controls to defaults', '', row, () => { this.cancelBinding(); bindings().reset(); this.renderBindings(); });
-        button('Reset to defaults', '', row, () => {
-            s.reset();
-            this.settingsScreen.replaceChildren();
-            this.buildSettings();
-        });
+    }
+
+    private tabVideo(body: HTMLElement): void {
+        h('h3', 'group', 'Graphics', body);
+        const g = h('div', 'grid', '', body);
+        this.qualityControl(g);
+        this.slider(g, 'Field of view', 'fov', 60, 110, 1, v => `${v}°`);
+        h('h3', 'group', 'Crosshair', body);
+        const grid = h('div', 'grid', '', body);
+        this.select(grid, 'Style', 'crosshairStyle', [['dot', 'Dot'], ['cross', 'Cross'], ['ring', 'Ring']]);
+        const colour = h('div', 'ctl', '', grid);
+        const cl = h('label', '', 'Colour', colour);
+        const ci = h('input', '', '', colour);
+        ci.type = 'color'; ci.value = this.settings.value.crosshairColor;
+        cl.htmlFor = ci.id = 'set-crosshairColor';
+        ci.addEventListener('input', () => this.settings.set('crosshairColor', ci.value));
+        this.slider(grid, 'Size', 'crosshairSize', 2, 12, 1, v => `${v}px`);
+    }
+
+    /** The graphics quality choice, one self-contained block (its option list is the only thing that changes with the quality tiers). */
+    private qualityControl(grid: HTMLElement): void {
+        this.select(grid, 'Graphics quality', 'quality', [['auto', 'Auto (measured while loading)'], ['low', 'Low (laptops, integrated graphics)'], ['gpu', 'High (graphics card)']]);
+    }
+
+    private tabAudio(body: HTMLElement): void {
+        h('h3', 'group', 'Volume', body);
+        const grid = h('div', 'grid', '', body);
+        const pct = (v: number): string => `${Math.round(v * 100)}%`;
+        this.slider(grid, 'Master volume', 'master', 0, 1, 0.05, pct);
+        this.slider(grid, 'Effects volume', 'effects', 0, 1, 0.05, pct);
+        this.slider(grid, 'Footstep volume', 'footsteps', 0, 1, 0.05, pct);
     }
 
     // ---- rebinding ------------------------------------------------------------------------------
@@ -973,7 +1125,7 @@ export class Ui {
 
     showSummary(sum: SummaryMsg, localId: number): void {
         this.summaryOpen = true;
-        for (const s of [this.pause, this.settingsScreen, this.controls, this.lobby, this.feedback]) s.classList.remove('open');
+        for (const s of [this.pause, this.settingsScreen, this.lobby, this.feedback]) s.classList.remove('open');
         if (this.typing) this.closeChat(false);
         this.result.replaceChildren();
         const card = h('div', 'card', '', this.result);

@@ -16,7 +16,7 @@ import {
 } from '../../shared/bomb';
 import { createPlayerState, horizontalSpeed, stepPlayer } from '../../shared/movement';
 import {
-    PROTOCOL_VERSION, SNAPSHOT_RATE, type BombEvent, type BombMsg, type ClientMsg, type DamageKind, type KickVoteInfo, type KillMsg, type MapVoteMsg, type MatchStats,
+    PING_MAX, PROTOCOL_VERSION, SNAPSHOT_RATE, type BombEvent, type BombMsg, type ClientMsg, type DamageKind, type KickVoteInfo, type KillMsg, type MapVoteMsg, type MatchStats,
     type NetCmd, type PlayerSnap, type RosterEntry, type RoundMsg, type ServerMsg, type ShotEvent, type SlashEvent, type SoundEvent,
     type SummaryMsg, type Team
 } from '../../shared/protocol';
@@ -58,6 +58,12 @@ const CHAT_REFILL_MS = 1500;
 /** Teams may differ by at most this many players after a warmup team switch. */
 const MAX_TEAM_GAP = 1;
 
+/** Smooths round-trip samples (about the last 3) and keeps the result a whole number of ms from 0 to PING_MAX. */
+export function smoothPing(previous: number, sampleMs: number): number {
+    const sample = Math.min(PING_MAX, Math.max(0, sampleMs));
+    return Math.round(previous < 0 ? sample : previous + (sample - previous) * 0.35);
+}
+
 export class Player {
     state: PlayerState = createPlayerState([0, 0, 0]);
     yaw = 0;
@@ -87,6 +93,8 @@ export class Player {
     stats: MatchStats = emptyStats();
     /** Server time this player joined: the longest-connected player inherits the creator role. */
     joinedAt = 0;
+    /** Round trip to this player in ms, measured by the server's WebSocket pings and smoothed (transport only: no rule reads it); -1 before the first. */
+    pingMs = -1;
     ready = false;
     /** The name the player asked for (cleaned, before the filter and numbering): what the rejoin restore and bans go by. */
     baseName = '';
@@ -315,6 +323,20 @@ export class Game implements BotWorld {
             });
         }
         return players;
+    }
+
+    /** A fresh round-trip sample for a player (from the server's own ping and the pong that answered it). Never a client's claim. */
+    setPing(id: number, sampleMs: number): void {
+        const p = this.players.get(id);
+        if (!p || p.bot || !Number.isFinite(sampleMs)) return;
+        p.pingMs = smoothPing(p.pingMs, sampleMs);
+    }
+
+    /** Tells everyone each human player's ping (called every few seconds by the transport). */
+    sendPings(): void {
+        const pings: [number, number][] = [];
+        for (const p of this.players.values()) if (!p.bot && p.pingMs >= 0) pings.push([p.id, p.pingMs]);
+        if (pings.length > 0) this.broadcast({ type: 'pings', pings });
     }
 
     private sendRoster(): void {
