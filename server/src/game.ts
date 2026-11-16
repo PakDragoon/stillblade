@@ -16,25 +16,31 @@ import {
 } from '../../shared/bomb';
 import { createPlayerState, horizontalSpeed, stepPlayer } from '../../shared/movement';
 import {
-    PROTOCOL_VERSION, SNAPSHOT_RATE, type BombEvent, type BombMsg, type ClientMsg, type DamageKind, type KillMsg, type MatchStats, type NetCmd, type PlayerSnap,
-    type RosterEntry, type RoundMsg, type ServerMsg, type ShotEvent, type SlashEvent, type SoundEvent, type SummaryMsg,
-    type Team
+    PROTOCOL_VERSION, SNAPSHOT_RATE, type BombEvent, type BombMsg, type ClientMsg, type DamageKind, type KickVoteInfo, type KillMsg, type MapVoteMsg, type MatchStats,
+    type NetCmd, type PlayerSnap, type RosterEntry, type RoundMsg, type ServerMsg, type ShotEvent, type SlashEvent, type SoundEvent,
+    type SummaryMsg, type Team
 } from '../../shared/protocol';
 import {
-    BOMB_MS, DEFUSE_TICKS, FREEZE_MS, GRACE_MS, HALFTIME_ROUND, IDLE_ROUNDS, MATCH_OVER_MS, OVER_MS, PLANT_TICKS, ROUNDS_TO_WIN, ROUND_MS,
+    BOMB_MS, DEFUSE_TICKS, FREEZE_MS, GRACE_MS, IDLE_ROUNDS, MATCH_OVER_MS, OVER_MS, PLANT_TICKS, ROUND_MS,
     canAct, movementLocked, type Phase, type RoundReason
 } from '../../shared/rules';
 import { cleanChat } from '../../shared/chat';
 import { ASSIST_MS, emptyStats, pickMvp } from '../../shared/stats';
 import { rayBox, rayWorld, viewDir } from '../../shared/raycast';
-import { DEFAULT_ROOM_OPTIONS, type RoomOptions } from '../../shared/room-options';
+import { DEFAULT_ROOM_OPTIONS, cleanRoomOptions, halftimeRound, type RoomOptions } from '../../shared/room-options';
 import type { MapData, PlayerState, Vec3 } from '../../shared/types';
 import { ghostVisTarget, stepVis } from '../../shared/visibility';
 import { DEFENDER_KNIFE, WEAPONS } from '../../shared/weapons';
 import { hitZone, zoneDamage, type HitZone } from '../../shared/zones';
+import { chooseName, cleanName, maskChat } from './namefilter';
+import { Bans, KickVote, MAP_VOTE_LEAD_MS, MapVote } from './votes';
 
 export interface Connection {
     send(msg: ServerMsg): void;
+    /** Ends the connection with a reason the player sees (a kick). Absent in tests. */
+    close?(reason: string): void;
+    /** The caller's address as the server counts it, for the rejoin ban. */
+    ip?: string;
 }
 
 const HISTORY = 64; // ticks of position history kept per player (just over 1 s)
@@ -80,6 +86,10 @@ export class Player {
     /** Server time this player joined: the longest-connected player inherits the creator role. */
     joinedAt = 0;
     ready = false;
+    /** The name the player asked for (cleaned, before the filter and numbering): what the rejoin restore and bans go by. */
+    baseName = '';
+    /** A computer player: never counts for votes or the creator role (package E adds bots). */
+    bot = false;
     /**
      * Marked after IDLE_ROUNDS consecutive complete rounds without a single input change; not spawned
      * at the next round start; cleared by the next input change. Nobody is ever removed mid-round.
@@ -204,7 +214,7 @@ export class Game {
     private held = false;
     private graceUntil = 0;
     /** Players who left mid-match, by cleaned name: their stats come back if they return within GRACE_MS. null = ambiguous. */
-    private readonly departed = new Map<string, { stats: MatchStats; group: 0 | 1; at: number } | null>();
+    private readonly departed = new Map<string, { stats: MatchStats; group: 0 | 1; at: number; base: string } | null>();
     /** The final result, kept for players who join during the result screen. */
     private summary: SummaryMsg | null = null;
 
@@ -216,14 +226,28 @@ export class Game {
     private readonly hmax: Vec3 = [0, 0, 0];
     private readonly target: Vec3 = [0, 0, 0];
 
-    /** The creator's choices (shared/room-options.ts), fixed for the life of the room and sent in `welcome`. */
-    readonly options: Readonly<RoomOptions>;
+    /** The room's options (shared/room-options.ts): the creator's, changed only in warmup by `changeOptions`. Sent in `welcome`. */
+    options: Readonly<RoomOptions>;
+    /** The room code, set by `Rooms`; sent in `welcome` so Quick play can show where it landed. */
+    code = '';
+    /** Every installed map, for the map vote; without it a room can only stay on its map. */
+    private readonly maps: ReadonlyMap<string, MapData> | undefined;
+    private readonly kickVote = new KickVote();
+    private lastKickSig = '';
+    /** Players removed by vote or by the creator may not rejoin for BAN_MS; by address and by name. */
+    readonly bans = new Bans();
+    private readonly mapVote = new MapVote();
+    private mapDecided = false;
 
-    /** `rounds: false` keeps the match in warmup (free roam with respawns), for tests of the core mechanics. */
-    constructor(readonly map: MapData, opts: { rounds?: boolean; lobby?: boolean; options?: RoomOptions } = {}) {
+    /**
+     * `rounds: false` keeps the match in warmup (free roam with respawns), for tests of the core mechanics.
+     * `map` changes between matches through `swapMap` (the map vote), never during one.
+     */
+    constructor(public map: MapData, opts: { rounds?: boolean; lobby?: boolean; options?: Partial<RoomOptions>; maps?: ReadonlyMap<string, MapData> } = {}) {
         this.rounds = opts.rounds ?? true;
         this.lobby = opts.lobby ?? false;
-        this.options = { ...DEFAULT_ROOM_OPTIONS, ...opts.options };
+        this.options = cleanRoomOptions({ ...opts.options }, DEFAULT_ROOM_OPTIONS);
+        this.maps = opts.maps;
     }
 
     private teamOf(group: 0 | 1): Team {
@@ -252,6 +276,7 @@ export class Game {
     get creatorId(): number {
         let best: Player | undefined;
         for (const p of this.players.values()) {
+            if (p.bot) continue;
             if (!best || p.joinedAt < best.joinedAt || (p.joinedAt === best.joinedAt && p.id < best.id)) best = p;
         }
         return best?.id ?? 0;
@@ -285,27 +310,33 @@ export class Game {
         let team: Team = ghosts <= this.players.size - ghosts ? 'ghosts' : 'defenders';
         let group = team === 'ghosts' ? this.ghostGroup : ((1 - this.ghostGroup) as 0 | 1);
         const id = this.nextId++;
-        const clean = name.replace(/[^\p{L}\p{N} _.-]/gu, '').trim().slice(0, 16);
-        const shown = clean || `Player ${id}`;
+        const clean = cleanName(name);
+        // Blocked and reserved names become "Player", a name already in the room gets " (2)"; nothing asked for is "Player <id>".
+        const shown = chooseName(clean, [...this.players.values()].map(o => o.name), name) || `Player ${id}`;
         // Returning within the grace period under the same (unique) name: previous side and statistics back.
         this.purgeDeparted();
-        const back = clean ? this.departed.get(clean) : undefined;
-        let sameName = false;
-        for (const o of this.players.values()) if (o.name === shown) sameName = true;
-        if (back && !sameName) {
+        // Departed players are remembered by the name that was shown, so a numbered "Sam (2)" is restored when
+        // the same request ("Sam") is numbered the same way again (see `leave` for the ambiguous case).
+        const back = clean ? this.departed.get(shown) ?? undefined : undefined;
+        if (back) {
             group = back.group;
             team = this.teamOf(group);
         }
         const player = new Player(id, group, team, shown, conn);
-        if (back && !sameName) { player.stats = { ...back.stats }; this.departed.delete(clean); }
+        player.baseName = clean;
+        if (back) { player.stats = { ...back.stats }; this.departed.delete(shown); }
         player.joinedAt = player.chatTokensAt = this.now;
         this.players.set(id, player);
         conn.send({
             type: 'welcome', version: PROTOCOL_VERSION, id, team, map: this.map.name,
-            mapName: this.map.displayName ?? this.map.name, time: this.now, options: { ...this.options }
+            mapName: this.map.displayName ?? this.map.name, time: this.now, options: { ...this.options }, room: this.code
         });
         conn.send(this.roundMsg());
-        if (this.summary && this.phase === 'over') conn.send(this.summary); // joined during the result screen
+        if (this.summary && this.phase === 'over') { // joined during the result screen
+            conn.send(this.summary);
+            conn.send(this.mapVoteMsg(player));
+        }
+        if (this.kickVote.active) conn.send({ type: 'kickvote', vote: this.kickInfo(player) });
         // Mid-round arrivals wait for the next round rather than appearing behind someone.
         if (this.phase === 'warmup') this.spawn(player);
         if (team === 'ghosts') conn.send(this.ghostBombMsg());
@@ -319,13 +350,16 @@ export class Game {
         if (p && p.id === this.carrierId) this.dropBomb(p, 'lost'); // the bomb stays where they stood
         if (p && this.matchInProgress()) {
             this.purgeDeparted();
-            // Two leavers with one name cannot be told apart: restore neither.
-            this.departed.set(p.name, this.departed.has(p.name) ? null : { stats: { ...p.stats }, group: p.group, at: this.now });
+            // Two leavers who asked for one name ("Eve" and "Eve (2)") cannot be told apart: restore neither.
+            let twin = false;
+            for (const [key, d] of this.departed) if (key === p.name || (d && d.base === p.baseName)) { this.departed.set(key, null); twin = true; }
+            this.departed.set(p.name, twin ? null : { stats: { ...p.stats }, group: p.group, at: this.now, base: p.baseName });
         }
         if (this.players.delete(id)) this.sendRoster();
     }
 
-    private matchInProgress(): boolean {
+    /** A match is on, or held waiting for players: the room is not in its lobby. */
+    matchInProgress(): boolean {
         return this.held || this.roundsPlayed > 0 || this.phase === 'freeze' || this.phase === 'live' || this.phase === 'planted';
     }
 
@@ -352,6 +386,11 @@ export class Game {
             case 'start': this.requestStart(p); break;
             case 'team': this.switchTeam(p); break;
             case 'chat': this.chat(p, msg.team, msg.text); break;
+            case 'options': this.changeOptions(p, msg.options); break;
+            case 'votekick': this.startKickVote(p, msg.target); break;
+            case 'votecast': if (this.kickVote.cast(p.id, msg.yes, this.presentIds())) this.stepKickVote(); break;
+            case 'removeplayer': this.removePlayer(p, msg.target); break;
+            case 'mapvote': this.castMapVote(p, msg.map); break;
         }
     }
 
@@ -391,7 +430,7 @@ export class Game {
      * the dead cannot call out positions; team chat never leaves the team.
      */
     private chat(p: Player, teamOnly: boolean, raw: string): void {
-        const text = cleanChat(raw);
+        const text = maskChat(cleanChat(raw));
         if (!text) return;
         p.chatTokens = Math.min(CHAT_BURST, p.chatTokens + (this.now - p.chatTokensAt) / CHAT_REFILL_MS);
         p.chatTokensAt = this.now;
@@ -869,6 +908,7 @@ export class Game {
             p.record(now);
         }
         if (this.rounds) this.updateRound();
+        this.stepKickVote();
         if (this.tickCount % SNAPSHOT_EVERY === 0) this.sendSnapshots();
     }
 
@@ -941,7 +981,7 @@ export class Game {
         this.reason = reason;
         this.roundsPlayed++;
         const group = winner === 'ghosts' ? this.ghostGroup : 1 - this.ghostGroup;
-        this.matchOver = ++this.score[group] >= ROUNDS_TO_WIN;
+        this.matchOver = ++this.score[group] >= this.options.roundsToWin;
         this.countQuietRounds();
         this.setPhase('over', this.matchOver ? MATCH_OVER_MS : OVER_MS);
         this.sendRoster();
@@ -952,6 +992,7 @@ export class Game {
             };
             this.summary.mvp = pickMvp(this.summary.players);
             this.broadcast(this.summary);
+            this.openMapVote();
         }
     }
 
@@ -1010,10 +1051,11 @@ export class Game {
                 else if (expired) this.endRound('ghosts', 'exploded');
                 break;
             case 'over':
+                if (this.matchOver && !this.mapDecided && this.now >= this.phaseEndsAt - MAP_VOTE_LEAD_MS) this.closeMapVote();
                 if (!expired) break;
                 const finished = this.matchOver;
                 if (finished) this.resetMatch(); // rematch: same room and map, groups kept
-                else if (this.roundsPlayed === HALFTIME_ROUND) {
+                else if (this.roundsPlayed === halftimeRound(this.options.roundsToWin)) {
                     this.setGhostGroup((1 - this.ghostGroup) as 0 | 1);
                 }
                 if (playable) this.startRound();
@@ -1082,5 +1124,158 @@ export class Game {
                 players
             });
         }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Community: room options, vote to kick, map vote. The rules live in votes.ts, namefilter.ts and
+    // shared/room-options.ts; this is the glue that sends and acts. Nothing here is predicted.
+    // -----------------------------------------------------------------------------------------
+
+    /** Connected human players: the only ones who count for votes. */
+    private presentIds(): number[] {
+        const ids: number[] = [];
+        for (const p of this.players.values()) if (!p.bot) ids.push(p.id);
+        return ids;
+    }
+
+    /** The creator changes the room's options, in warmup only. Invalid fields keep their current value. */
+    private changeOptions(p: Player, raw: Partial<Record<keyof RoomOptions, unknown>>): void {
+        if (p.id !== this.creatorId) { this.notice(p, 'Only the room creator can change the options.'); return; }
+        if (this.phase !== 'warmup' || this.matchInProgress()) { this.notice(p, 'Options can only be changed before the match starts.'); return; }
+        const next = cleanRoomOptions(raw, this.options);
+        if (next.maxPlayers < this.players.size) { this.notice(p, `There are already ${this.players.size} players in the room.`); return; }
+        if ((Object.keys(next) as (keyof RoomOptions)[]).every(k => next[k] === this.options[k])) return;
+        this.options = next;
+        this.broadcast({ type: 'options', options: { ...next } });
+    }
+
+    private kickInfo(viewer: Player): KickVoteInfo | null {
+        const a = this.kickVote.active;
+        if (!a) return null;
+        const { yes, no, needed } = this.kickVote.tally(this.presentIds());
+        return {
+            target: a.target, targetName: this.players.get(a.target)?.name ?? '', caller: a.caller,
+            callerName: this.players.get(a.caller)?.name ?? '', yes, no, needed, endsAt: a.endsAt,
+            mine: viewer.id === a.target ? null : (a.votes.get(viewer.id) ?? null)
+        };
+    }
+
+    private sendKickVote(): void {
+        for (const p of this.players.values()) p.conn.send({ type: 'kickvote', vote: this.kickInfo(p) });
+    }
+
+    private startKickVote(p: Player, target: number): void {
+        const refusal = this.kickVote.start(p.id, target, this.now, this.presentIds());
+        if (refusal) { this.notice(p, refusal); return; }
+        this.lastKickSig = '';
+        this.stepKickVote();
+    }
+
+    /** Decides the running vote if it can be decided, and tells everyone when its count changed. Every tick and after every answer. */
+    private stepKickVote(): void {
+        const a = this.kickVote.active;
+        if (!a) return;
+        const outcome = this.kickVote.step(this.now, this.presentIds());
+        if (outcome) {
+            const target = this.players.get(outcome.target);
+            this.lastKickSig = '';
+            this.sendKickVote(); // vote is now null: closes the banner
+            if (outcome.result === 'passed' && target) {
+                for (const p of this.players.values()) this.notice(p, `${target.name} was removed from the room by a vote.`);
+                this.removeFromRoom(target, 'You were removed from this room by a vote. You cannot rejoin it for 10 minutes.');
+            } else if (outcome.result === 'failed' && target) {
+                for (const p of this.players.values()) this.notice(p, `The vote to remove ${target.name} failed.`);
+            }
+            return;
+        }
+        const { yes, no, needed } = this.kickVote.tally(this.presentIds());
+        const sig = `${a.target}:${yes}:${no}:${needed}`;
+        if (sig === this.lastKickSig) return;
+        this.lastKickSig = sig;
+        this.sendKickVote();
+    }
+
+    /** In a room of two, the creator removes the other player straight away (warmup only). */
+    private removePlayer(p: Player, target: number): void {
+        const t = this.players.get(target);
+        if (p.id !== this.creatorId) { this.notice(p, 'Only the room creator can remove a player.'); return; }
+        if (this.players.size !== 2 || this.phase !== 'warmup' || this.matchInProgress()) {
+            this.notice(p, 'You can remove a player directly only in warmup, in a room of two. With more players, call a vote.'); return;
+        }
+        if (!t || t === p) return;
+        this.removeFromRoom(t, 'The room creator removed you from this room. You cannot rejoin it for 10 minutes.');
+    }
+
+    /** Bans the player's address and name, tells them why, closes their connection and drops them from the room. */
+    private removeFromRoom(p: Player, reason: string): void {
+        this.bans.add(p.conn.ip, p.baseName, this.now);
+        this.notice(p, reason);
+        p.conn.close?.(reason);
+        this.leave(p.id);
+    }
+
+    private mapChoices(): { id: string; name: string }[] {
+        const out: { id: string; name: string }[] = [];
+        const installed: ReadonlyMap<string, MapData> = this.maps ?? new Map([[this.map.name, this.map]]);
+        for (const [id, m] of installed) out.push({ id, name: m.displayName ?? m.name });
+        if (!out.some(m => m.id === this.map.name)) out.unshift({ id: this.map.name, name: this.map.displayName ?? this.map.name });
+        return out;
+    }
+
+    private mapVoteMsg(viewer: Player): MapVoteMsg {
+        const choices = this.mapChoices();
+        const counts = this.mapVote.counts(choices.map(c => c.id), this.presentIds());
+        const msg: MapVoteMsg = {
+            type: 'mapvote', current: this.map.name, mine: this.mapVote.mine(viewer.id), closesAt: this.phaseEndsAt - MAP_VOTE_LEAD_MS,
+            maps: choices.map(c => ({ ...c, votes: counts.get(c.id) ?? 0 }))
+        };
+        if (this.mapDecided) msg.next = this.map.name; // the map is swapped before this goes out, so `current` is the next map
+        return msg;
+    }
+
+    private sendMapVote(): void {
+        for (const p of this.players.values()) p.conn.send(this.mapVoteMsg(p));
+    }
+
+    /** The result card appears: everyone may now pick the next map. */
+    private openMapVote(): void {
+        this.mapVote.clear();
+        this.mapDecided = false;
+        this.sendMapVote();
+    }
+
+    private castMapVote(p: Player, map: string): void {
+        if (!this.summary || this.phase !== 'over' || this.mapDecided) return;
+        if (!this.mapChoices().some(c => c.id === map)) return;
+        this.mapVote.pick(p.id, map);
+        this.sendMapVote();
+    }
+
+    /** MAP_VOTE_LEAD_MS before the next match: the most-voted map wins (ties and no votes keep the current one). */
+    private closeMapVote(): void {
+        this.mapDecided = true;
+        const choices = this.mapChoices();
+        const winner = this.mapVote.winner(this.map.name, choices.map(c => c.id), this.presentIds());
+        if (winner !== this.map.name) this.swapMap(winner);
+        this.sendMapVote(); // carries `next`; after a swap `current` is already the new map
+    }
+
+    /**
+     * Moves the room to another installed map between matches. Nothing in `Game` caches map data (spawns,
+     * boxes and sites are read from `this.map` at use), so swapping the reference is enough; what must be
+     * reset is the state tied to the old map: the planted bomb, spawn rotation and everyone's position.
+     * Players are marked dead until the next round start spawns them on the new map (commands from a dead
+     * player are ignored, so nothing is simulated against the new boxes with an old position).
+     */
+    private swapMap(id: string): void {
+        const next = this.maps?.get(id);
+        if (!next) return;
+        this.map = next;
+        this.bomb = null;
+        this.clearBomb(); // a bomb dropped on the old map does not follow the room to the new one
+        this.spawnCursor.ghosts = this.spawnCursor.defenders = 0;
+        for (const p of this.players.values()) { p.alive = false; p.respawnAt = 0; p.actionTicks = 0; }
+        this.broadcast({ type: 'map', map: next.name, mapName: next.displayName ?? next.name });
+        this.sendRoster();
     }
 }

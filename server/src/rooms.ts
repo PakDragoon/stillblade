@@ -1,6 +1,8 @@
 import { DEFAULT_ROOM_OPTIONS, type RoomOptions } from '../../shared/room-options';
 import type { MapData } from '../../shared/types';
 import { Game, type Connection } from './game';
+import { cleanName } from './namefilter';
+import { fullestPublicRoom } from './roomlist';
 
 export interface RoomLimits {
     maxRooms: number;
@@ -44,16 +46,36 @@ export class Rooms {
         let created = false;
         if (!game) {
             if (this.rooms.size >= this.limits.maxRooms) return { ok: false, reason: 'Server full' };
-            game = new Game(this.maps.get(mapId || this.defaultMap)!, { lobby: true, options });
+            game = new Game(this.maps.get(mapId || this.defaultMap)!, { lobby: true, options, maps: this.maps });
+            game.code = roomId;
             // A new room starts at the current tick time so its clock is never behind the loop's.
             game.now = now;
             this.rooms.set(roomId, game);
             created = true;
-        } else if (game.players.size >= this.limits.maxPlayersPerRoom) {
+        } else if (game.bans.isBanned(conn.ip, cleanName(name), game.now)) {
+            return { ok: false, reason: 'Removed from this room' };
+        } else if (game.players.size >= Math.min(this.limits.maxPlayersPerRoom, game.options.maxPlayers)) {
             return { ok: false, reason: 'Room full' };
         }
         const id = game.join(conn, name);
         return { ok: true, roomId, game, id, created };
+    }
+
+    /**
+     * Quick play: the code of the fullest public room with space (the oldest among equals) that has not
+     * removed this address or name, or null when the caller should create a public room of their own.
+     */
+    quickRoom(conn: Connection, name: string): string | null {
+        const clean = cleanName(name);
+        return fullestPublicRoom(this.rooms, g => !g.bans.isBanned(conn.ip, clean, g.now) && g.players.size < this.limits.maxPlayersPerRoom);
+    }
+
+    /** A fresh room code for a Quick play room that nobody is in yet. */
+    newQuickCode(): string {
+        for (;;) {
+            const code = `quick-${Math.random().toString(36).slice(2, 6)}`;
+            if (!this.rooms.has(code)) return code;
+        }
     }
 
     /** Removes a player; an empty room is dropped. */

@@ -266,10 +266,10 @@ describe('room options', () => {
 
     it('defaults to unsuppressed and reaches every welcome', () => {
         const g = new Game(map);
-        expect(g.options).toEqual({ suppressed: false });
-        expect(new Client(g).last('welcome').options).toEqual({ suppressed: false });
+        expect(g.options).toMatchObject({ suppressed: false });
+        expect(new Client(g).last('welcome').options).toMatchObject({ suppressed: false });
         const s = new Game(map, { options: { suppressed: true } });
-        expect(new Client(s).last('welcome').options).toEqual({ suppressed: true });
+        expect(new Client(s).last('welcome').options).toMatchObject({ suppressed: true });
     });
 
     it('is read from the creator\'s join query and kept for the life of the room', () => {

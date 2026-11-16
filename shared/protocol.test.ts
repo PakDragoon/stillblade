@@ -13,8 +13,8 @@ const cmd: NetCmd = {
 const SNAP_HEAD = 75 + 5 + 7 * GUN_COUNT + 2 + 2 + 1 + 1;
 
 describe('wire format', () => {
-    it('is protocol version 11', () => {
-        expect(PROTOCOL_VERSION).toBe(11);
+    it('is protocol version 12', () => {
+        expect(PROTOCOL_VERSION).toBe(12);
     });
 
     it('round-trips a command exactly, in 26 bytes', () => {

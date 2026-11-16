@@ -7,7 +7,7 @@ import type { InputCmd, Vec3 } from './types';
 import { GUN_COUNT } from './weapons';
 import type { HitZone } from './zones';
 
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 export const DEFAULT_PORT = 8080;
 /** Snapshots per second sent to each client. */
 export const SNAPSHOT_RATE = 30;
@@ -277,7 +277,7 @@ export interface KillMsg {
 
 export type ServerMsg =
     /** `map` is the room's map id (load maps/<map>.json and .glb before spawning); `mapName` its display name. */
-    | { type: 'welcome'; version: number; id: number; team: Team; map: string; mapName: string; time: number; options: RoomOptions }
+    | { type: 'welcome'; version: number; id: number; team: Team; map: string; mapName: string; time: number; options: RoomOptions; room: string }
     | { type: 'snap'; time: number; ack: number; me: SelfSnap; players: PlayerSnap[] }
     | { type: 'spawn'; pos: Vec3; yaw: number }
     | ShotEvent
@@ -292,7 +292,43 @@ export type ServerMsg =
     | KillMsg
     | BombMsg
     /** A server note for this player only (rate limited, idle, refused request). */
-    | { type: 'notice'; text: string };
+    | { type: 'notice'; text: string }
+    /** The room's options changed (the creator, in warmup). */
+    | { type: 'options'; options: RoomOptions }
+    | KickVoteMsg
+    | MapVoteMsg
+    /** The room moved to another map between matches: unload the old one and load this before anything else arrives. */
+    | { type: 'map'; map: string; mapName: string };
+
+/** A vote to remove a player, as everyone sees it. `vote` is null when none is running. */
+export interface KickVoteInfo {
+    target: number;
+    targetName: string;
+    caller: number;
+    callerName: string;
+    yes: number;
+    no: number;
+    /** Yes votes needed to pass. */
+    needed: number;
+    /** Server time (ms) the vote ends. */
+    endsAt: number;
+    /** This recipient's own vote, null while undecided (always null for the target, who cannot vote). */
+    mine: boolean | null;
+}
+export interface KickVoteMsg { type: 'kickvote'; vote: KickVoteInfo | null }
+
+/** The map vote on the result card. `mine` is the recipient's pick (a map id), null if none yet. */
+export interface MapVoteMsg {
+    type: 'mapvote';
+    maps: { id: string; name: string; votes: number }[];
+    /** The map the room is on now: a vote for it is "same map". */
+    current: string;
+    mine: string | null;
+    /** Server time (ms) the vote closes. */
+    closesAt: number;
+    /** Set once the vote is closed: the map the next match is on. */
+    next?: string;
+}
 
 /** Everything except `cmd` is rare and travels as JSON text. */
 export type ClientMsg =
@@ -301,6 +337,15 @@ export type ClientMsg =
     | { type: 'start' }
     | { type: 'team' }
     | { type: 'chat'; team: boolean; text: string }
+    /** Creator only, warmup only: any subset of the options (validated like the join query). */
+    | { type: 'options'; options: Partial<Record<keyof RoomOptions, unknown>> }
+    /** Start a vote to remove `target` (a player id). */
+    | { type: 'votekick'; target: number }
+    | { type: 'votecast'; yes: boolean }
+    /** Creator only, warmup only, two players in the room: remove the other one directly. */
+    | { type: 'removeplayer'; target: number }
+    /** Result card: pick the next map (a map id; the current one means "same map"). */
+    | { type: 'mapvote'; map: string }
     | ReportMsg;
 
 export const CHAT_MAX_CHARS = 120;
@@ -547,6 +592,19 @@ export function decodeClient(data: ArrayBuffer | Uint8Array | string): ClientMsg
             case 'chat':
                 if (typeof m.text !== 'string') throw new Error('bad chat');
                 return { type: 'chat', team: m.team === true, text: m.text };
+            case 'options':
+                if (typeof m.options !== 'object' || m.options === null || Array.isArray(m.options)) throw new Error('bad options');
+                return { type: 'options', options: m.options as Partial<Record<keyof RoomOptions, unknown>> };
+            case 'votekick':
+                if (!Number.isInteger(m.target)) throw new Error('bad vote');
+                return { type: 'votekick', target: m.target as number };
+            case 'removeplayer':
+                if (!Number.isInteger(m.target)) throw new Error('bad removal');
+                return { type: 'removeplayer', target: m.target as number };
+            case 'votecast': return { type: 'votecast', yes: m.yes === true };
+            case 'mapvote':
+                if (typeof m.map !== 'string' || m.map.length > 40) throw new Error('bad map vote');
+                return { type: 'mapvote', map: m.map };
             case 'report': {
                 // Shape only; the server cleans and caps every field (server/src/reports.ts).
                 if ((m.kind !== 'feedback' && m.kind !== 'error') || typeof m.text !== 'string') throw new Error('bad report');

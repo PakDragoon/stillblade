@@ -6,6 +6,8 @@ import { DEFAULT_PORT, decodeClient, encodeServer } from '../../shared/protocol'
 import { parseRoomOptions } from '../../shared/room-options';
 import { defaultMapId, loadMaps } from './maps';
 import { handleReportRequest } from './report-http';
+import { handleRoomsRequest } from './rooms-http';
+import { RoomListCache } from './roomlist';
 import { ConnectionReportLimit, Reports, originAllowed, routeClientMessage } from './reports';
 import { Rooms, cleanRoomId } from './rooms';
 
@@ -29,6 +31,8 @@ function clientIp(req: { headers: Record<string, string | string[] | undefined>;
 
 const TICK_MS = 1000 / TICK_RATE;
 const MAX_ROOMS = 50;
+/** Close code for a player removed by a vote or by the creator (the client shows the reason, and does not reconnect). */
+const KICKED_CLOSE_CODE = 4001;
 const MAX_PLAYERS_PER_ROOM = 10;
 const MAX_CONNECTIONS_PER_IP = 6;
 /** A client sends one command per tick; this allows for bursts after a network hiccup. */
@@ -43,6 +47,7 @@ const maps = loadMaps(mapsDir);
 const rooms = new Rooms(maps, defaultMapId(maps, process.env.SB_DEFAULT_MAP), {
     maxRooms: MAX_ROOMS, maxPlayersPerRoom: MAX_PLAYERS_PER_ROOM
 });
+const roomList = new RoomListCache();
 const perIp = new Map<string, number>();
 const alive = new WeakSet<WebSocket>();
 let ticks = 0;
@@ -55,6 +60,7 @@ const http = createServer((req, res) => {
         return;
     }
     if (handleReportRequest(req, res, { reports, allowedOrigins, clientIp })) return;
+    if (handleRoomsRequest(req, res, { list: () => roomList.get(rooms.rooms), allowedOrigins })) return;
     res.writeHead(404).end();
 });
 
@@ -67,12 +73,23 @@ wss.on('connection', (ws, req) => {
     const open = perIp.get(ip) ?? 0;
     if (open >= MAX_CONNECTIONS_PER_IP) { ws.close(1013, 'Too many connections'); return; }
 
-    // ws://host:port/?room=CODE&name=NICK&map=ID&suppressed=1 (map and options only matter to whoever creates the room)
+    // ws://host:port/?room=CODE&name=NICK&map=ID&suppressed=1&public=1&max=6&rounds=3 (map and options only matter to
+    // whoever creates the room); quick=1 without a room picks the fullest public room, or makes a public one.
     const query = new URL(req.url ?? '/', 'ws://localhost').searchParams;
-    const roomId = cleanRoomId(query.get('room'));
-    const joined = rooms.join(roomId, query.get('map'), {
-        send: msg => { if (ws.readyState === ws.OPEN) ws.send(encodeServer(msg)); }
-    }, query.get('name') ?? '', ticks * TICK_MS, parseRoomOptions(query));
+    const conn = {
+        ip,
+        send: (msg: Parameters<typeof encodeServer>[0]) => { if (ws.readyState === ws.OPEN) ws.send(encodeServer(msg)); },
+        close: (reason: string) => ws.close(KICKED_CLOSE_CODE, reason.slice(0, 120))
+    };
+    const name = query.get('name') ?? '';
+    const options = parseRoomOptions(query);
+    let roomId = cleanRoomId(query.get('room'));
+    if (query.get('quick') === '1' && !query.get('room')) {
+        const found = rooms.quickRoom(conn, name);
+        roomId = found ?? rooms.newQuickCode();
+        if (!found) options.public = true;
+    }
+    const joined = rooms.join(roomId, query.get('map'), conn, name, ticks * TICK_MS, options);
     if (!joined.ok) { ws.close(joined.reason === 'Unknown map' ? 1008 : 1013, joined.reason); return; }
 
     perIp.set(ip, open + 1);

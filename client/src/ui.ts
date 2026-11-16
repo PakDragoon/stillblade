@@ -1,5 +1,8 @@
 import './ui.css';
-import { CHAT_MAX_CHARS, FEEDBACK_MAX_CHARS, type ChatMsg, type RosterEntry, type SummaryMsg, type Team } from '@shared/protocol';
+import {
+    CHAT_MAX_CHARS, FEEDBACK_MAX_CHARS, type ChatMsg, type KickVoteInfo, type MapVoteMsg, type RosterEntry, type SummaryMsg, type Team
+} from '@shared/protocol';
+import type { RoomListEntry } from '@shared/room-list';
 import type { MapListEntry } from '@shared/maps';
 import { DEFAULT_ROOM_OPTIONS, type RoomOptions } from '@shared/room-options';
 import type { Phase } from '@shared/rules';
@@ -7,11 +10,16 @@ import {
     ACTIONS, GROUPS, assignBinding, bindings, clearSecondary, conflictsWith, findConflicts, fullText, hintText,
     inputFromKeyEvent, inputLabel, inputMatches, mouseInput, actionDef, type ActionId, type Slot
 } from './bindings';
+import { optionChips, optionControls, roomListView } from './community-ui';
+import { button, h } from './dom';
 import { reporter } from './report';
 import type { Settings, SettingsStore } from './settings';
 
-/** `suppressed` is a room option: it only applies when this join creates the room ("Create room"). */
-export interface JoinChoice { name: string; room: string; map: string; suppressed?: boolean }
+/**
+ * `options` apply only when this join creates the room ("Create room"); `quick` asks the server for the fullest
+ * public room with space (Quick play), `room` being empty then.
+ */
+export interface JoinChoice { name: string; room: string; map: string; options?: RoomOptions; quick?: boolean }
 
 /** What the menus ask the game to do. The Ui itself never touches the network or the simulation. */
 export interface UiHooks {
@@ -29,6 +37,13 @@ export interface UiHooks {
     isLocked(): boolean;
     /** The chat box took (or returned) the keyboard: game keys must not fire while it is true. */
     typing(on: boolean): void;
+    /** The creator changes room options (warmup only; the server checks). */
+    options(patch: Partial<RoomOptions>): void;
+    /** Start a vote to remove a player, answer the running vote, remove the other player in a room of two, pick the next map. */
+    voteKick(target: number): void;
+    castVote(yes: boolean): void;
+    removePlayer(target: number): void;
+    mapVote(map: string): void;
 }
 
 const WORDS_A = ['amber', 'calm', 'dusk', 'ember', 'frost', 'grey', 'hollow', 'iron', 'jade', 'low', 'mist', 'north', 'quiet', 'raven', 'slate', 'still'];
@@ -47,21 +62,6 @@ function controlRows(): [string, string][] {
     for (const a of ACTIONS) rows.push([fullText(map, a.id), a.label]);
     rows.push(['Esc', 'Pause menu: resume, settings, leave (fixed)']);
     return rows;
-}
-
-function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = '', parent?: HTMLElement): HTMLElementTagNameMap[K] {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text) e.textContent = text;
-    parent?.appendChild(e);
-    return e;
-}
-
-function button(label: string, cls: string, parent: HTMLElement, onClick: () => void): HTMLButtonElement {
-    const b = h('button', cls, label, parent);
-    b.type = 'button';
-    b.addEventListener('click', onClick);
-    return b;
 }
 
 const TEAM_NAME: Record<Team, string> = { ghosts: 'Ghosts', defenders: 'Defenders' };
@@ -84,6 +84,7 @@ export class Ui {
     private readonly chatInput = h('input', '', '', this.chatForm);
     private readonly hint = h('div', '', 'Click to play', this.root);
     private readonly toastEl = h('div', '', '', this.root);
+    private readonly voteBanner = h('div', '', '', this.root);
     private toastTimer = 0;
     /** Scripted runs: no automatic lobby panel, pause menu or click hint. */
     quiet = false;
@@ -110,6 +111,15 @@ export class Ui {
     private pendingBind: { id: ActionId; slot: Slot; input: string; others: ActionId[] } | null = null;
     private bindList: HTMLElement | null = null;
     private feedbackBox: HTMLTextAreaElement | null = null;
+    /** The vote to remove a player that is running, the result card's map vote, and the pieces that show them. */
+    private kickInfo: KickVoteInfo | null = null;
+    private bannerTimer: HTMLElement | null = null;
+    private mapVoteMsg: MapVoteMsg | null = null;
+    private mapVoteBox: HTMLElement | null = null;
+    private mapVoteTimer: HTMLElement | null = null;
+    private mapStatus = '';
+    private pausePlayers: HTMLElement | null = null;
+    private serverNow = 0;
 
     constructor(private readonly settings: SettingsStore, private readonly hooks: UiHooks) {
         this.root.id = 'ui';
@@ -119,6 +129,7 @@ export class Ui {
         this.controls.id = 'controls-screen'; this.result.id = 'result-screen'; this.feedback.id = 'feedback-screen';
         this.strip.id = 'lobby-strip'; this.chatLog.id = 'chat-log'; this.chatForm.id = 'chat-form'; this.hint.id = 'click-hint';
         this.toastEl.id = 'toast';
+        this.voteBanner.id = 'vote-banner';
         this.chatInput.maxLength = CHAT_MAX_CHARS * 2;
         this.chatInput.autocomplete = 'off';
         this.chatInput.spellcheck = false;
@@ -157,6 +168,7 @@ export class Ui {
 
     private open(screen: HTMLElement): void {
         screen.classList.add('open');
+        if (screen === this.pause) this.renderPausePlayers();
         if (this.hooks.isLocked()) this.hooks.unlock();
         this.refreshHint();
     }
@@ -199,6 +211,12 @@ export class Ui {
             return;
         }
         if (!this.inGame) return;
+        const k = this.kickInfo;
+        if (k && k.target !== this.localId && (e.code === 'F1' || e.code === 'F2')) {
+            e.preventDefault(); // F1 is the browser's help key
+            if (!e.repeat) this.hooks.castVote(e.code === 'F1');
+            return;
+        }
         if (e.code === 'Escape') {
             // A browser that reports Esc both as a lock loss and as a key press must not toggle twice.
             if (performance.now() - this.lockLostAt < 200) return;
@@ -249,7 +267,8 @@ export class Ui {
     }
 
     /** The name, room and map choices. `prefillRoom` comes from an invite link. */
-    showMenu(maps: MapListEntry[], defaults: { name: string; room: string; map: string }): Promise<JoinChoice> {
+    showMenu(maps: MapListEntry[], defaults: { name: string; room: string; map: string },
+        loadRooms: () => Promise<RoomListEntry[]> = () => Promise.resolve([])): Promise<JoinChoice> {
         this.hideScreens();
         this.menu.replaceChildren();
         const wrap = h('div', 'wrap', '', this.menu);
@@ -268,13 +287,14 @@ export class Ui {
         const map = h('select', '', '', mapL);
         for (const m of maps) map.add(new Option(m.name, m.id));
         map.value = maps.some(m => m.id === defaults.map) ? defaults.map : maps[0]?.id ?? '';
-        // Room options for "Create room" (shared/room-options.ts); joining keeps the room's own.
-        const supL = h('label', 'opt', '', card);
-        const sup = h('input', '', '', supL);
-        sup.type = 'checkbox'; sup.id = 'opt-suppressed'; sup.checked = false;
-        supL.append('Suppressed weapons');
-        h('small', 'dim', 'Quieter gunshots, smaller muzzle flash', supL);
-        const create = h('button', 'primary', 'Create room', card);
+        // Room options for "Create room" (shared/room-options.ts); joining keeps the room's own. Private unless ticked.
+        let chosen: RoomOptions = { ...DEFAULT_ROOM_OPTIONS };
+        const create = h('button', 'primary', 'Create private room', card);
+        optionControls(card, chosen, patch => {
+            chosen = { ...chosen, ...patch };
+            create.textContent = chosen.public ? 'Create public room' : 'Create private room';
+        }, 'opt-');
+        card.insertBefore(create, null);
         const orRow = h('p', 'or', 'or join friends', card);
         void orRow;
         const joinRow = h('div', 'row', '', card);
@@ -285,7 +305,8 @@ export class Ui {
         const quick = h('button', '', 'Quick play (public room)', card);
         const err = h('p', 'dim', '', card);
 
-        const how = h('aside', 'card', '', wrap);
+        const side = h('div', 'stack', '', wrap);
+        const how = h('aside', 'card', '', side);
         how.id = 'howto';
         let seen = false;
         try { seen = localStorage.getItem('sb-howto') === '1'; } catch { /* storage blocked: show it */ }
@@ -304,19 +325,21 @@ export class Ui {
         setTimeout(() => (defaults.room ? code : name).focus(), 0);
 
         return new Promise(resolve => {
-            const go = (room: string, mapId: string, suppressed = false): void => {
+            const go = (room: string, mapId: string, options?: RoomOptions, quick = false): void => {
                 const n = name.value.trim();
                 try { localStorage.setItem('sb-name', n); localStorage.setItem('sb-howto', '1'); } catch { /* not remembered */ }
-                resolve({ name: n, room, map: mapId, suppressed });
+                resolve({ name: n, room, map: mapId, options, quick });
             };
-            create.addEventListener('click', e => { e.preventDefault(); go(makeRoomCode(), map.value, sup.checked); });
+            const list = roomListView(side, loadRooms, code => go(code, ''));
+            side.insertBefore(list.el, how);
+            create.addEventListener('click', e => { e.preventDefault(); go(makeRoomCode(), map.value, chosen); });
             join.addEventListener('click', e => {
                 e.preventDefault();
                 const c = code.value.trim();
                 if (!c) { err.textContent = 'Enter the room code your friend sent you.'; code.focus(); return; }
                 go(c, '');
             });
-            quick.addEventListener('click', e => { e.preventDefault(); go('', map.value); });
+            quick.addEventListener('click', e => { e.preventDefault(); go('', map.value, undefined, true); });
             card.addEventListener('submit', e => { e.preventDefault(); (code.value.trim() ? join : quick).click(); });
         });
     }
@@ -358,6 +381,18 @@ export class Ui {
         else this.refreshHint();
     }
 
+    /** The creator changed the options (or the room's map changed): the lobby shows them. */
+    setOptions(options: RoomOptions): void {
+        this.options = { ...options };
+        if (this.lobby.classList.contains('open')) this.renderLobby();
+    }
+
+    /** The room moved to another map between matches: invite links and the lobby name it from now on. */
+    setMap(mapId: string, mapName: string): void {
+        this.mapId = mapId;
+        this.mapName = mapName;
+    }
+
     // ---- lobby ------------------------------------------------------------------------------
 
     setPhase(phase: Phase): void {
@@ -375,6 +410,7 @@ export class Ui {
         this.roster = players.map(p => ({ ...p }));
         this.localId = localId;
         if (this.lobby.classList.contains('open')) this.renderLobby();
+        if (this.pause.classList.contains('open')) this.renderPausePlayers();
         this.refreshStrip();
     }
 
@@ -424,9 +460,6 @@ export class Ui {
         const head = h('div', 'head', '', card);
         h('span', 'code', this.room || 'public', head);
         h('span', 'dim', this.mapName, head);
-        // Room options, read-only: the creator chose them when creating the room.
-        h('span', this.options.suppressed ? 'opt on' : 'opt', this.options.suppressed ? 'Suppressed weapons' : 'Unsuppressed weapons', head)
-            .title = 'Chosen by the room creator when the room was made';
         h('span', 'sp', '', head);
         button('Copy invite link', '', head, () => {
             const url = this.inviteUrl();
@@ -434,6 +467,14 @@ export class Ui {
             if (navigator.clipboard?.writeText) navigator.clipboard.writeText(url).then(done, () => this.copyFallback(url));
             else this.copyFallback(url);
         });
+        // Options: the creator edits them in warmup (the server checks again); everyone else sees them as tags.
+        const optRow = h('div', 'optrow', '', card);
+        if (me?.creator && this.phase === 'warmup') optionControls(optRow, this.options, patch => this.hooks.options(patch), 'lobby-opt-');
+        else {
+            const tags = h('div', 'tags', '', optRow);
+            optionChips(tags, this.options);
+            tags.title = 'Chosen by the room creator';
+        }
         const teams = h('div', 'teams', '', card);
         for (const team of ['ghosts', 'defenders'] as const) {
             const col = h('div', `team ${team}`, '', teams);
@@ -444,6 +485,7 @@ export class Ui {
                 const row = h('div', p.id === this.localId ? 'p me' : 'p', p.name, col);
                 if (p.creator) h('span', 'host', 'creator', row);
                 h('span', p.ready ? 'st ready' : 'st', p.ready ? 'Ready' : 'Not ready', row);
+                this.addRemoveButton(row, p);
             }
         }
         const n = { ghosts: 0, defenders: 0 };
@@ -463,6 +505,112 @@ export class Ui {
         const everyone = this.roster.length > 0 && this.roster.every(p => p.ready);
         this.lobbyMsg.textContent = !bothTeams ? 'Waiting for a player on each team. You can walk around in the meantime.'
             : everyone ? 'Everyone is ready: starting.' : 'The match starts when everyone is ready, or the creator starts it.';
+    }
+
+    /**
+     * A small button on another player's row: "Vote out" (three or more players), or "Remove" for the creator in a
+     * room of two in warmup. The server checks every rule again.
+     */
+    private addRemoveButton(row: HTMLElement, p: RosterEntry): void {
+        if (p.id === this.localId) return;
+        const me = this.me();
+        if (this.roster.length === 2 && me?.creator && this.phase === 'warmup') {
+            button('Remove', 'mini danger', row, () => this.hooks.removePlayer(p.id));
+        } else if (this.roster.length >= 3 && !this.kickInfo) {
+            button('Vote out', 'mini', row, () => this.hooks.voteKick(p.id)).title = 'Start a vote to remove this player from the room';
+        }
+    }
+
+    private renderPausePlayers(): void {
+        const box = this.pausePlayers;
+        if (!box) return;
+        box.replaceChildren();
+        const others = this.roster.filter(p => p.id !== this.localId);
+        if (others.length === 0 || this.roster.length < 2) return;
+        h('h3', '', 'Players', box);
+        for (const p of others) {
+            const row = h('div', 'prow', '', box);
+            h('span', '', p.name, row);
+            this.addRemoveButton(row, p);
+        }
+    }
+
+    // ---- vote to remove a player ----------------------------------------------------------------
+
+    /** The vote started, changed or ended (`vote` null). Shown as a banner with the two answer keys. */
+    setKickVote(vote: KickVoteInfo | null, serverNowMs: number): void {
+        this.kickInfo = vote;
+        this.serverNow = serverNowMs;
+        this.voteBanner.replaceChildren();
+        this.bannerTimer = null;
+        this.voteBanner.style.display = vote ? 'block' : 'none';
+        if (this.lobby.classList.contains('open')) this.renderLobby();
+        if (this.pause.classList.contains('open')) this.renderPausePlayers();
+        if (!vote) return;
+        const b = this.voteBanner;
+        h('b', '', `Remove ${vote.targetName} from the room?`, b);
+        h('span', 'dim', ` called by ${vote.callerName}`, b);
+        const line = h('div', 'counts', '', b);
+        line.append(`Yes ${vote.yes} of ${vote.needed} needed · No ${vote.no} · `);
+        this.bannerTimer = h('span', '', '', line);
+        if (vote.target === this.localId) {
+            h('div', 'dim', 'The other players are voting on whether you stay.', b);
+        } else {
+            const row = h('div', 'row', '', b);
+            const yes = button('Yes (F1)', vote.mine === true ? 'go' : '', row, () => this.hooks.castVote(true));
+            const no = button('No (F2)', vote.mine === false ? 'danger on' : 'danger', row, () => this.hooks.castVote(false));
+            yes.title = no.title = vote.mine === null ? 'Your vote' : 'You can change your vote';
+        }
+        this.tickBanner();
+    }
+
+    private tickBanner(): void {
+        const k = this.kickInfo;
+        if (!k || !this.bannerTimer) return;
+        this.bannerTimer.textContent = `${Math.max(0, Math.ceil((k.endsAt - this.serverNow) / 1000))} s left`;
+    }
+
+    // ---- map vote ---------------------------------------------------------------------------------
+
+    /** The map vote changed (or opened); drawn on the result card while it is up. */
+    setMapVote(msg: MapVoteMsg): void {
+        this.mapVoteMsg = msg;
+        this.renderMapVote();
+    }
+
+    /** What the map change is doing ("Downloading Warehouse..."), shown under the vote. */
+    setMapStatus(text: string): void {
+        this.mapStatus = text;
+        this.renderMapVote();
+    }
+
+    private renderMapVote(): void {
+        const box = this.mapVoteBox, msg = this.mapVoteMsg;
+        if (!box) return;
+        box.replaceChildren();
+        this.mapVoteTimer = null;
+        if (!msg || msg.maps.length < 2) { if (msg) h('p', 'dim', 'Next match: same map.', box); return; }
+        const closed = msg.next !== undefined;
+        const nextName = msg.maps.find(m => m.id === msg.next)?.name ?? msg.next ?? '';
+        const head = h('div', 'row', '', box);
+        h('h3', '', closed ? `Next map: ${nextName}` : 'Vote for the next map', head);
+        h('span', 'sp', '', head);
+        if (!closed) this.mapVoteTimer = h('span', 'dim', '', head);
+        const row = h('div', 'picks', '', box);
+        for (const m of msg.maps) {
+            const label = `${m.name}${m.id === msg.current ? ' (same map)' : ''}`;
+            const b = button('', m.id === msg.mine ? 'pick on' : 'pick', row, () => this.hooks.mapVote(m.id));
+            b.disabled = closed;
+            b.append(label);
+            h('span', 'n', String(m.votes), b);
+        }
+        if (this.mapStatus) h('p', 'dim small', this.mapStatus, box);
+        this.tickMapVote();
+    }
+
+    private tickMapVote(): void {
+        if (!this.mapVoteTimer || !this.mapVoteMsg) return;
+        this.mapVoteTimer.textContent = `Voting closes in ${Math.max(0, Math.ceil((this.mapVoteMsg.closesAt - this.serverNow) / 1000))} s`;
     }
 
     private copyFallback(text: string): void {
@@ -496,6 +644,7 @@ export class Ui {
         button('Controls', '', stack, () => { this.renderControls(); this.close(this.pause); this.open(this.controls); });
         button('Send feedback', '', stack, () => this.openFeedback());
         button('Leave room', 'danger', stack, () => this.hooks.leave());
+        this.pausePlayers = h('div', 'plist', '', card);
     }
 
     private buildControls(): void {
@@ -821,6 +970,8 @@ export class Ui {
                 for (const v of [p.kills, p.deaths, p.assists, p.headshots + p.backstabs, p.damage, p.plants, p.defuses]) h('td', '', String(v), tr);
             }
         }
+        this.mapVoteBox = h('div', 'mapvote', '', card);
+        this.renderMapVote();
         const foot = h('div', 'row foot', '', card);
         this.resultCountdown = h('span', 'dim', '', foot);
         h('span', 'sp', '', foot);
@@ -835,13 +986,19 @@ export class Ui {
     hideSummary(): void {
         if (!this.summaryOpen) return;
         this.summaryOpen = false;
+        this.mapVoteBox = null;
+        this.mapVoteMsg = null;
+        this.mapStatus = '';
         this.close(this.result);
         this.refreshStrip();
     }
 
     /** Every frame: counts the result screen down. Writes the DOM only when the second changes. */
     tick(serverNowMs: number): void {
+        this.serverNow = serverNowMs;
+        if (this.kickInfo) this.tickBanner();
         if (!this.summaryOpen || !this.resultCountdown) return;
+        this.tickMapVote();
         const s = Math.max(0, Math.ceil((this.resultNextAt - serverNowMs) / 1000));
         if (s === this.shownCountdown) return;
         this.shownCountdown = s;
