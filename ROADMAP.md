@@ -42,7 +42,8 @@ The owner has no game development experience and expects the game to have every 
 | 2 | D. Rooms and community: room list, room options, vote kick, name filter, map vote (**built and reviewed; merged into branch `wave-2`, protocol 12; on `main` since 2026-11-17; checked in a browser by its build session**) | Sonnet 5.5 | A merged |
 | 3 | E. Bots that fight, and a practice range (**built and reviewed; merged into branch `wave-3`, protocol 13; on `main` since 2026-11-17; never seen in a browser**) | Opus 5.5 | C merged |
 | 3 | F. Hands and animations: first-person hands, real reloads, pistol pose, knife (**built and reviewed; merged into branch `wave-3`, no protocol change; on `main` since 2026-11-17; seen only in Blender renders, never in the game**) | Opus 5.5 | A merged |
-| 4 | G. Graphics tiers and effects | Opus 5.5 | F merged |
+| 4 | L. Menus and settings redesign, scoreboard ping column (owner's feedback on waves 1 to 3) (**built and reviewed; protocol 14; on `main` since 2026-11-17**) | Sonnet 5.5 | nothing |
+| 4 | G. Graphics tiers and effects (**built and reviewed; no protocol change; on `main` since 2026-11-17; frame rate unmeasured**) | Opus 5.5 | F merged |
 | 4 | H. Recorded sounds | Sonnet 5.5 | A merged |
 | 5 | I. Grenades | Opus 5.5 | friends' feedback, G merged |
 | 6 | J. Accounts, saved stats, leaderboard | Opus 5.5 | always-on server |
@@ -148,7 +149,23 @@ Art pipeline plus presentation. CC0 sources already approved: Poly Haven, ambien
 
 **Done means:** short screen recordings or frame sequences of each animation in first and third person under `docs/review/animations/`, draw-call counts, and nothing in `shared/` changed.
 
+## L. Menus and settings redesign (Sonnet 5.5)
+
+**Status (2026-11-17): built, reviewed and on `main`. During the build the owner also asked for a per-player ping column on the scoreboard, which made this package protocol 14 (a server-measured `pings` JSON message; `server/src/ping-probe.ts`). `HANDOFF.md` ("Package L (menus and settings) in detail") has what exists and what was not verified.** The specification below is kept as written. From the owner's feedback after waves 1 to 3: "settings page is too long, we can group stuff like in tabs, so general tab, control tab etc", and the first menu page is one long column with a poor room section; he asked for a proper room page with a private or public choice and the room's settings shown while creating. Client UI only (`client/src/ui.ts`, `ui.css`, `community-ui.ts`, `settings.ts`): no new message, no `PROTOCOL_VERSION` change, nothing in `shared/` or the server. The room options and the `GET /rooms` list already exist (package D, E); this package only rearranges how they are shown.
+
+- **Settings in tabs.** General (name, show FPS and ping, feedback), Controls (key bindings, sensitivity, aim sensitivity, hold or toggle), Video (graphics quality, crosshair), Audio (volumes, hit sound). Each tab fits without a long scroll at 1366x768; the bindings list may scroll inside its tab. Both reset buttons stay, each in its own tab. Settings also open from the main menu (today they exist only in game).
+- **Home page.** A short screen instead of one column: the player's name, then Quick play, Rooms, Practice range, Settings, How to play. Each opens its own page with a Back button; Esc goes back.
+- **Rooms page.** The public room list with refresh and join, a "Join by code" box, and a "Create room" button.
+- **Create room page.** Private or Public as a clear two-way choice at the top (private is the default), then every room option in one form: map, maximum players, rounds to win, suppressed weapons, fill with bots, bot skill. "Create" lands in the lobby. The lobby panel shows the same options in the same order and the creator edits them there in warmup, as now.
+- **Practice page.** Map and side, then start.
+- **Small fixes folded in (open since wave 2):** the HUD title reads "FIRST TO 6" whatever `roundsToWin` is (one constant in `client/src/presenter.ts`); a vote-kick button per player on the Tab scoreboard.
+- Must keep working: `?auto=1`, `?quiet=1`, `?room=`, invite links, the how-to shown once, the phone notice, every hint reading the live key bindings, menus suspending weapon keys.
+
+**Done means:** screenshots of every page and every settings tab at 1366x768 and 1920x1080 under `docs/review/menus/`; create a private and a public room from the new form and see the public one in the list; `npm test` and `npm run typecheck` clean; nothing in `shared/` or `server/` changed.
+
 ## G. Graphics tiers and effects (Opus 5.5)
+
+**Status (2026-11-17): built, reviewed and on `main`; client and map art only, no protocol change. `HANDOFF.md` ("Package G (graphics tiers and effects) in detail") has the tiers, the numbers, the decisions taken and what was not verified (frame rate above all: the owner checks Low on a laptop with `?tier=low`).** The specification below is kept as written.
 
 The game looks flat because of a deliberately strict budget (unlit world, no post-processing, 8 draw calls). Raise both tiers.
 
