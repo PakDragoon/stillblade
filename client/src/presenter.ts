@@ -3,7 +3,7 @@ import {
     EYE_HEIGHT, EYE_HEIGHT_CROUCHED, HEAD_ZONE, HULL_HALF_WIDTH, HULL_HEIGHT, HULL_HEIGHT_CROUCHED
 } from '@shared/constants';
 import type { RosterEntry, Team } from '@shared/protocol';
-import { ROUNDS_TO_WIN, type Phase, type RoundReason } from '@shared/rules';
+import { type Phase, type RoundReason } from '@shared/rules';
 import type { Box, Vec3 } from '@shared/types';
 import { corpseYaw } from './corpse';
 import type { CreatePresenter, CrosshairConfig, KillKind, LocalView, MatchView, RemoteView } from './presenter-api';
@@ -494,6 +494,8 @@ body.sb-lowhp #sb-low { display: block; }
 #sb-scores .row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #sb-scores .row span + span { text-align: right; font-variant-numeric: tabular-nums; }
 #sb-scores .row.cols { opacity: .5; font-size: 10px; letter-spacing: .2em; padding-bottom: 2px; }
+#sb-scores .row { position: relative; }
+#sb-scores .row button.kick { position: absolute; right: -78px; top: 1px; pointer-events: auto; font: 700 11px system-ui, sans-serif; padding: 3px 7px; background: rgba(10,12,16,.9); color: #ff9a8f; border: 1px solid rgba(255,90,74,.5); cursor: pointer; }
 #sb-scores .row.dead { opacity: .38; }
 #sb-scores .row.me { background: rgba(255,255,255,.14); outline: 1px solid rgba(255,255,255,.4); font-weight: 700; }
 #sb-scores .empty { padding: 4px 6px; opacity: .4; font-style: italic; }
@@ -1361,7 +1363,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     let shownActPct = -1;
     let shownScores = false;
     let scoresRosterV = -1, scoresLocalId = -1, scoresTeam: Team | null = null;
-    let scoresG = -1, scoresD = -1, scoresRound = -1, scoresCarrier = -1;
+    let scoresG = -1, scoresD = -1, scoresRound = -1, scoresCarrier = -1, scoresWin = -1;
+    let voteKick: ((playerId: number) => void) | null = null;
     let shownDeadKey = NaN;
     let shownDeadEl = false;
 
@@ -1679,7 +1682,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
 
     const renderScores = (local: LocalView, match: MatchView): void => {
         scoresEl.replaceChildren();
-        div('', scoresEl, 'title').textContent = `ROUND ${match.round} · FIRST TO ${ROUNDS_TO_WIN}`;
+        div('', scoresEl, 'title').textContent = `ROUND ${match.round} · FIRST TO ${match.roundsToWin}`;
         const teams: Team[] = local.team === 'ghosts' ? ['ghosts', 'defenders'] : ['defenders', 'ghosts'];
         for (const team of teams) {
             const hdr = div('', scoresEl, team === local.team ? `hdr ${team} mine` : `hdr ${team}`);
@@ -1697,6 +1700,13 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                 span(row, '', String(p.kills));
                 span(row, '', String(p.deaths));
                 span(row, '', String(p.assists));
+                if (voteKick && !p.bot && p.id !== local.id) {
+                    const id = p.id, kick = voteKick;
+                    const b = document.createElement('button');
+                    b.type = 'button'; b.className = 'kick'; b.textContent = 'Vote out'; b.title = 'Start a vote to remove this player from the room';
+                    b.addEventListener('click', () => kick(id));
+                    row.appendChild(b);
+                }
             }
         }
     };
@@ -1709,9 +1719,9 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         if (!shownScores) return;
         if (rosterVersion === scoresRosterV && local.id === scoresLocalId && local.team === scoresTeam &&
             match.scoreGhosts === scoresG && match.scoreDefenders === scoresD && match.round === scoresRound &&
-            match.carrierId === scoresCarrier) return;
+            match.carrierId === scoresCarrier && match.roundsToWin === scoresWin) return;
         scoresRosterV = rosterVersion; scoresLocalId = local.id; scoresTeam = local.team;
-        scoresG = match.scoreGhosts; scoresD = match.scoreDefenders; scoresRound = match.round; scoresCarrier = match.carrierId;
+        scoresG = match.scoreGhosts; scoresD = match.scoreDefenders; scoresRound = match.round; scoresCarrier = match.carrierId; scoresWin = match.roundsToWin;
         renderScores(local, match);
     };
 
@@ -1734,6 +1744,11 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             updateBanner(dt, local, match);
             updateUse(dt, local);
             updateScores(local, match);
+        },
+
+        setVoteKick(kick: ((playerId: number) => void) | null): void {
+            voteKick = kick;
+            rosterVersion++; // redraw the scoreboard rows
         },
 
         roster(players: readonly RosterEntry[]): void {

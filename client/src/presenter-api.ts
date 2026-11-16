@@ -144,6 +144,8 @@ export interface MatchView {
     reason: RoundReason | null;
     /** The round just won also decided the match. */
     matchOver: boolean;
+    /** Rounds a side needs to win this room's match (3, 6 or 9: the room option); the title of the scoreboard names it. */
+    roundsToWin: number;
 }
 
 /** How a hit or kill was made (shared/protocol.ts); shots also come with the body zone they hit. */
@@ -209,6 +211,12 @@ export interface Presenter {
      * shown under the crosshair area for a few seconds. A newer one replaces it.
      */
     bombNotice(text: string): void;
+    /**
+     * Vote-kick on the scoreboard: when `kick` is set, every row of another human player gets a small "Vote out"
+     * button that calls `kick(playerId)`; null (a vote cannot be called now) hides them. The buttons can be clicked
+     * only while the mouse pointer is free.
+     */
+    setVoteKick(kick: ((playerId: number) => void) | null): void;
     /** A kill anywhere in the room. `zone` as in `died`. */
     killFeed(killerId: number, victimId: number, kind: KillKind, zone: HitZone | null, weapon?: string): void;
 }
