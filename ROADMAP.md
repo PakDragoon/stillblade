@@ -36,12 +36,12 @@ The owner has no game development experience and expects the game to have every 
 
 | Wave | Package | Model | Depends on |
 |---|---|---|---|
-| 1 | A. Combat core: defender knife, body-part damage, suppressor option (**built and reviewed; merged into branch `wave-1`, protocol 9; not yet on `main`**) | Opus 5.5 | nothing |
-| 1 | B. Client utilities: key bindings, phone notice, feedback button, error reports (**built and reviewed; merged into branch `wave-1`, protocol 10; not yet on `main`**) | Sonnet 5.5 | nothing |
-| 2 | C. Bomb carrier (**built and reviewed; merged into branch `wave-2`, protocol 11; not yet on `main`; checked in a browser by its build session**) | Opus 5.5 | A merged |
-| 2 | D. Rooms and community: room list, room options, vote kick, name filter, map vote (**built and reviewed; merged into branch `wave-2`, protocol 12; not yet on `main`; checked in a browser by its build session**) | Sonnet 5.5 | A merged |
-| 3 | E. Bots that fight, and a practice range (**built and reviewed; merged into branch `wave-3`, protocol 13; not yet on `main`; never seen in a browser**) | Opus 5.5 | C merged |
-| 3 | F. Hands and animations: first-person hands, real reloads, pistol pose, knife (**built and reviewed; merged into branch `wave-3`, no protocol change; not yet on `main`; seen only in Blender renders, never in the game**) | Opus 5.5 | A merged |
+| 1 | A. Combat core: defender knife, body-part damage, suppressor option (**built and reviewed; merged into branch `wave-1`, protocol 9; on `main` since 2026-11-17**) | Opus 5.5 | nothing |
+| 1 | B. Client utilities: key bindings, phone notice, feedback button, error reports (**built and reviewed; merged into branch `wave-1`, protocol 10; on `main` since 2026-11-17**) | Sonnet 5.5 | nothing |
+| 2 | C. Bomb carrier (**built and reviewed; merged into branch `wave-2`, protocol 11; on `main` since 2026-11-17; checked in a browser by its build session**) | Opus 5.5 | A merged |
+| 2 | D. Rooms and community: room list, room options, vote kick, name filter, map vote (**built and reviewed; merged into branch `wave-2`, protocol 12; on `main` since 2026-11-17; checked in a browser by its build session**) | Sonnet 5.5 | A merged |
+| 3 | E. Bots that fight, and a practice range (**built and reviewed; merged into branch `wave-3`, protocol 13; on `main` since 2026-11-17; never seen in a browser**) | Opus 5.5 | C merged |
+| 3 | F. Hands and animations: first-person hands, real reloads, pistol pose, knife (**built and reviewed; merged into branch `wave-3`, no protocol change; on `main` since 2026-11-17; seen only in Blender renders, never in the game**) | Opus 5.5 | A merged |
 | 4 | G. Graphics tiers and effects | Opus 5.5 | F merged |
 | 4 | H. Recorded sounds | Sonnet 5.5 | A merged |
 | 5 | I. Grenades | Opus 5.5 | friends' feedback, G merged |
@@ -56,7 +56,7 @@ Housekeeping folded into package A: the unused `IDLE_MS` is deleted on its branc
 
 ## A. Combat core (Opus 5.5)
 
-**Status (2026-11-16): built, reviewed and merged into branch `wave-1` (protocol 9); not yet on `main`. What was built, every decision taken, and what was not verified are in `HANDOFF.md` ("Package A (combat core) in detail"). Open point for the reviewer: the existing shot-event position leak and its suggested fix (`HANDOFF.md`, Known problems). Package B merges after it.** The specification below is kept as written.
+**Status (2026-11-16): built, reviewed and merged into branch `wave-1` (protocol 9); on `main` since 2026-11-17. What was built, every decision taken, and what was not verified are in `HANDOFF.md` ("Package A (combat core) in detail"). Open point for the reviewer: the existing shot-event position leak and its suggested fix (`HANDOFF.md`, Known problems). Package B merges after it.** The specification below is kept as written.
 
 Three changes to the same combat code, so one package. Shared simulation and binary format: read the rules in `HANDOFF.md` first, and keep `server/src/prediction.test.ts` passing.
 
@@ -78,7 +78,7 @@ Put the zone function and the multipliers in `shared/` (a table next to the weap
 
 ## B. Client utilities (Sonnet 5.5)
 
-**Status (2026-11-16): built, reviewed and merged into branch `wave-1` (protocol 10); not yet on `main`. `HANDOFF.md` ("Client utilities") describes what exists and what was not verified.**
+**Status (2026-11-16): built, reviewed and merged into branch `wave-1` (protocol 10); on `main` since 2026-11-17. `HANDOFF.md` ("Client utilities") describes what exists and what was not verified.**
 
 Client-side features plus two tiny server endpoints. Stays out of `shared/gun.ts`, `shared/knife.ts`, the binary format and the prediction loop.
 
@@ -92,7 +92,7 @@ Client-side features plus two tiny server endpoints. Stays out of `shared/gun.ts
 
 ## C. Bomb carrier (Opus 5.5)
 
-**Status (2026-11-16): built, reviewed and merged into branch `wave-2` (protocol 11); not yet on `main`. The carrier is chosen by rotation, not at random (no `Math.random` in the simulation). No screenshots exist: the build froze at that step. See `HANDOFF.md` ("Wave 2").** The specification below is kept as written.
+**Status (2026-11-16): built, reviewed and merged into branch `wave-2` (protocol 11); on `main` since 2026-11-17. The carrier is chosen by rotation, not at random (no `Math.random` in the simulation). No screenshots exist: the build froze at that step. See `HANDOFF.md` ("Wave 2").** The specification below is kept as written.
 
 Today any ghost can plant. Change to one bomb.
 
@@ -107,7 +107,7 @@ Today any ghost can plant. Change to one bomb.
 
 ## D. Rooms and community (Sonnet 5.5)
 
-**Status (2026-11-16): built, reviewed and merged into branch `wave-2` (protocol 12); not yet on `main`. `fillBots` is stored and shown only, for package E. No screenshots exist: the build froze at that step. See `HANDOFF.md` ("Wave 2").** The specification below is kept as written.
+**Status (2026-11-16): built, reviewed and merged into branch `wave-2` (protocol 12); on `main` since 2026-11-17. `fillBots` is stored and shown only, for package E. No screenshots exist: the build froze at that step. See `HANDOFF.md` ("Wave 2").** The specification below is kept as written.
 
 JSON messages and UI only. Builds on the `RoomOptions` from package A (`shared/room-options.ts`: add a field, a line in `parseRoomOptions`, and a row in the lobby panel; the create-room form in `client/src/ui.ts` sends them as query parameters).
 
@@ -121,7 +121,7 @@ JSON messages and UI only. Builds on the `RoomOptions` from package A (`shared/r
 
 ## E. Bots that fight, and a practice range (Opus 5.5)
 
-**Status (2026-11-16): built, reviewed and merged into branch `wave-3` (protocol 13); not yet on `main`; nothing seen in a browser. `HANDOFF.md` ("Package E (bots and practice range)") has what exists, the decisions taken, the bench and match numbers and what was not verified. Decisions taken beyond this text: fill keeps each team at half of `maxPlayers`; bot difficulty is a room option (`botLevel`, default normal); bots are named "BOT <name>" and flagged in the roster; practice targets are fully visible ghosts or defenders that never fire, placed in view of the person's spawn; damage per hit travels in `hitconfirm.damage` for everyone. Open point for the owner: ghost bots almost never win a round against defender bots on normal or hard (tuning, after he has played). The reviewer should read `server/src/bots.ts` against the information rule (the brain's inputs are listed at the top of the file).** The specification below is kept as written.
+**Status (2026-11-16): built, reviewed and merged into branch `wave-3` (protocol 13); on `main` since 2026-11-17; nothing seen in a browser. `HANDOFF.md` ("Package E (bots and practice range)") has what exists, the decisions taken, the bench and match numbers and what was not verified. Decisions taken beyond this text: fill keeps each team at half of `maxPlayers`; bot difficulty is a room option (`botLevel`, default normal); bots are named "BOT <name>" and flagged in the roster; practice targets are fully visible ghosts or defenders that never fire, placed in view of the person's spawn; damage per hit travels in `hitconfirm.damage` for everyone. Open point for the owner: ghost bots almost never win a round against defender bots on normal or hard (tuning, after he has played). The reviewer should read `server/src/bots.ts` against the information rule (the brain's inputs are listed at the top of the file).** The specification below is kept as written.
 
 A player who opens the game alone should have something to do.
 
@@ -137,7 +137,7 @@ A player who opens the game alone should have something to do.
 
 ## F. Hands and animations (Opus 5.5)
 
-**Status (2026-11-16): built, reviewed and merged into branch `wave-3`; not yet on `main`; client and art only, `shared/` untouched, no protocol change. `HANDOFF.md` ("Package F (hands and animations) in detail") lists what was built, the decisions taken (one skinned mesh per weapon rig, clips sampled by reload progress, suppressor hidden by a bone, the swing driven by the windup and slash events, the body turned toward open floor), draw calls, and what was not verified. For the reviewer: nothing was seen in the game; check the hands at real screen sizes first.** The specification below is kept as written.
+**Status (2026-11-16): built, reviewed and merged into branch `wave-3`; on `main` since 2026-11-17; client and art only, `shared/` untouched, no protocol change. `HANDOFF.md` ("Package F (hands and animations) in detail") lists what was built, the decisions taken (one skinned mesh per weapon rig, clips sampled by reload progress, suppressor hidden by a bone, the swing driven by the windup and slash events, the body turned toward open floor), draw calls, and what was not verified. For the reviewer: nothing was seen in the game; check the hands at real screen sizes first.** The specification below is kept as written.
 
 Art pipeline plus presentation. CC0 sources already approved: Poly Haven, ambientCG, Quaternius, Kenney, KayKit; record every file in a `CREDITS.md`.
 
