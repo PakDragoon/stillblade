@@ -38,8 +38,8 @@ The owner has no game development experience and expects the game to have every 
 |---|---|---|---|
 | 1 | A. Combat core: defender knife, body-part damage, suppressor option (**built and reviewed; merged into branch `wave-1`, protocol 9; not yet on `main`**) | Opus 5.5 | nothing |
 | 1 | B. Client utilities: key bindings, phone notice, feedback button, error reports (**built and reviewed; merged into branch `wave-1`, protocol 10; not yet on `main`**) | Sonnet 5.5 | nothing |
-| 2 | C. Bomb carrier | Opus 5.5 | A merged |
-| 2 | D. Rooms and community: room list, room options, vote kick, name filter, map vote | Sonnet 5.5 | A merged |
+| 2 | C. Bomb carrier (**built and reviewed; merged into branch `wave-2`, protocol 11; not yet on `main`; never seen in a browser**) | Opus 5.5 | A merged |
+| 2 | D. Rooms and community: room list, room options, vote kick, name filter, map vote (**built and reviewed; merged into branch `wave-2`, protocol 12; not yet on `main`; never seen in a browser**) | Sonnet 5.5 | A merged |
 | 3 | E. Bots that fight, and a practice range | Opus 5.5 | C merged |
 | 3 | F. Hands and animations: first-person hands, real reloads, pistol pose, knife | Opus 5.5 | A merged |
 | 4 | G. Graphics tiers and effects | Opus 5.5 | F merged |
@@ -92,6 +92,8 @@ Client-side features plus two tiny server endpoints. Stays out of `shared/gun.ts
 
 ## C. Bomb carrier (Opus 5.5)
 
+**Status (2026-11-16): built, reviewed and merged into branch `wave-2` (protocol 11); not yet on `main`. The carrier is chosen by rotation, not at random (no `Math.random` in the simulation). No screenshots exist: the build froze at that step. See `HANDOFF.md` ("Wave 2").** The specification below is kept as written.
+
 Today any ghost can plant. Change to one bomb.
 
 - At round start one random living ghost carries the bomb. Only the carrier can plant (`canAct` in `shared/rules.ts`).
@@ -104,6 +106,8 @@ Today any ghost can plant. Change to one bomb.
 **Done means:** tests for assignment, drop on death, manual drop, pickup, the pickup delay, plant refused for non-carriers, and that a defender out of sight never receives the dropped position; browser check of a drop, pickup and plant; HUD and radar screenshots.
 
 ## D. Rooms and community (Sonnet 5.5)
+
+**Status (2026-11-16): built, reviewed and merged into branch `wave-2` (protocol 12); not yet on `main`. `fillBots` is stored and shown only, for package E. No screenshots exist: the build froze at that step. See `HANDOFF.md` ("Wave 2").** The specification below is kept as written.
 
 JSON messages and UI only. Builds on the `RoomOptions` from package A (`shared/room-options.ts`: add a field, a line in `parseRoomOptions`, and a row in the lobby panel; the create-room form in `client/src/ui.ts` sends them as query parameters).
 
