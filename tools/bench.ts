@@ -1,4 +1,5 @@
-// Measures what one full room costs the server: `npx tsx tools/bench.ts [map id]`.
+// Measures what one full room costs the server: `npx tsx tools/bench.ts [map id] [--bots]`.
+// `--bots`: ten server bots (five a side) play real rounds for two simulated minutes instead.
 // Ten players all running, strafing and attacking for a simulated minute, snapshots encoded as
 // they would be on the wire. The map defaults to the server's default map.
 import { fileURLToPath } from 'node:url';
@@ -12,9 +13,33 @@ const SECONDS = 60;
 const TICK_MS = 1000 / TICK_RATE;
 
 const maps = loadMaps(fileURLToPath(new URL('../client/public/maps', import.meta.url)));
-const mapId = process.argv[2] ?? defaultMapId(maps);
+const args = process.argv.slice(2);
+const mapId = args.find(a => !a.startsWith('--')) ?? defaultMapId(maps);
 const map = maps.get(mapId);
 if (!map) throw new Error(`unknown map ${mapId} (have: ${[...maps.keys()].join(', ')})`);
+if (args.includes('--bots')) {
+    const botGame = new Game(map, {});
+    botGame.code = 'bench';
+    for (let i = 0; i < PLAYERS / 2; i++) { botGame.addBot('ghosts'); botGame.addBot('defenders'); }
+    const ticks = 2 * SECONDS * TICK_RATE;
+    const times = new Float64Array(ticks);
+    const t0 = performance.now();
+    for (let t = 1; t <= ticks; t++) {
+        const a = performance.now();
+        botGame.tick(t * TICK_MS);
+        times[t - 1] = performance.now() - a;
+    }
+    const total = performance.now() - t0;
+    const sorted = [...times].sort((x, y) => x - y);
+    const pct = (q: number): number => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+    console.log(`map ${map.name}: ${PLAYERS} bots, ${2 * SECONDS} s simulated (${botGame.roundsPlayed} rounds finished) in ${total.toFixed(0)} ms`);
+    let firstSecond = 0, later = 0;
+    for (let i = 0; i < ticks; i++) { if (i < TICK_RATE) firstSecond = Math.max(firstSecond, times[i]); else later = Math.max(later, times[i]); }
+    console.log(`average ${(total / ticks).toFixed(3)} ms per tick, median ${pct(0.5).toFixed(3)}, 99th percentile ${pct(0.99).toFixed(3)}; ` +
+        `worst ${later.toFixed(2)} ms (first second, while the graph is built and the code warms up: ${firstSecond.toFixed(2)} ms)`);
+    process.exit(0);
+}
+
 const game = new Game(map, { rounds: false }); // warmup keeps everyone alive and moving
 
 let bytes = 0;

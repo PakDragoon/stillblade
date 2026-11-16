@@ -1,3 +1,5 @@
+import type { NavData } from './nav';
+
 /** Engine space: Y up, right-handed, -Z forward, metres. */
 export type Vec3 = [number, number, number];
 
@@ -29,6 +31,8 @@ export interface MapData {
     baked?: string;
     /** Render setup for the client (textures, lightmap encoding, sky). Visual only. */
     look?: MapLook;
+    /** The bots' navigation graph (shared/nav.ts), written by the map verifier. Only the server reads it. */
+    nav?: NavData;
 }
 
 /** Written by tools/blender/mapbuilder.py; consumed by client/src/maplook.ts. File names are next to the map. */

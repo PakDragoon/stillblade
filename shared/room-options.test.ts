@@ -5,7 +5,7 @@ import {
 
 describe('room options from the join query', () => {
     it('defaults: private, ten players, first to six, unsuppressed, no bots', () => {
-        expect(DEFAULT_ROOM_OPTIONS).toEqual({ suppressed: false, public: false, maxPlayers: 10, roundsToWin: 6, fillBots: false });
+        expect(DEFAULT_ROOM_OPTIONS).toEqual({ suppressed: false, public: false, maxPlayers: 10, roundsToWin: 6, fillBots: false, botLevel: 'normal' });
         expect(parseRoomOptions(new URLSearchParams(''))).toEqual(DEFAULT_ROOM_OPTIONS);
         expect(parseRoomOptions(new URLSearchParams('room=x&map=warehouse'))).toEqual(DEFAULT_ROOM_OPTIONS);
     });
@@ -19,8 +19,9 @@ describe('room options from the join query', () => {
     });
 
     it('reads every option, and any invalid value falls back to the default', () => {
-        expect(parseRoomOptions(new URLSearchParams('public=1&max=4&rounds=3&bots=1&suppressed=1')))
-            .toEqual({ suppressed: true, public: true, maxPlayers: 4, roundsToWin: 3, fillBots: true });
+        expect(parseRoomOptions(new URLSearchParams('public=1&max=4&rounds=3&bots=1&suppressed=1&level=hard')))
+            .toEqual({ suppressed: true, public: true, maxPlayers: 4, roundsToWin: 3, fillBots: true, botLevel: 'hard' });
+        for (const bad of ['', 'HARD', 'expert', '1']) expect(parseRoomOptions(new URLSearchParams(`level=${bad}`)).botLevel, bad).toBe('normal');
         for (const bad of ['0', '1', '11', '-3', '2.5', 'abc', '', '999999', '1e1']) {
             expect(parseRoomOptions(new URLSearchParams(`max=${bad}`)).maxPlayers, bad).toBe(10);
         }
@@ -34,11 +35,12 @@ describe('room options from the join query', () => {
     });
 
     it('cleans a JSON object field by field, keeping the base for anything invalid', () => {
-        const base = { suppressed: true, public: true, maxPlayers: 5, roundsToWin: 9, fillBots: false };
+        const base = { suppressed: true, public: true, maxPlayers: 5, roundsToWin: 9, fillBots: false, botLevel: 'easy' as const };
         expect(cleanRoomOptions({}, base)).toEqual(base);
         expect(cleanRoomOptions({ maxPlayers: 7, roundsToWin: 4, public: 'nope', suppressed: false }, base))
-            .toEqual({ suppressed: false, public: true, maxPlayers: 7, roundsToWin: 9, fillBots: false });
-        expect(cleanRoomOptions({ maxPlayers: 99, fillBots: true }, base)).toMatchObject({ maxPlayers: 5, fillBots: true });
+            .toEqual({ suppressed: false, public: true, maxPlayers: 7, roundsToWin: 9, fillBots: false, botLevel: 'easy' });
+        expect(cleanRoomOptions({ maxPlayers: 99, fillBots: true, botLevel: 'hard' }, base)).toMatchObject({ maxPlayers: 5, fillBots: true, botLevel: 'hard' });
+        expect(cleanRoomOptions({ botLevel: 'impossible' }, base).botLevel).toBe('easy');
         expect(cleanRoomOptions({ maxPlayers: null, roundsToWin: {} as unknown }, base)).toEqual(base);
     });
 
@@ -46,7 +48,7 @@ describe('room options from the join query', () => {
         const q = new URLSearchParams();
         roomOptionsQuery(DEFAULT_ROOM_OPTIONS, q);
         expect(q.toString()).toBe('');
-        const all = { suppressed: true, public: true, maxPlayers: 3, roundsToWin: 9, fillBots: true };
+        const all = { suppressed: true, public: true, maxPlayers: 3, roundsToWin: 9, fillBots: true, botLevel: 'easy' as const };
         roomOptionsQuery(all, q);
         expect(parseRoomOptions(q)).toEqual(all);
     });

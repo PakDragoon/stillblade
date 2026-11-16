@@ -5,13 +5,14 @@ import type { Game } from './game';
 export function listPublicRooms(rooms: ReadonlyMap<string, Game>): RoomListEntry[] {
     const out: RoomListEntry[] = [];
     for (const [code, game] of rooms) {
-        if (!game.options.public || game.players.size === 0) continue;
+        if (!game.options.public || game.humanCount() === 0) continue;
         const inMatch = game.matchInProgress();
         out.push({
             code,
             map: game.map.name,
             mapName: game.map.displayName ?? game.map.name,
-            players: game.players.size,
+            players: game.humanCount(),
+            bots: game.players.size - game.humanCount(),
             capacity: game.options.maxPlayers,
             phase: inMatch ? 'match' : 'lobby',
             score: inMatch ? { ghosts: game.score[game.ghostGroup], defenders: game.score[1 - game.ghostGroup] } : null,
@@ -46,7 +47,7 @@ export function fullestPublicRoom(rooms: ReadonlyMap<string, Game>, canJoin: (ga
     let best: string | null = null;
     let bestPlayers = 0;
     for (const [code, game] of rooms) { // insertion order = oldest first, so a strict comparison keeps the oldest on a tie
-        const n = game.players.size;
+        const n = game.humanCount(); // bots make way for people
         if (!game.options.public || n === 0 || n >= game.options.maxPlayers || !canJoin(game)) continue;
         if (n > bestPlayers) { best = code; bestPlayers = n; }
     }

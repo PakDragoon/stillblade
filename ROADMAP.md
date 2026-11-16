@@ -40,7 +40,7 @@ The owner has no game development experience and expects the game to have every 
 | 1 | B. Client utilities: key bindings, phone notice, feedback button, error reports (**built and reviewed; merged into branch `wave-1`, protocol 10; not yet on `main`**) | Sonnet 5.5 | nothing |
 | 2 | C. Bomb carrier (**built and reviewed; merged into branch `wave-2`, protocol 11; not yet on `main`; never seen in a browser**) | Opus 5.5 | A merged |
 | 2 | D. Rooms and community: room list, room options, vote kick, name filter, map vote (**built and reviewed; merged into branch `wave-2`, protocol 12; not yet on `main`; never seen in a browser**) | Sonnet 5.5 | A merged |
-| 3 | E. Bots that fight, and a practice range | Opus 5.5 | C merged |
+| 3 | E. Bots that fight, and a practice range (**built on branch `claude/bots-practice-046461` from `wave-2`, protocol 13, 364 tests; not yet reviewed or merged; never seen in a browser**) | Opus 5.5 | C merged |
 | 3 | F. Hands and animations: first-person hands, real reloads, pistol pose, knife | Opus 5.5 | A merged |
 | 4 | G. Graphics tiers and effects | Opus 5.5 | F merged |
 | 4 | H. Recorded sounds | Sonnet 5.5 | A merged |
@@ -120,6 +120,8 @@ JSON messages and UI only. Builds on the `RoomOptions` from package A (`shared/r
 **Done means:** tests for list contents (private rooms never listed), option validation, vote thresholds and cooldowns, the rejoin ban, name filtering, vote counting and the map swap; browser checks of the list, a kick, and a map change between matches with bots; screenshots.
 
 ## E. Bots that fight, and a practice range (Opus 5.5)
+
+**Status (2026-11-16): built on branch `claude/bots-practice-046461` (from `wave-2`), protocol 13, 364 tests; not reviewed, not merged, nothing seen in a browser. `HANDOFF.md` ("Package E (bots and practice range)") has what exists, the decisions taken, the bench and match numbers and what was not verified. Decisions taken beyond this text: fill keeps each team at half of `maxPlayers`; bot difficulty is a room option (`botLevel`, default normal); bots are named "BOT <name>" and flagged in the roster; practice targets are fully visible ghosts or defenders that never fire, placed in view of the person's spawn; damage per hit travels in `hitconfirm.damage` for everyone. Open point for the owner: ghost bots almost never win a round against defender bots on normal or hard (tuning, after he has played). The reviewer should read `server/src/bots.ts` against the information rule (the brain's inputs are listed at the top of the file).** The specification below is kept as written.
 
 A player who opens the game alone should have something to do.
 

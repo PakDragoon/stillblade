@@ -1150,8 +1150,12 @@ def write_json(b, baked, with_paint):
         data["baked"] = baked     # lighting atlas, sampled with TEXCOORD_1 of the GLB
         data["look"] = look_data(b, with_paint)
     os.makedirs(OUT_DIR, exist_ok=True)
+    text = json.dumps(data, indent=2)
+    nav = getattr(b.m, "nav", None)     # set by mapkit.verify: the bots' navigation graph
+    if nav:
+        text = text[:-2] + ',\n  "nav": ' + mapkit.nav_json(nav) + "\n}"
     with open(b.json_path, "w", encoding="utf-8", newline="\n") as f:
-        json.dump(data, f, indent=2)
+        f.write(text)
         f.write("\n")
     return data
 

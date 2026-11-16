@@ -5,7 +5,7 @@ import {
 } from '@shared/constants';
 import {
     GUN_DRY, GUN_RELOAD, MELEE_SLASH, MELEE_SWING, aimFraction, copyLoadout, createLoadout, heldGun, heldWeapon,
-    justSwitched, recoilPitch, recoilScale, recoilYaw, resetLoadout, sameLoadout, shotDirectionFor, spreadAngle, stepLoadout
+    fillReserves, justSwitched, recoilPitch, recoilScale, recoilYaw, resetLoadout, sameLoadout, shotDirectionFor, spreadAngle, stepLoadout
 } from '@shared/gun';
 import { DEFENDER_KNIFE, GUN_COUNT, SLOT_COUNT, SLOT_KNIFE, WEAPONS, slotLabel } from '@shared/weapons';
 import { DEFAULT_ROOM_OPTIONS, parseRoomOptions, roomOptionsQuery } from '@shared/room-options';
@@ -224,7 +224,10 @@ async function start(): Promise<void> {
     let rejoin: JoinChoice | null = null;
     try { rejoin = JSON.parse(sessionStorage.getItem('sb-rejoin') ?? 'null') as JoinChoice | null; } catch { /* none */ }
     // ?auto=1 also takes the creation options from the page address (public=1&max=4&rounds=3&suppressed=1) and quick=1.
-    if (auto) choice = { name: params.get('name') ?? saved, room: params.get('room') ?? '', map: params.get('map') ?? '', options: parseRoomOptions(params), quick: params.get('quick') === '1' };
+    if (auto) {
+        choice = { name: params.get('name') ?? saved, room: params.get('room') ?? '', map: params.get('map') ?? '', options: parseRoomOptions(params), quick: params.get('quick') === '1' };
+        if (params.get('practice') === '1') choice.practice = params.get('side') === 'ghosts' ? 'ghosts' : 'defenders';
+    }
     else if (rejoin && typeof rejoin.room === 'string') choice = rejoin;
     else {
         const wanted = params.get('map') ?? '';
@@ -243,6 +246,8 @@ async function start(): Promise<void> {
     // Options only matter when this join creates the room; an existing room keeps its own. Quick play (no room code)
     // asks the server for the fullest public room with space.
     if (choice.quick && !choice.room) query.set('quick', '1');
+    // The practice range: the server makes a private room of our own on the chosen map (a reconnect makes a new one).
+    if (choice.practice) { query.set('practice', '1'); query.set('side', choice.practice); query.delete('room'); }
     roomOptionsQuery(choice.options ?? DEFAULT_ROOM_OPTIONS, query);
     const serverUrl = `${serverBase}/?${query}`;
 
@@ -369,6 +374,8 @@ async function start(): Promise<void> {
     const shotEnd: Vec3 = [0, 0, 0];
     /** The room's suppressed-weapons option, from the welcome; the creator may change it in warmup. */
     let suppressed = welcome.options.suppressed;
+    /** A practice range: the server keeps reserves full, so prediction does too (shared/gun.ts fillReserves). */
+    const practice = welcome.practice;
     presenter.setSuppressed(suppressed);
 
     /**
@@ -467,7 +474,10 @@ async function start(): Promise<void> {
                 const c = pending[i];
                 stepPlayer(curr, c, TICK_DT, boxes);
                 if (!c.live) continue;
-                if (defender) stepLoadout(loadout, c, c.armed);
+                if (defender) {
+                    stepLoadout(loadout, c, c.armed);
+                    if (practice) fillReserves(loadout); // as the server does in a practice range
+                }
                 else stepKnife(knife, c.fire, c.armed);
                 stepObjective(c, !defender);
             }
@@ -579,6 +589,7 @@ async function start(): Promise<void> {
         },
         hitConfirm(msg): void {
             presenter.hitConfirm(msg.zone ?? null, msg.kill);
+            if (practice) ui.practiceHit(msg.damage, msg.kind, msg.zone ?? null, msg.kill);
             audio.hitMarker(msg.kill ? 'kill' : msg.zone === 'head' ? 'head' : 'body');
         },
         bomb(msg: BombMsg): void {
@@ -611,7 +622,7 @@ async function start(): Promise<void> {
         map(msg): Promise<void> { return swapMap(msg.map, msg.mapName); }
     });
     reporter.mapName = welcome.mapName;
-    ui.enterGame(roomCode, welcome.map, welcome.mapName, welcome.options);
+    ui.enterGame(roomCode, welcome.map, welcome.mapName, welcome.options, welcome.practice);
 
     const local: LocalView = {
         id: 0, team: 'ghosts', health: MAX_HEALTH, alive: false, respawnIn: 0, connected: false, ping: 0, firing: false, vis: 0,
@@ -746,6 +757,7 @@ async function start(): Promise<void> {
             if (net.team === 'defenders') {
                 // The same weapon step the server runs for this command (shared/gun.ts).
                 const r = stepLoadout(loadout, cmd, cmd.armed);
+                if (practice) fillReserves(loadout); // as the server does in a practice range
                 if (justSwitched(loadout)) audio.weaponSwitch(loadout.slot);
                 if (r >= 0) {
                     eyePos[0] = curr.pos[0];

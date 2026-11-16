@@ -19,16 +19,25 @@ export interface RoomOptions {
     maxPlayers: number;
     /** Rounds a side needs to win the match (3, 6 or 9); sides swap after `roundsToWin - 1` rounds. */
     roundsToWin: number;
-    /** Fill empty places with bots. Stored and shown only: package E (bots) implements it. */
+    /**
+     * Keep both teams at half of `maxPlayers` (at least one each) with bots: a bot is added for every
+     * missing player and leaves when a person takes its place (in warmup at once, otherwise at the
+     * next round start). See `Game.fillWithBots` in server/src/game.ts.
+     */
     fillBots: boolean;
+    /** How well bots play: reaction time, aim error, how much they make of what they hear. */
+    botLevel: BotLevel;
 }
+
+export type BotLevel = 'easy' | 'normal' | 'hard';
+export const BOT_LEVELS: readonly BotLevel[] = ['easy', 'normal', 'hard'];
 
 export const ROOM_MIN_PLAYERS = 2;
 export const ROOM_MAX_PLAYERS = 10;
 export const ROUNDS_TO_WIN_CHOICES: readonly number[] = [3, 6, 9];
 
 export const DEFAULT_ROOM_OPTIONS: Readonly<RoomOptions> = {
-    suppressed: false, public: false, maxPlayers: ROOM_MAX_PLAYERS, roundsToWin: ROUNDS_TO_WIN, fillBots: false
+    suppressed: false, public: false, maxPlayers: ROOM_MAX_PLAYERS, roundsToWin: ROUNDS_TO_WIN, fillBots: false, botLevel: 'normal'
 };
 
 /** The round after which the sides swap, for a match to `roundsToWin`: one before a side can win (5 for 6). */
@@ -64,16 +73,17 @@ export function cleanRoomOptions(raw: { readonly [K in keyof RoomOptions]?: unkn
         public: flag(raw.public, base.public),
         maxPlayers: Number.isInteger(max) && max >= ROOM_MIN_PLAYERS && max <= ROOM_MAX_PLAYERS ? max : base.maxPlayers,
         roundsToWin: ROUNDS_TO_WIN_CHOICES.includes(rounds) ? rounds : base.roundsToWin,
-        fillBots: flag(raw.fillBots, base.fillBots)
+        fillBots: flag(raw.fillBots, base.fillBots),
+        botLevel: BOT_LEVELS.includes(raw.botLevel as BotLevel) ? raw.botLevel as BotLevel : base.botLevel
     };
 }
 
-/** Room options from the join query (`suppressed=1&public=1&max=6&rounds=3&bots=1`); anything missing or invalid is the default. */
+/** Room options from the join query (`suppressed=1&public=1&max=6&rounds=3&bots=1&level=hard`); anything missing or invalid is the default. */
 export function parseRoomOptions(query: QueryLike): RoomOptions {
     return cleanRoomOptions({
         suppressed: query.get('suppressed') ?? undefined, public: query.get('public') ?? undefined,
         maxPlayers: query.get('max') ?? undefined, roundsToWin: query.get('rounds') ?? undefined,
-        fillBots: query.get('bots') ?? undefined
+        fillBots: query.get('bots') ?? undefined, botLevel: query.get('level') ?? undefined
     });
 }
 
@@ -85,4 +95,10 @@ export function roomOptionsQuery(o: RoomOptions, into: { set(name: string, value
     if (o.maxPlayers !== d.maxPlayers) into.set('max', String(o.maxPlayers));
     if (o.roundsToWin !== d.roundsToWin) into.set('rounds', String(o.roundsToWin));
     if (o.fillBots !== d.fillBots) into.set('bots', o.fillBots ? '1' : '0');
+    if (o.botLevel !== d.botLevel) into.set('level', o.botLevel);
+}
+
+/** Bots per team when the room fills with them: half the room's size, at least one. */
+export function botTeamSize(o: Readonly<RoomOptions>): number {
+    return Math.max(1, Math.floor(o.maxPlayers / 2));
 }
