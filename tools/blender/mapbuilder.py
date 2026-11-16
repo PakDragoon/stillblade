@@ -84,7 +84,11 @@ LIGHT_SCALE = 2.0
 SKY_W, SKY_H = 2048, 512
 SKY_ELEV_MIN = -6.0
 SKY_JPEG_QUALITY = 88
-LIGHTMAP_PAD = 4
+LIGHTMAP_PAD = 3
+# Faces players only see from a distance (ceilings and undersides, anything wholly above head height over its
+# floor) get this share of the texel density of the rest, so the atlas spends its texels where players look.
+FAR_FACE_DENSITY = 0.5
+FAR_FACE_HEIGHT = 2.4
 WEBP_QUALITY = 92
 DITHER = 0.6
 
@@ -203,9 +207,20 @@ def collect_faces(b):
             if fname in it["hide"] or face_hidden(idx, mn, mx, axis, sign, solids, grid, map_mn, map_mx):
                 hidden += 1
                 continue
-            faces.append({"pts": [v[i] for i in f], "axis": axis, "sign": sign, "key": it["key"],
-                          "item": idx, "top": mx[2]})
+            pts = [v[i] for i in f]
+            faces.append({"pts": pts, "axis": axis, "sign": sign, "key": it["key"],
+                          "item": idx, "top": mx[2], "w": face_density(it, pts, axis, sign)})
     return faces, hidden
+
+
+def face_density(it, pts, axis, sign):
+    """Relative lightmap density of a face: FAR_FACE_DENSITY for ceilings, undersides and faces wholly above
+    head height over the floor the item stands on; 1 elsewhere."""
+    lo = min(p[2] for p in pts)
+    level = max([lv for lv in it["levels"] if lv <= lo + 0.05] or [min(it["levels"])])
+    if (axis == 2 and sign < 0) or lo - level > FAR_FACE_HEIGHT:
+        return FAR_FACE_DENSITY
+    return 1.0
 
 
 def dist(a, b):
@@ -268,6 +283,7 @@ def pack_lightmap(faces, size):
 
     def dims(f, d):
         p = f["pts"]
+        d *= f.get("w", 1.0)
         return (max(1, int(math.ceil(dist(p[0], p[1]) * d - 1e-9))),
                 max(1, int(math.ceil(dist(p[0], p[3]) * d - 1e-9))))
 

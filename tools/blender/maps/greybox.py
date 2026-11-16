@@ -154,12 +154,87 @@ m.wall_text("B", (6.9, 6.0, 1.75), 1, -1, 1.6, PAINT["B"]["line"], stroke=0.2)  
 m.wall_text("B", (4.75, 12.5, 1.75), 0, -1, 1.6, PAINT["B"]["line"], stroke=0.2)   # mid connector wall, facing mid
 
 # ---------------------------------------------------------------------------
+# Site markings (package G): warning stripes inside each border and pale sign panels behind the
+# wall letters, so a site reads from the lane and the letters stand out on concrete.
+# ---------------------------------------------------------------------------
+DARK_PAINT = (0.07, 0.07, 0.08)
+SIGN = (0.82, 0.8, 0.74)
+for name, (x0, y0), (x1, y1), z in m.sites:
+    m.hazard_band(x0 + LINE_W, y0 + LINE_W, x1 - LINE_W, y1 - LINE_W, z, PAINT[name]["line"], width=0.3, stripe=0.22, gap=0.3)
+for letter, centre, axis, sign in (("A", (-6.9, 6.0, 1.75), 1, -1), ("A", (-4.75, 12.5, 1.75), 0, 1),
+                                   ("B", (6.9, 6.0, 1.75), 1, -1), ("B", (4.75, 12.5, 1.75), 0, -1)):
+    m.wall_rect(centre, axis, sign, 1.7, 2.1, SIGN, layer=0)
+# floor arrows in the side lanes pointing on to each site (letters' tops toward the site)
+m.floor_text("A >", (-10.0, 1.0), 0.0, 0.9, PAINT["A"]["line"], up=(-1, 0), stroke=0.14)
+m.floor_text("B >", (10.0, 1.0), 0.0, 0.9, PAINT["B"]["line"], up=(1, 0), stroke=0.14)
+
+# ---------------------------------------------------------------------------
+# Stair readability: alternating step tints, a yellow nosing on every tread edge and a dark riser
+# band, plus a yellow edge on the platform's open sides (a drop, not a step).
+# ---------------------------------------------------------------------------
+YELLOW = (0.95, 0.72, 0.05)
+by_name = {b["name"]: b for b in m.boxes}
+for k, nm in enumerate(steps):
+    b = by_name[nm]
+    b["tint"] = (1.0, 1.0, 1.0) if k % 2 else (0.74, 0.74, 0.78)
+    top, y1 = b["mx"][2], b["mx"][1]          # the flight climbs toward -Y: the edge toward the bottom is max Y
+    m.floor_rect(STAIR_X[0] + 0.05, y1 - 0.08, STAIR_X[1] - 0.05, y1, top, YELLOW)
+    m.wall_rect((0.0, y1, top - 0.1), 1, 1, 1.9, 0.12, DARK_PAINT, layer=0)
+m.floor_rect(STAIR_X[0] + 0.05, STAIR_Y0 - 0.08, STAIR_X[1] - 0.05, STAIR_Y0, PLAT_H, YELLOW)   # top step edge
+m.floor_rect(-2.45, 10.0, 2.45, 10.1, PLAT_H, YELLOW)                                         # platform front edge
+m.floor_rect(-2.5, 10.1, -2.4, 13.95, PLAT_H, YELLOW)
+m.floor_rect(2.4, 10.1, 2.5, 13.95, PLAT_H, YELLOW)
+
+# ---------------------------------------------------------------------------
+# Visual-only detail (no collision; the verifier keeps it out of player space): copings on every
+# wall top, a cable run and wall lamps on the outer walls, and stains on the floor.
+# ---------------------------------------------------------------------------
+STEEL = (0.55, 0.57, 0.6)
+COPING = (0.62, 0.6, 0.56)
+for b in list(m.boxes):
+    if b["category"] not in ("outer_wall", "inner_wall"):
+        continue
+    (x0, y0, z0), (x1, y1, z1) = b["mn"], b["mx"]
+    o = 0.05
+    m.visual(b["name"] + "_cap", "wall_inner", (x0 - o, y0 - o, z1), (x1 + o, y1 + o, z1 + 0.1), COPING)
+# cable tray along the inside of the long outer walls, broken where a tall crate stands against the wall
+for x, sx in ((-HALF_W, 1), (HALF_W, -1)):
+    xa, xb = (x, x + 0.12) if sx > 0 else (x - 0.12, x)
+    for ya, yb in ((-HALF_L + 0.5, -3.2), (-0.8, HALF_L - 0.5)):
+        m.visual("tray_%s_%d" % ("w" if sx > 0 else "e", int(ya)), "metal", (xa, ya, 3.72), (xb, yb, 3.8), STEEL)
+
+
+def wall_lamp(name, x, y, nx, ny, colour, power):
+    """A lamp box on a wall face (outward normal nx, ny) above reach, with its baked lamp just in front."""
+    w, d = 0.5, 0.18
+    if nx:
+        mn, mx = (x if nx > 0 else x - d, y - w / 2, 3.32), (x + d if nx > 0 else x, y + w / 2, 3.46)
+    else:
+        mn, mx = (x - w / 2, y if ny > 0 else y - d, 3.32), (x + w / 2, y + d if ny > 0 else y, 3.46)
+    m.visual(name, "metal", mn, mx, (1.0, 1.0, 1.0))
+    m.point_light((x + nx * 0.4, y + ny * 0.4, 3.12), colour, power, 0.12)
+
+
+# ---------------------------------------------------------------------------
 # Baked accent lights (point lamps, light only): position, colour, power W, radius
 # ---------------------------------------------------------------------------
 m.point_light((-9.0, 11.0, 3.2), (1.0, 0.35, 0.25), 120.0, 0.6)   # site A: red-ish
 m.point_light((9.0, 11.0, 3.2), (0.3, 0.5, 1.0), 120.0, 0.6)      # site B: blue-ish
 m.point_light((-5.0, -5.0, 3.0), (1.0, 0.7, 0.4), 45.0, 0.3)      # lane L door: warm
 m.point_light((5.0, 1.0, 3.0), (1.0, 0.7, 0.4), 45.0, 0.3)        # lane R door: warm
+wall_lamp("lamp_site_a", -HALF_W, 11.0, 1, 0, (1.0, 0.62, 0.38), 90.0)
+wall_lamp("lamp_site_b", HALF_W, 11.0, -1, 0, (0.62, 0.75, 1.0), 90.0)
+wall_lamp("lamp_ghost_w", -10.0, -HALF_L, 0, 1, (1.0, 0.75, 0.5), 70.0)
+wall_lamp("lamp_ghost_e", 10.0, -HALF_L, 0, 1, (1.0, 0.75, 0.5), 70.0)
+wall_lamp("lamp_def_w", -12.0, HALF_L, 0, -1, (1.0, 0.75, 0.5), 70.0)
+wall_lamp("lamp_def_e", 12.0, HALF_L, 0, -1, (1.0, 0.75, 0.5), 70.0)
+
+# stains and oil spots (paint decals darken the floor texture; free: the paint is already one draw call)
+STAIN = (0.3, 0.29, 0.27)
+for i, (cx, cy, sx, sy) in enumerate(((-1.5, -6.0, 1.4, 0.9), (3.0, 4.0, 0.8, 1.2), (-11.0, -6.0, 1.1, 1.1),
+                                      (11.5, -3.0, 1.6, 0.7), (-2.0, 17.0, 1.2, 0.8), (6.5, -17.0, 0.9, 0.9),
+                                      (-7.5, 4.5, 0.7, 0.5), (12.5, 7.5, 0.8, 0.6))):
+    m.floor_rect(cx - sx / 2, cy - sy / 2, cx + sx / 2, cy + sy / 2, 0.0, STAIN, layer=0)
 
 m.sample_spots = [
     ("floor sunlit (mid)", (0.0, -3.0, 0.0), 2, 1),

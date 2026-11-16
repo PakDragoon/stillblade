@@ -158,6 +158,8 @@ void main(void) {
 `;
 
 const GHOST_FS = /* glsl */ `
+#include "gammaPS"
+#include "tonemappingPS"
 uniform vec3 view_position;
 uniform float uVis;
 uniform float uTime;
@@ -190,7 +192,11 @@ void main(void) {
     // Dim interior and bright rim keep a moving ghost a haze outline; spikes (>= 0.6) flare up.
     float flare = smoothstep(0.4, 0.75, uVis);
     vec3 col = uTint * (0.3 + 0.9 * rim + 0.3 * nz) * (0.85 + 0.75 * flare);
-    gl_FragColor = vec4(col, clamp(alpha, 0.0, 1.0));
+    // Package G, tuned against the baked maps: the outermost edge turns dark, so the haze reads against sunlit
+    // concrete as well as in the dark basement (a pale-only rim vanished on bright floors). Same opacity as before.
+    col = mix(col, uTint * 0.1, smoothstep(0.72, 0.95, fres) * (1.0 - flare));
+    // Written as a colour on screen in both tiers: through the camera's tone map and gamma like everything else.
+    gl_FragColor = vec4(gammaCorrectOutput(toneMap(pow(col, vec3(2.2)))), clamp(alpha, 0.0, 1.0));
 }
 `;
 
