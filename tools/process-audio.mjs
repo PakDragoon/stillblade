@@ -1,0 +1,107 @@
+// Turns the raw Kenney packs into the shipped sounds (package H).
+//
+//   node tools/process-audio.mjs [--src tools/audio-source] [--out client/public/audio] [--map tools/audio-map.json]
+//
+// Needs ffmpeg on the PATH. `--src` holds one folder per unzipped pack (any depth below it; the pack's folder name
+// is recorded in CREDITS.md). For every sound set in the map it picks the raw files, makes them mono, trims leading
+// silence, cuts to `maxDur`, applies pitch / low-pass if asked, peak-normalises to -4.5 dBFS (then the map's `gain`),
+// and encodes MP3 (mono, 64 kbit/s). A set with no raw file is reported and left out: the game keeps playing the
+// synthesised sound for it. Writes CREDITS.md next to the files and prints every size and the total.
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, extname, join, relative, resolve, sep } from 'node:path';
+
+const arg = (name, dflt) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : dflt; };
+const SRC = resolve(arg('src', 'tools/audio-source'));
+const OUT = resolve(arg('out', 'client/public/audio'));
+const MAP = JSON.parse(readFileSync(resolve(arg('map', 'tools/audio-map.json')), 'utf8'));
+const EXT = 'mp3';
+const PEAK_DB = -4.5;
+const RAW_EXT = new Set(['.ogg', '.wav', '.mp3', '.flac']);
+
+if (!existsSync(SRC)) {
+    console.log(`No raw packs in ${SRC}: nothing to do (every sound stays synthesised). Unzip the Kenney packs into it, one folder each.`);
+    process.exit(0);
+}
+if (spawnSync('ffmpeg', ['-version']).status !== 0) { console.error('ffmpeg is not on the PATH'); process.exit(1); }
+
+function walk(dir, out = []) {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) walk(p, out); else if (RAW_EXT.has(extname(e.name).toLowerCase())) out.push(p);
+    }
+    return out;
+}
+const raw = walk(SRC).sort();
+const stem = p => basename(p, extname(p));
+console.log(`${raw.length} raw files under ${SRC}`);
+
+function ffmpeg(args) {
+    const r = spawnSync('ffmpeg', ['-hide_banner', '-nostdin', '-y', ...args], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`ffmpeg failed: ${(r.stderr || '').split('\n').slice(-6).join('\n')}`);
+    return r.stderr;
+}
+
+/** The filter chain up to (not including) normalisation. */
+function chain(cfg) {
+    const f = ['aformat=channel_layouts=mono'];
+    f.push('silenceremove=start_periods=1:start_threshold=-55dB:start_silence=0.004');
+    if (cfg.pitch && cfg.pitch !== 1) f.push(`asetrate=${Math.round(44100 * cfg.pitch)}`, 'aresample=44100');
+    if (cfg.lp) f.push(`lowpass=f=${cfg.lp}`);
+    if (cfg.maxDur) f.push(`atrim=duration=${cfg.maxDur}`, `afade=t=out:st=${Math.max(0, cfg.maxDur - 0.03)}:d=0.03`);
+    return f.join(',');
+}
+
+mkdirSync(OUT, { recursive: true });
+for (const f of readdirSync(OUT)) if (f.endsWith(`.${EXT}`)) rmSync(join(OUT, f));
+
+const rows = [];
+const missing = [];
+let total = 0;
+for (const [set, cfg] of Object.entries(MAP)) {
+    if (set.startsWith('_')) continue;
+    const picked = [];
+    for (const pattern of cfg.match) {
+        const re = new RegExp(pattern);
+        for (const p of raw) if (re.test(stem(p)) && !picked.includes(p)) picked.push(p);
+        if (picked.length >= cfg.n) break;
+    }
+    const files = picked.slice(0, cfg.n);
+    if (files.length === 0) { missing.push(set); continue; }
+    if (files.length < cfg.n) console.log(`  ${set}: only ${files.length} of ${cfg.n} variants found`);
+    files.forEach((src, i) => {
+        const name = `${set}_${i + 1}.${EXT}`;
+        const pre = chain(cfg);
+        // Pass 1: measure the peak after the chain; pass 2: normalise to PEAK_DB (+ the map's gain) and encode.
+        const log = ffmpeg(['-i', src, '-af', `${pre},volumedetect`, '-f', 'null', '-']);
+        const m = /max_volume: (-?[\d.]+) dB/.exec(log);
+        const peak = m ? Number(m[1]) : 0;
+        const gain = PEAK_DB - peak + (cfg.gain ?? 0);
+        ffmpeg(['-i', src, '-af', `${pre},volume=${gain.toFixed(2)}dB`, '-ac', '1', '-c:a', 'libmp3lame', '-b:a', '64k', '-ar', '44100', join(OUT, name)]);
+        const size = statSync(join(OUT, name)).size;
+        total += size;
+        const parts = relative(SRC, src).split(sep);
+        const did = ['mono', 'trimmed', cfg.maxDur ? `cut to ${cfg.maxDur} s` : '', cfg.pitch ? `speed x${cfg.pitch}` : '',
+            cfg.lp ? `low-pass ${cfg.lp} Hz` : '', `peak-normalised to ${PEAK_DB + (cfg.gain ?? 0)} dBFS`, 'MP3 64 kbit/s'].filter(Boolean).join(', ');
+        rows.push({ name, pack: parts[0], file: parts.slice(1).join('/'), did, size });
+    });
+}
+
+const lines = [
+    '# Credits for the recorded sounds',
+    '',
+    'Every file here is derived from sounds by Kenney (https://kenney.nl), released under Creative Commons CC0 1.0',
+    '(public domain; no attribution required, given here anyway). Generated by `tools/process-audio.mjs`; do not edit by hand.',
+    'The raw packs are not in the repository (`tools/audio-source/` is git-ignored).',
+    '',
+    '| Shipped file | Kenney pack | Original file | Licence | What was done |',
+    '| --- | --- | --- | --- | --- |',
+    ...rows.map(r => `| ${r.name} | ${r.pack} | ${r.file} | CC0 | ${r.did} |`),
+    ''
+];
+if (missing.length) lines.push('Sounds with no recorded file (they play the synthesised sound):', '', ...missing.map(m => `- ${m}`), '');
+writeFileSync(join(OUT, 'CREDITS.md'), lines.join('\n'));
+
+for (const r of rows) console.log(`  ${r.name.padEnd(28)} ${String(r.size).padStart(7)} B  <- ${r.pack}/${r.file}`);
+console.log(`\n${rows.length} files, ${(total / 1024).toFixed(1)} KiB total.`);
+if (missing.length) console.log(`No raw file for: ${missing.join(', ')} (stay synthesised; fix tools/audio-map.json if a file exists under another name)`);

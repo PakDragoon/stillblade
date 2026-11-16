@@ -1,6 +1,7 @@
 import type { Team } from '@shared/protocol';
 import type { Box, Vec3 } from '@shared/types';
 import type { RemoteView } from './presenter-api';
+import type { SoundMode } from './audio-logic';
 
 /** What the audio engine needs to know about the listener each frame. */
 export interface ListenerView {
@@ -90,9 +91,32 @@ export interface AudioEngine {
     hurt(): void;
     /** The local player's attack landed: a short tick, distinct for a headshot and a kill (non-positional). */
     hitMarker(kind: 'body' | 'head' | 'kill'): void;
+    /** A menu or HUD button was clicked (non-positional, quiet). */
+    uiClick(): void;
+    /**
+     * Recorded sounds (package H): the samples load in the background some time after the first `unlock()`.
+     * Until a sample has loaded (or when it never does) its event plays the synthesised sound instead, so the game
+     * is never silent. Resolves when loading has finished, however it went.
+     */
+    whenLoaded(): Promise<void>;
+    /** How many sample files have loaded of how many exist (0 of N before loading, and when none are shipped). */
+    sampleStatus(): { loaded: number; total: number };
+    /** Sound test page only: force the synthesised sounds, or the pure synthesised gunshot, for comparison. */
+    setSoundMode(mode: Partial<SoundMode>): void;
     /** Player volume settings, each 0..1: everything scales with `master`; footsteps (heard or own) with `footsteps`, other sounds with `effects`. */
     setVolumes(v: { master: number; effects: number; footsteps: number }): void;
 }
 
-/** `boxes` is the map's solid geometry, for occlusion tests. */
-export type CreateAudio = (boxes: readonly Box[]) => AudioEngine;
+/** Options for tests and the sound test page; the game passes none. */
+export interface AudioOptions {
+    /** Use this context (an OfflineAudioContext, for measuring) instead of making one. */
+    context?: BaseAudioContext;
+    /** Wait this long after the first `unlock()` before loading the samples (default 1500 ms: after the game is playable). */
+    loadDelayMs?: number;
+}
+
+/**
+ * `boxes` is the map's solid geometry, for occlusion tests and for the surface under a footstep or a bullet
+ * (the box categories, as package G's impact effects read them).
+ */
+export type CreateAudio = (boxes: readonly Box[], opts?: AudioOptions) => AudioEngine;

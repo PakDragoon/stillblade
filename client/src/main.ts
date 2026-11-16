@@ -320,6 +320,8 @@ async function start(): Promise<void> {
     document.addEventListener('pointerlockchange', () => ui.onLockChange(input.locked));
     canvas.addEventListener('click', () => { audio.unlock(); if (!ui.cursorNeeded) input.lock(); });
     window.addEventListener('keydown', () => audio.unlock(), { once: true });
+    // Every button (menus, settings, scoreboard) gets the same quiet click.
+    document.addEventListener('click', e => { if ((e.target as Element | null)?.closest?.('button')) audio.uiClick(); });
 
     // Who we are joining as: the page URL (auto), a reconnect after a drop, or the menu.
     let saved = '';
