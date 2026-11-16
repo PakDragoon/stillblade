@@ -1,7 +1,7 @@
 import { INTERP_DELAY_MS } from '@shared/constants';
 import {
     PROTOCOL_VERSION, decodeServer, encodeClient, type ChatMsg, type ClientMsg, type DamageMsg, type HitConfirmMsg,
-    type KillMsg, type NetCmd, type PlayerSnap, type SelfSnap, type RosterEntry, type RoundMsg, type ServerMsg, type ShotEvent,
+    type KickVoteMsg, type KillMsg, type MapVoteMsg, type NetCmd, type PlayerSnap, type SelfSnap, type RosterEntry, type RoundMsg, type ServerMsg, type ShotEvent,
     type SlashEvent, type SoundEvent, type SummaryMsg, type Team
 } from '@shared/protocol';
 import { DEFAULT_ROOM_OPTIONS, type RoomOptions } from '@shared/room-options';
@@ -24,6 +24,17 @@ export interface NetHandlers {
     hitConfirm(msg: HitConfirmMsg): void;
     /** Someone in the room was killed (the kill feed). */
     kill(msg: KillMsg): void;
+    /** The creator changed the room's options. */
+    options(options: RoomOptions): void;
+    /** The vote to remove a player started, changed or ended (`vote` is null). */
+    kickVote(msg: KickVoteMsg): void;
+    /** The map vote on the result card changed. */
+    mapVote(msg: MapVoteMsg): void;
+    /**
+     * The room moved to another map. Resolve once it is loaded: `Net` holds every later message until then,
+     * so nothing is simulated or drawn against the wrong map.
+     */
+    map(msg: { map: string; mapName: string }): Promise<void>;
 }
 
 interface Sample {
@@ -56,6 +67,8 @@ export interface Welcome {
     mapName: string;
     /** The room's options, chosen by its creator. */
     options: RoomOptions;
+    /** The room's code (a Quick play join learns it here). */
+    room: string;
 }
 
 const MAX_SAMPLES = 24;
@@ -91,6 +104,8 @@ export class Net {
     private ws: WebSocket;
     private handlers: NetHandlers | null = null;
     private readonly held: ServerMsg[] = [];
+    /** A map change is loading: later messages wait in `held`. */
+    private paused = false;
     private welcomed = false;
     private resolveWelcome!: (w: Welcome) => void;
     private rejectWelcome!: (err: Error) => void;
@@ -123,8 +138,12 @@ export class Net {
     /** Begins handling game messages, starting with any that arrived while the map was loading. */
     start(handlers: NetHandlers): void {
         this.handlers = handlers;
-        for (const msg of this.held) this.receive(msg);
-        this.held.length = 0;
+        this.pump();
+    }
+
+    /** Handles held messages in order, stopping again if one of them starts a map change. */
+    private pump(): void {
+        while (this.held.length > 0 && !this.paused) this.receive(this.held.shift()!);
     }
 
     private deliver(msg: ServerMsg): void {
@@ -135,9 +154,9 @@ export class Net {
             this.welcomed = true;
             this.resolveWelcome({
                 id: msg.id, team: msg.team, map: msg.map, mapName: msg.mapName ?? msg.map,
-                options: { ...DEFAULT_ROOM_OPTIONS, ...msg.options }
+                options: { ...DEFAULT_ROOM_OPTIONS, ...msg.options }, room: msg.room ?? ''
             });
-        } else if (this.handlers) {
+        } else if (this.handlers && !this.paused) {
             this.receive(msg);
         } else {
             this.held.push(msg);
@@ -236,6 +255,19 @@ export class Net {
                 break;
             case 'kill':
                 handlers.kill(msg);
+                break;
+            case 'options':
+                handlers.options({ ...DEFAULT_ROOM_OPTIONS, ...msg.options });
+                break;
+            case 'kickvote':
+                handlers.kickVote(msg);
+                break;
+            case 'mapvote':
+                handlers.mapVote(msg);
+                break;
+            case 'map':
+                this.paused = true;
+                void handlers.map(msg).catch(() => { /* the handler reports its own failure */ }).then(() => { this.paused = false; this.pump(); });
                 break;
         }
     }

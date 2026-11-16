@@ -8,7 +8,8 @@ import {
     justSwitched, recoilPitch, recoilScale, recoilYaw, resetLoadout, sameLoadout, shotDirectionFor, spreadAngle, stepLoadout
 } from '@shared/gun';
 import { DEFENDER_KNIFE, GUN_COUNT, SLOT_COUNT, SLOT_KNIFE, WEAPONS, slotLabel } from '@shared/weapons';
-import { roomOptionsQuery } from '@shared/room-options';
+import { DEFAULT_ROOM_OPTIONS, parseRoomOptions, roomOptionsQuery } from '@shared/room-options';
+import type { RoomListEntry, RoomListResponse } from '@shared/room-list';
 import {
     KNIFE_SLASH, KNIFE_SWING, copyKnifeState, createKnifeState, resetKnife, sameKnifeState, stepKnife
 } from '@shared/knife';
@@ -73,7 +74,8 @@ reporter.install();
 /** How a refused or lost connection is explained to the player. */
 function explainFailure(reason: string): { title: string; message: string } {
     const r = reason.toLowerCase();
-    if (r.includes('room full')) return { title: 'Room full', message: 'This room already has ten players. Ask for another room code, or use Quick play.' };
+    if (r.includes('removed')) return { title: 'Removed from this room', message: 'You were removed from this room. You cannot rejoin it for 10 minutes; you can join or make another room.' };
+    if (r.includes('room full')) return { title: 'Room full', message: 'This room is full. Ask for another room code, or use Quick play.' };
     if (r.includes('unknown map')) return { title: 'Map not found', message: 'This server does not have the map in that link. Create a room and pick one of the listed maps.' };
     if (r.includes('server full')) return { title: 'Server busy', message: 'The server is at its room limit. Try again in a few minutes.' };
     if (r.includes('too many')) return { title: 'Too many connections', message: 'Close your other Stillblade tabs, then try again.' };
@@ -130,8 +132,14 @@ async function fetchMapList(): Promise<MapListEntry[]> {
     return [{ id: DEFAULT_MAP, name: DEFAULT_MAP }];
 }
 
-/** Loads a map's collision/gameplay data and its baked visuals, and adds it to the scene. */
-async function loadMap(id: string): Promise<MapData> {
+/** A map in the scene: its gameplay data, and the way to take every part of it out again (a map change). */
+interface LoadedMap {
+    data: MapData;
+    unload(): void;
+}
+
+/** Loads a map's collision/gameplay data and its baked visuals, and adds it to the scene. Can run again after `unload`. */
+async function loadMap(id: string): Promise<LoadedMap> {
     if (!isMapId(id)) throw new Error(`Bad map id ${JSON.stringify(id)}`);
     const [mapData, mapAsset] = await Promise.all([
         fetch(`${ASSETS}maps/${id}.json`).then(r => {
@@ -142,9 +150,26 @@ async function loadMap(id: string): Promise<MapData> {
     ]);
     const mapEntity = (mapAsset.resource as pc.ContainerResource).instantiateRenderEntity();
     app.root.addChild(mapEntity);
+    let disposeLook: (() => void) | null = null;
+    const unload = (): void => {
+        disposeLook?.();
+        mapEntity.destroy();
+        app.assets.remove(mapAsset);
+        mapAsset.unload();
+    };
     // Baked maps draw unlit (albedo x baked light): no realtime lighting cost on the world at all.
-    if (mapData.look) await applyMapLook(app, mapEntity, camera, mapData, `${ASSETS}maps/`);
-    return mapData;
+    if (mapData.look) {
+        try { disposeLook = await applyMapLook(app, mapEntity, camera, mapData, `${ASSETS}maps/`); } catch (err) { unload(); throw err; }
+    }
+    return { data: mapData, unload };
+}
+
+/** The public room list for the menu (`GET /rooms` on the game server, same address as the socket). */
+async function fetchRooms(): Promise<RoomListEntry[]> {
+    const r = await fetch(`${serverBase.replace(/^ws(s?):/, 'http$1:')}/rooms`);
+    if (!r.ok) throw new Error(`room list: ${r.status}`);
+    const d = await r.json() as RoomListResponse;
+    return Array.isArray(d.rooms) ? d.rooms : [];
 }
 
 async function start(): Promise<void> {
@@ -175,7 +200,12 @@ async function start(): Promise<void> {
         lock: () => { audio.unlock(); input.lock(); },
         unlock: () => document.exitPointerLock(),
         isLocked: () => input.locked,
-        typing: on => { input.suspended = on; if (on) input.releaseAll(); }
+        typing: on => { input.suspended = on; if (on) input.releaseAll(); },
+        options: patch => net?.sendMsg({ type: 'options', options: patch }),
+        voteKick: target => net?.sendMsg({ type: 'votekick', target }),
+        castVote: yes => net?.sendMsg({ type: 'votecast', yes }),
+        removePlayer: target => net?.sendMsg({ type: 'removeplayer', target }),
+        mapVote: map => net?.sendMsg({ type: 'mapvote', map })
     });
     ui.quiet = auto || params.has('quiet');
     document.addEventListener('pointerlockchange', () => ui.onLockChange(input.locked));
@@ -188,14 +218,15 @@ async function start(): Promise<void> {
     let choice: JoinChoice;
     let rejoin: JoinChoice | null = null;
     try { rejoin = JSON.parse(sessionStorage.getItem('sb-rejoin') ?? 'null') as JoinChoice | null; } catch { /* none */ }
-    if (auto) choice = { name: params.get('name') ?? saved, room: params.get('room') ?? '', map: params.get('map') ?? '' };
+    // ?auto=1 also takes the creation options from the page address (public=1&max=4&rounds=3&suppressed=1) and quick=1.
+    if (auto) choice = { name: params.get('name') ?? saved, room: params.get('room') ?? '', map: params.get('map') ?? '', options: parseRoomOptions(params), quick: params.get('quick') === '1' };
     else if (rejoin && typeof rejoin.room === 'string') choice = rejoin;
     else {
         const wanted = params.get('map') ?? '';
         choice = await ui.showMenu(mapList, {
             name: params.get('name') ?? saved, room: params.get('room') ?? '',
             map: mapList.some(m => m.id === wanted) ? wanted : DEFAULT_MAP
-        });
+        }, fetchRooms);
         // An invite link's map is only a request for a new room; a joiner takes the room's own.
         if (params.get('room') && choice.room === params.get('room')!.trim()) choice.map = wanted;
     }
@@ -204,8 +235,10 @@ async function start(): Promise<void> {
     if (choice.room) query.set('room', choice.room);
     if (choice.name) query.set('name', choice.name);
     if (choice.map) query.set('map', choice.map);
-    // Options only matter when this join creates the room; an existing room keeps its own.
-    roomOptionsQuery({ suppressed: choice.suppressed === true }, query);
+    // Options only matter when this join creates the room; an existing room keeps its own. Quick play (no room code)
+    // asks the server for the fullest public room with space.
+    if (choice.quick && !choice.room) query.set('quick', '1');
+    roomOptionsQuery(choice.options ?? DEFAULT_ROOM_OPTIONS, query);
     const serverUrl = `${serverBase}/?${query}`;
 
     // The room decides the map: connect, learn it from the welcome, load it, then start simulating.
@@ -226,9 +259,14 @@ async function start(): Promise<void> {
     }
     try { sessionStorage.removeItem('sb-rejoin-tried'); } catch { /* fine */ }
     ui.showLoading(welcome.mapName, 'Downloading the map');
+    /** The room's map as it is now: it changes between matches (the map vote). */
+    let loaded: LoadedMap;
     let mapData: MapData;
+    let mapId = welcome.map;
+    const roomCode = welcome.room || choice.room || 'public';
     try {
-        mapData = await loadMap(welcome.map);
+        loaded = await loadMap(welcome.map);
+        mapData = loaded.data;
     } catch (err) {
         console.error(err);
         ui.showError('Could not load the map', `${welcome.mapName} failed to download. Check your connection and try again.`, false);
@@ -239,6 +277,11 @@ async function start(): Promise<void> {
     // A dropped connection gets one automatic reconnect to the same room, then asks.
     net.onClose = (code, reason) => {
         console.warn(`connection closed: ${code} ${reason}`);
+        if (code === 4001) { // removed by a vote or by the room's creator: no reconnecting
+            try { sessionStorage.removeItem('sb-rejoin'); } catch { /* fine */ }
+            ui.showError('Removed from the room', reason || 'You were removed from this room. You cannot rejoin it for 10 minutes.', false);
+            return;
+        }
         let tried = false;
         try { tried = sessionStorage.getItem('sb-rejoin-tried') === '1'; } catch { /* treat as untried */ }
         if (tried) {
@@ -249,7 +292,7 @@ async function start(): Promise<void> {
         ui.showLoading('Connection lost', 'Reconnecting to the same room');
         try {
             sessionStorage.setItem('sb-rejoin-tried', '1');
-            sessionStorage.setItem('sb-rejoin', JSON.stringify({ ...choice, map: welcome.map }));
+            sessionStorage.setItem('sb-rejoin', JSON.stringify({ ...choice, room: roomCode, quick: false, map: mapId }));
         } catch { /* nothing to resume from */ }
         setTimeout(() => location.reload(), 800);
     };
@@ -295,9 +338,50 @@ async function start(): Promise<void> {
     const eyePos: Vec3 = [0, 0, 0];
     const aim: Vec3 = [0, 0, 0];
     const shotEnd: Vec3 = [0, 0, 0];
-    /** The room's suppressed-weapons option, from the welcome. */
-    const suppressed = welcome.options.suppressed;
+    /** The room's suppressed-weapons option, from the welcome; the creator may change it in warmup. */
+    let suppressed = welcome.options.suppressed;
     presenter.setSuppressed(suppressed);
+
+    // Map bounds for the overhead spectator camera; measured again whenever the map changes.
+    let mapCx = 0, mapCz = 0, mapW = 1, mapD = 1;
+    const measureMap = (): void => {
+        mapCx = (mapData.bounds.min[0] + mapData.bounds.max[0]) / 2;
+        mapCz = (mapData.bounds.min[2] + mapData.bounds.max[2]) / 2;
+        mapW = mapData.bounds.max[0] - mapData.bounds.min[0];
+        mapD = mapData.bounds.max[2] - mapData.bounds.min[2];
+    };
+    measureMap();
+
+    /**
+     * The room moved to another map between matches. Net holds every later message until this resolves, and
+     * nobody is alive in between, so no command is predicted against the old map after this runs: `alive` is
+     * dropped first, and the collision boxes the prediction and the audio read are replaced only once the new
+     * map is in. Falls back to rejoining the room (which welcomes us onto the new map) if the download fails.
+     */
+    const swapMap = async (id: string, name: string): Promise<void> => {
+        alive = false;
+        pending.length = 0;
+        ui.setMapStatus(`Downloading ${name}…`);
+        try {
+            const next = await loadMap(id);
+            const old = loaded;
+            loaded = next;
+            mapData = next.data;
+            mapId = id;
+            boxes.length = 0;
+            boxes.push(...mapData.boxes);
+            radar.setMap(mapData);
+            measureMap();
+            old.unload();
+            reporter.mapName = name;
+            ui.setMap(id, name);
+            ui.setMapStatus(`${name} is ready.`);
+        } catch (err) {
+            console.error(err);
+            try { sessionStorage.setItem('sb-rejoin', JSON.stringify({ ...choice, room: roomCode, quick: false, map: id })); } catch { /* nothing to resume from */ }
+            location.reload();
+        }
+    };
 
     net.start({
         snapshot(me: SelfSnap, ack: number): void {
@@ -429,10 +513,18 @@ async function start(): Promise<void> {
         hitConfirm(msg): void {
             presenter.hitConfirm(msg.zone ?? null, msg.kill);
             audio.hitMarker(msg.kill ? 'kill' : msg.zone === 'head' ? 'head' : 'body');
-        }
+        },
+        options(o): void {
+            suppressed = o.suppressed;
+            presenter.setSuppressed(o.suppressed);
+            ui.setOptions(o);
+        },
+        kickVote(msg): void { ui.setKickVote(msg.vote, net.serverTime()); },
+        mapVote(msg): void { ui.setMapVote(msg); },
+        map(msg): Promise<void> { return swapMap(msg.map, msg.mapName); }
     });
     reporter.mapName = welcome.mapName;
-    ui.enterGame(choice.room || 'public', welcome.map, welcome.mapName, welcome.options);
+    ui.enterGame(roomCode, welcome.map, welcome.mapName, welcome.options);
 
     const local: LocalView = {
         id: 0, team: 'ghosts', health: MAX_HEALTH, alive: false, respawnIn: 0, connected: false, ping: 0, firing: false, vis: 0,
@@ -457,10 +549,6 @@ async function start(): Promise<void> {
     };
     window.addEventListener('keydown', e => { if (!input.suspended && !e.repeat) specInput(e.code); });
     document.addEventListener('mousedown', e => { const c = mouseInput(e.button); if (c && !input.suspended && input.locked) specInput(c); });
-    const mapCx = (mapData.bounds.min[0] + mapData.bounds.max[0]) / 2;
-    const mapCz = (mapData.bounds.min[2] + mapData.bounds.max[2]) / 2;
-    const mapW = mapData.bounds.max[0] - mapData.bounds.min[0];
-    const mapD = mapData.bounds.max[2] - mapData.bounds.min[2];
     /** Picks the living teammate to follow; returns null when there is none (map overview). Teammates only, never enemies. */
     const pickSpectated = (remotes: readonly RemoteView[]): RemoteView | null => {
         let first: RemoteView | null = null, cur: RemoteView | null = null, next: RemoteView | null = null, prev: RemoteView | null = null;
@@ -723,7 +811,7 @@ async function start(): Promise<void> {
     // Handle for automated checks and console debugging.
     Object.assign(window, {
         __sb: {
-            app, state: curr, input, net, mapData, mapList, audio, presenter, match, ui,
+            app, state: curr, input, net, mapList, audio, presenter, match, ui,
             loadout, knife,
             stats: () => ({
                 fps, resScale, alive, health, vis, pending: pending.length, error: Math.hypot(...errorOffset),
@@ -733,6 +821,8 @@ async function start(): Promise<void> {
             })
         }
     });
+    // The room's map changes between matches, so `__sb.mapData` follows it.
+    Object.defineProperty((window as unknown as { __sb: object }).__sb, 'mapData', { get: () => mapData, configurable: true });
 }
 
 /** A touch device with no mouse is told so before the map, the models or the socket are touched (`?desktop=1` skips it). */
