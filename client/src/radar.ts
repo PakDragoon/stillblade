@@ -19,7 +19,7 @@ export interface RadarSubject {
 /**
  * A small top-down map drawn from the map's collision boxes for the floor the subject stands on.
  * Shows only what the client already knows and may show: the subject, living teammates, the bomb
- * sites and the planted bomb. It is never given enemies, so it cannot show them.
+ * sites, the planted bomb and a dropped bomb the player knows about (ghosts always, defenders in sight). It is never given enemies, so it cannot show them.
  */
 export class Radar {
     private readonly canvas = document.createElement('canvas');
@@ -62,9 +62,10 @@ export class Radar {
 
     /**
      * Call every frame; it redraws about 20 times a second. `remotes` is the interpolated list (the
-     * server only ever sends enemies the player may know of, and none are drawn regardless).
+     * server only ever sends enemies the player may know of, and none are drawn regardless). `bomb` is the
+     * planted bomb (blinking red), `dropped` a dropped bomb (an amber square), each null when there is none.
      */
-    update(dt: number, subject: RadarSubject, remotes: readonly RemoteView[], bomb: Vec3 | null): void {
+    update(dt: number, subject: RadarSubject, remotes: readonly RemoteView[], bomb: Vec3 | null, dropped: Vec3 | null = null): void {
         const ctx = this.ctx;
         if (!ctx || !this.map || !this.shown) return;
         this.acc += dt;
@@ -103,6 +104,12 @@ export class Radar {
             ctx.beginPath();
             ctx.arc(sx(bomb[0]), sz(bomb[2]), 4.5, 0, Math.PI * 2);
             ctx.fill();
+        }
+        if (dropped) {
+            // Hollow on another floor, like teammates.
+            const x = sx(dropped[0]) - 4, z = sz(dropped[2]) - 4;
+            ctx.fillStyle = ctx.strokeStyle = '#ffd36b';
+            if (Math.abs(dropped[1] - py) < 2.2) ctx.fillRect(x, z, 8, 8); else ctx.strokeRect(x, z, 8, 8);
         }
         for (const r of remotes) {
             if (r.team !== subject.team || !r.alive) continue; // teammates only

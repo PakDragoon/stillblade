@@ -10,9 +10,13 @@ import {
     stepLoadout
 } from '../../shared/gun';
 import { KNIFE_SLASH, KNIFE_SWING, createKnifeState, resetKnife, stepKnife } from '../../shared/knife';
+import {
+    BOMB_SIGHT_HEIGHT, BOMB_SOUND_LOUD, BOMB_SOUND_RANGE, CARRY_DROPPED, CARRY_PICKED, createCarry, resetCarry, restingPoint,
+    stepCarry
+} from '../../shared/bomb';
 import { createPlayerState, horizontalSpeed, stepPlayer } from '../../shared/movement';
 import {
-    PROTOCOL_VERSION, SNAPSHOT_RATE, type ClientMsg, type DamageKind, type KillMsg, type MatchStats, type NetCmd, type PlayerSnap,
+    PROTOCOL_VERSION, SNAPSHOT_RATE, type BombEvent, type BombMsg, type ClientMsg, type DamageKind, type KillMsg, type MatchStats, type NetCmd, type PlayerSnap,
     type RosterEntry, type RoundMsg, type ServerMsg, type ShotEvent, type SlashEvent, type SoundEvent, type SummaryMsg,
     type Team
 } from '../../shared/protocol';
@@ -59,6 +63,12 @@ export class Player {
     readonly loadout = createLoadout();
     /** Ghost knife timing, counted in commands processed for this player (shared/knife.ts). Defenders use `loadout.knife`. */
     readonly knife = createKnifeState();
+    /** Ghosts: carrying the bomb and the repick wait (shared/bomb.ts), stepped per processed command; reset at every spawn. */
+    readonly carry = createCarry();
+    /** Feet position the last time this player stood on something: where a bomb dropped over a void lands. */
+    readonly lastGround: Vec3 = [0, 0, 0];
+    /** Defenders: the dropped bomb this player was last told about (null: told there is none in sight). */
+    bombShown: Vec3 | null = null;
     /** 0..1 opacity: always 1 for defenders. */
     vis: number;
     /** Ground distance covered since the last footstep. */
@@ -179,6 +189,10 @@ export class Game {
     ghostGroup: 0 | 1 = 0;
     roundsPlayed = 0;
     bomb: Vec3 | null = null;
+    /** Where the bomb lies after being dropped (before it is planted), or null. */
+    dropped: Vec3 | null = null;
+    /** Id of the ghost carrying the bomb, 0 when nobody does (dropped, planted, warmup). */
+    carrierId = 0;
     private winner: Team | undefined;
     private reason: RoundReason | undefined;
     private matchOver = false;
@@ -294,6 +308,7 @@ export class Game {
         if (this.summary && this.phase === 'over') conn.send(this.summary); // joined during the result screen
         // Mid-round arrivals wait for the next round rather than appearing behind someone.
         if (this.phase === 'warmup') this.spawn(player);
+        if (team === 'ghosts') conn.send(this.ghostBombMsg());
         this.sendRoster();
         return id;
     }
@@ -301,6 +316,7 @@ export class Game {
     leave(id: number): void {
         // The creator role passes to the longest-connected player by itself (see `creatorId`).
         const p = this.players.get(id);
+        if (p && p.id === this.carrierId) this.dropBomb(p, 'lost'); // the bomb stays where they stood
         if (p && this.matchInProgress()) {
             this.purgeDeparted();
             // Two leavers with one name cannot be told apart: restore neither.
@@ -472,6 +488,9 @@ export class Game {
         p.alive = true;
         resetKnife(p.knife);
         resetLoadout(p.loadout);
+        resetCarry(p.carry);
+        if (p.id === this.carrierId) this.carrierId = 0;
+        p.lastGround[0] = spawn.pos[0]; p.lastGround[1] = spawn.pos[1]; p.lastGround[2] = spawn.pos[2];
         p.stepAccum = 0;
         p.actionTicks = 0;
         p.respawnAt = 0;
@@ -504,11 +523,13 @@ export class Game {
         cmd.reload = cmd.reload === true;
         cmd.swap = cmd.swap === true;
         cmd.aim = cmd.aim === true;
+        cmd.drop = cmd.drop === true;
         cmd.slot = Number.isInteger(cmd.slot) ? cmd.slot : 0; // out-of-range slots are ignored by stepLoadout
 
         // Rooted during the freeze and while planting or defusing. The client applies the same rule.
-        const acting = cmd.use && canAct(p.team, this.phase, p.state, this.map, this.bomb);
-        if (movementLocked(cmd.use, p.team, this.phase, p.state, this.map, this.bomb)) {
+        const carrier = p.carry.carrier;
+        const acting = cmd.use && canAct(p.team, this.phase, p.state, this.map, this.bomb, carrier);
+        if (movementLocked(cmd.use, p.team, this.phase, p.state, this.map, this.bomb, carrier)) {
             cmd.forward = 0;
             cmd.right = 0;
             cmd.jump = false;
@@ -520,6 +541,7 @@ export class Game {
         p.pitch = cmd.pitch;
 
         if (p.state.onGround) {
+            p.lastGround[0] = p.state.pos[0]; p.lastGround[1] = p.state.pos[1]; p.lastGround[2] = p.state.pos[2];
             p.stepAccum += Math.hypot(p.state.pos[0] - px, p.state.pos[2] - pz);
             if (p.stepAccum >= STEP_DISTANCE) {
                 p.stepAccum -= STEP_DISTANCE;
@@ -545,6 +567,11 @@ export class Game {
                 p.vis = Math.max(p.vis, VIS_SWING_SPIKE);
                 this.emitSound(p, 'windup', 1, KNIFE_SOUND_RANGE);
             }
+            // The bomb: a deliberate drop (refused while planting) or a pickup by walking over it. The
+            // client runs the same step for this command (shared/bomb.ts).
+            const c = stepCarry(p.carry, cmd.drop, acting, p.state, this.dropped);
+            if (c === CARRY_DROPPED) this.dropBomb(p, 'drop');
+            else if (c === CARRY_PICKED) this.pickUp(p);
         }
 
         if (acting) {
@@ -575,6 +602,92 @@ export class Game {
         }
     }
 
+    // -----------------------------------------------------------------------------------------
+    // The bomb carrier (shared/bomb.ts). Ghosts are told everything; defenders only see a dropped
+    // bomb that is in their line of sight and are never told who carries it.
+    // -----------------------------------------------------------------------------------------
+
+    private ghostBombMsg(event?: BombEvent, by?: number): BombMsg {
+        const msg: BombMsg = { type: 'bomb', dropped: this.dropped, carrier: this.carrierId };
+        if (event) { msg.event = event; msg.by = by; }
+        return msg;
+    }
+
+    private sendBombToGhosts(event?: BombEvent, by?: number): void {
+        let msg: BombMsg | undefined;
+        for (const p of this.players.values()) if (p.team === 'ghosts') p.conn.send(msg ??= this.ghostBombMsg(event, by));
+    }
+
+    /**
+     * Tells each defender about the dropped bomb when it comes into its line of sight (eye to just above
+     * the bomb, the same line test `knowsAbout` uses) and that it is gone when it leaves sight, is picked
+     * up or is reset. Run on every snapshot and whenever the bomb moves.
+     */
+    private updateBombSight(): void {
+        const b = this.dropped;
+        for (const p of this.players.values()) {
+            if (p.team !== 'defenders') continue;
+            const sees = b !== null && this.lineClear(p.state.pos[0], p.eyeY, p.state.pos[2], b[0], b[1] + BOMB_SIGHT_HEIGHT, b[2]);
+            const shown = sees ? b : null;
+            if (shown === p.bombShown) continue;
+            p.bombShown = shown;
+            p.conn.send({ type: 'bomb', dropped: shown });
+        }
+    }
+
+    /** A drop or pickup is a quiet sound. Defenders hear it in range like a footstep, but never learn whose it is. */
+    private emitBombSound(kind: 'bombDrop' | 'bombPickup', pos: Vec3, source: Player): void {
+        let ghostEv: SoundEvent | undefined, defenderEv: SoundEvent | undefined;
+        for (const p of this.players.values()) {
+            if (p === source || dist(p.state.pos, pos) > BOMB_SOUND_RANGE) continue;
+            if (p.team === 'ghosts') p.conn.send(ghostEv ??= { type: 'sound', kind, id: source.id, pos: [...pos] as Vec3, loud: BOMB_SOUND_LOUD });
+            else p.conn.send(defenderEv ??= { type: 'sound', kind, id: 0, pos: [...pos] as Vec3, loud: BOMB_SOUND_LOUD });
+        }
+    }
+
+    /**
+     * The carrier lets go of the bomb: on purpose (`drop`), or by dying or leaving (`lost`). It comes to
+     * rest on the floor under them (shared/bomb.ts `restingPoint`).
+     */
+    private dropBomb(p: Player, event: 'drop' | 'lost'): void {
+        p.carry.carrier = false;
+        if (this.carrierId === p.id) this.carrierId = 0;
+        this.dropped = restingPoint(p.state, this.map.boxes, p.lastGround, [0, 0, 0]);
+        this.emitBombSound('bombDrop', this.dropped, p);
+        this.sendBombToGhosts(event, p.id);
+        this.updateBombSight();
+    }
+
+    private pickUp(p: Player): void {
+        const at = this.dropped!;
+        this.dropped = null;
+        this.carrierId = p.id;
+        this.emitBombSound('bombPickup', at, p);
+        this.sendBombToGhosts('pickup', p.id);
+        this.updateBombSight();
+    }
+
+    /** No bomb in play: nobody carries it and none lies on the floor (round start, warmup, plant). */
+    private clearBomb(): void {
+        for (const p of this.players.values()) p.carry.carrier = false;
+        this.carrierId = 0;
+        this.dropped = null;
+    }
+
+    /**
+     * Chooses the round's carrier among the living, non-idle ghosts without randomness: ordered by when
+     * they joined (then id), the round number picks one, so it rotates through the team round by round.
+     */
+    private assignCarrier(): void {
+        const ghosts: Player[] = [];
+        for (const p of this.players.values()) if (p.team === 'ghosts' && p.alive && !p.idle) ghosts.push(p);
+        if (ghosts.length === 0) return;
+        ghosts.sort((a, b) => a.joinedAt - b.joinedAt || a.id - b.id);
+        const c = ghosts[this.roundsPlayed % ghosts.length];
+        c.carry.carrier = true;
+        this.carrierId = c.id;
+    }
+
     private damage(victim: Player, amount: number, attacker: Player, kind: DamageKind, weapon?: number, zone?: HitZone): boolean {
         const dealt = Math.min(amount, victim.health);
         victim.health = Math.max(0, victim.health - amount);
@@ -587,6 +700,7 @@ export class Game {
         resetKnife(victim.knife);
         cancelReloads(victim.loadout); // death cancels a reload
         victim.actionTicks = 0;
+        if (victim.id === this.carrierId) this.dropBomb(victim, 'lost'); // at their feet, on the floor
         this.recordKill(victim, attacker);
         // The kill feed: who and how, never where, so everyone may have it.
         const kill: KillMsg = { type: 'kill', killer: attacker.id, victim: victim.id, kind };
@@ -621,7 +735,11 @@ export class Game {
         shotDirectionFor(shooter.loadout, shooter.state, cmd.yaw, cmd.pitch, shot, shooter.id, dir);
         // Test against where the shooter saw everyone, within a bounded window.
         const viewTime = clamp(cmd.viewTime, this.now - MAX_REWIND_MS, this.now);
-        let range = rayWorld(this.map.boxes, eye, dir, SHOT_RANGE);
+        const worldRange = rayWorld(this.map.boxes, eye, dir, SHOT_RANGE);
+        let range = worldRange;
+        // Where the same ray ends against the map alone, for players who must not learn about the hit.
+        // Taken now: `eye` is scratch that the hit's consequences (a bomb drop's sight test) reuse.
+        const worldTo: Vec3 = [eye[0] + dir[0] * worldRange, eye[1] + dir[1] * worldRange, eye[2] + dir[2] * worldRange];
         let victim: Player | undefined;
         let zone: HitZone = 'torso';
         for (const other of this.players.values()) {
@@ -650,27 +768,41 @@ export class Game {
             event.damage = amount;
             if (this.damage(victim, amount, shooter, 'shot', slot, zone)) event.killed = true;
         }
-        this.sendShot(shooter, victim, event);
+        this.sendShot(shooter, victim, event, worldTo);
     }
 
     /**
      * A gunshot is a sound: heard within GUNSHOT_RANGE (GUNSHOT_RANGE_SUPPRESSED in a suppressed
      * room), like footsteps within theirs. Further away it is only seen, by players whose eye has a
      * clear line to the shooter's eye, and sent flagged silent. Nobody else receives it. Only
-     * defenders shoot, and defenders are always known to everyone, so this reveals no position the
-     * recipient was not already sent (see the note on `victim` and `to` in HANDOFF.md).
+     * defenders shoot, and defenders are always known to everyone.
+     *
+     * The hit itself (`victim`, `zone`, `damage`, `killed`, and `to` on the victim's body) goes only to
+     * the shooter, the victim, and players who know where the victim is (`knowsAbout`). Everyone else
+     * gets the shot with `to` where it would have ended against the map alone (`worldTo`, the same ray
+     * stopped by the map only), so the tracer passes through an unseen ghost. `knowsAbout` is evaluated after the hit
+     * has been applied, with the hit's visibility spike, and a victim killed by it counted as still
+     * alive: that is the test the next snapshot applies to a ghost standing there, so the shot event
+     * tells nobody more, and nobody less, than the snapshot sent 1/30 s later would. The kill feed
+     * reaches everyone through the `kill` message.
      */
-    private sendShot(shooter: Player, victim: Player | undefined, event: ShotEvent): void {
+    private sendShot(shooter: Player, victim: Player | undefined, event: ShotEvent, worldTo: Vec3): void {
         const range = this.options.suppressed ? GUNSHOT_RANGE_SUPPRESSED : GUNSHOT_RANGE;
         const from = event.from;
-        let silent: ShotEvent | undefined;
+        let silent: ShotEvent | undefined, bare: ShotEvent | undefined, bareSilent: ShotEvent | undefined;
         for (const p of this.players.values()) {
-            if (p === shooter || p === victim || dist(p.state.pos, shooter.state.pos) <= range) p.conn.send(event);
-            else if (this.lineClear(p.state.pos[0], p.eyeY, p.state.pos[2], from[0], from[1], from[2])) {
-                p.conn.send(silent ??= { ...event, silent: true });
+            const involved = p === shooter || p === victim;
+            const heard = involved || dist(p.state.pos, shooter.state.pos) <= range;
+            if (!heard && !this.lineClear(p.state.pos[0], p.eyeY, p.state.pos[2], from[0], from[1], from[2])) continue;
+            if (!victim || involved || this.knowsAbout(p, victim, true)) {
+                p.conn.send(heard ? event : (silent ??= { ...event, silent: true }));
+                continue;
             }
+            bare ??= { type: 'shot', shooter: event.shooter, weapon: event.weapon, from: event.from, to: worldTo };
+            p.conn.send(heard ? bare : (bareSilent ??= { ...bare, silent: true }));
         }
     }
+
 
     /**
      * Resolves a knife swing, a ghost's or a defender's: the nearest enemy inside the reach and cone,
@@ -761,7 +893,14 @@ export class Game {
             p.inRound = !p.idle;
             if (!p.idle) this.spawn(p);
         }
+        this.clearBomb();
+        this.assignCarrier();
         this.setPhase('freeze', FREEZE_MS);
+        // A fresh carrier and no dropped bomb: ghosts are told who has it, defenders that nothing is in sight.
+        for (const p of this.players.values()) {
+            p.bombShown = null;
+            p.conn.send(p.team === 'ghosts' ? this.ghostBombMsg('assign', this.carrierId) : { type: 'bomb', dropped: null });
+        }
         this.sendRoster();
     }
 
@@ -771,6 +910,11 @@ export class Game {
      */
     private toWarmup(hold: boolean): void {
         this.bomb = null;
+        this.clearBomb(); // warmup has no bomb
+        for (const p of this.players.values()) {
+            p.bombShown = null;
+            p.conn.send(p.team === 'ghosts' ? this.ghostBombMsg() : { type: 'bomb', dropped: null });
+        }
         this.startRequested = false;
         if (hold) { this.held = true; this.graceUntil = this.now + GRACE_MS; }
         else this.resetMatch();
@@ -787,7 +931,9 @@ export class Game {
         p.actionTicks = 0;
         this.bomb = [...p.state.pos] as Vec3;
         p.stats.plants++;
+        this.clearBomb(); // planted: nobody carries it any more
         this.setPhase('planted', BOMB_MS);
+        this.sendBombToGhosts();
     }
 
     private endRound(winner: Team, reason: RoundReason): void {
@@ -829,6 +975,12 @@ export class Game {
 
     /** The round state machine: decides when rounds start, who has won, and when sides swap. */
     private updateRound(): void {
+        // A carrier who is gone, dead or sitting out lets go of the bomb where they stood.
+        if (this.carrierId !== 0) {
+            const c = this.players.get(this.carrierId);
+            if (!c) this.carrierId = 0;
+            else if (!c.alive || c.idle || c.team !== 'ghosts') this.dropBomb(c, 'lost');
+        }
         let ghosts = 0, defenders = 0, ghostsAlive = 0, defendersAlive = 0;
         for (const p of this.players.values()) {
             if (p.idle) continue; // spectate-only players do not hold a team up
@@ -884,9 +1036,9 @@ export class Game {
      * Whether `viewer` is told where `other` is. This is the anti-wallhack rule: a client that is
      * never sent an unseen, unheard ghost's position cannot reveal it, however it is modified.
      */
-    private knowsAbout(viewer: Player, other: Player): boolean {
+    private knowsAbout(viewer: Player, other: Player, assumeAlive = false): boolean {
         if (other.team === viewer.team || other.team === 'defenders') return true;
-        if (!other.alive) return false;
+        if (!other.alive && !assumeAlive) return false;
         const a = viewer.state.pos, b = other.state.pos;
         if (dist(a, b) <= BREATH_RANGE) return true; // close enough to hear breathing
         if (other.vis < VIS_SEND_THRESHOLD) return false;
@@ -914,6 +1066,7 @@ export class Game {
                 ...this.weaponView(p)
             });
         }
+        if (this.dropped) this.updateBombSight(); // defenders gain and lose sight of a dropped bomb as anyone moves
         for (const p of this.players.values()) {
             const players: PlayerSnap[] = [];
             for (const [other, snap] of snaps) if (other !== p && this.knowsAbout(p, other)) players.push(snap);
@@ -921,9 +1074,10 @@ export class Game {
                 type: 'snap', time: this.now, ack: p.lastSeq,
                 me: {
                     team: p.team,
-                    action: p.actionTicks / (p.team === 'ghosts' ? PLANT_TICKS : DEFUSE_TICKS),
+                    actionTicks: p.actionTicks,
                     pos: p.state.pos, vel: p.state.vel, onGround: p.state.onGround, crouched: p.state.crouched,
-                    health: p.health, alive: p.alive, respawnAt: p.respawnAt, vis: p.vis, loadout: p.loadout, knife: p.knife
+                    health: p.health, alive: p.alive, respawnAt: p.respawnAt, vis: p.vis, loadout: p.loadout, knife: p.knife,
+                    carry: p.carry
                 },
                 players
             });

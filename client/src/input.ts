@@ -21,6 +21,8 @@ export class Input {
     private readonly keys = new Set<string>();
     private jumpQueued = false;
     private swapQueued = false;
+    /** A press of "Drop bomb" not yet sent: one press drops once. */
+    private dropQueued = false;
     /** Mouse wheel notches not yet sent: positive is down (next weapon). */
     private wheelSteps = 0;
     /** Settings: multiplier on the base sensitivity, and inverted vertical look. */
@@ -113,6 +115,7 @@ export class Input {
         const b = this.b;
         if (b.jump[0] === code || b.jump[1] === code) this.jumpQueued = true;
         if (b.prevWeapon[0] === code || b.prevWeapon[1] === code) this.swapQueued = true;
+        if (b.dropBomb[0] === code || b.dropBomb[1] === code) this.dropQueued = true;
         if (b.crouch[0] === code || b.crouch[1] === code) this.crouchOn = !this.crouchOn;
         if (b.walk[0] === code || b.walk[1] === code) this.walkOn = !this.walkOn;
         if (b.aim[0] === code || b.aim[1] === code) this.aimOn = !this.aimOn;
@@ -129,6 +132,7 @@ export class Input {
         this.keys.clear();
         this.jumpQueued = false;
         this.swapQueued = false;
+        this.dropQueued = false;
         this.wheelSteps = 0;
         this.clearToggles();
     }
@@ -145,6 +149,16 @@ export class Input {
     /** Plant or defuse. */
     get use(): boolean {
         return this.pressed('use');
+    }
+
+    /**
+     * Drop the bomb: true for one tick per press of the key, then false until it is pressed again. In
+     * warmup the key is "Ready" (its own context) and the server ignores a drop with no bomb.
+     */
+    takeDrop(): boolean {
+        const d = this.dropQueued;
+        this.dropQueued = false;
+        return d;
     }
 
     /** Reload. */

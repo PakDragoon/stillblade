@@ -1,6 +1,6 @@
 import { INTERP_DELAY_MS } from '@shared/constants';
 import {
-    PROTOCOL_VERSION, decodeServer, encodeClient, type ChatMsg, type ClientMsg, type DamageMsg, type HitConfirmMsg,
+    PROTOCOL_VERSION, decodeServer, encodeClient, type BombMsg, type ChatMsg, type ClientMsg, type DamageMsg, type HitConfirmMsg,
     type KillMsg, type NetCmd, type PlayerSnap, type SelfSnap, type RosterEntry, type RoundMsg, type ServerMsg, type ShotEvent,
     type SlashEvent, type SoundEvent, type SummaryMsg, type Team
 } from '@shared/protocol';
@@ -24,6 +24,8 @@ export interface NetHandlers {
     hitConfirm(msg: HitConfirmMsg): void;
     /** Someone in the room was killed (the kill feed). */
     kill(msg: KillMsg): void;
+    /** The dropped bomb and (ghosts only) its carrier changed, or (defenders) a dropped bomb came into or left sight. */
+    bomb(msg: BombMsg): void;
 }
 
 interface Sample {
@@ -236,6 +238,9 @@ export class Net {
                 break;
             case 'kill':
                 handlers.kill(msg);
+                break;
+            case 'bomb':
+                handlers.bomb(msg);
                 break;
         }
     }

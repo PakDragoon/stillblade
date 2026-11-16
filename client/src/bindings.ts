@@ -1,7 +1,7 @@
 /**
  * Key and mouse bindings: one table of actions, and pure functions around it.
  *
- * Adding an action is one row in `ACTIONS` (package C adds "Drop bomb" that way). Everything else, the
+ * Adding an action is one row in `ACTIONS` ("Drop bomb", package C, was added that way). Everything else, the
  * settings list, the controls page, conflict detection and the on-screen hints, reads this table.
  *
  * An input is a string: a keyboard `KeyboardEvent.code` ("KeyG", "ShiftLeft", "Digit1") or a mouse
@@ -39,6 +39,7 @@ export const ACTIONS = [
     { id: 'aim', label: 'Aim down sights', group: 'Weapons', defaults: ['Mouse2', 'KeyZ'], context: 'any' },
     { id: 'reload', label: 'Reload', group: 'Weapons', defaults: ['KeyR'], context: 'any' },
     { id: 'use', label: 'Plant or defuse (hold)', group: 'Weapons', defaults: ['KeyE'], context: 'any' },
+    { id: 'dropBomb', label: 'Drop bomb (bomb carrier)', group: 'Weapons', defaults: ['KeyG'], context: 'round' },
     { id: 'prevWeapon', label: 'Previous weapon', group: 'Weapons', defaults: ['KeyQ'], context: 'any' },
     { id: 'slot1', label: 'Weapon 1 (rifle)', group: 'Weapons', defaults: ['Digit1'], context: 'any' },
     { id: 'slot2', label: 'Weapon 2 (pistol)', group: 'Weapons', defaults: ['Digit2'], context: 'any' },

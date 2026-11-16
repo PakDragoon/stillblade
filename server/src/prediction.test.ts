@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { TICK_DT, TICK_RATE } from '../../shared/constants';
 import { MELEE_SLASH, MELEE_SWING, copyLoadout, createLoadout, resetLoadout, sameLoadout, stepLoadout } from '../../shared/gun';
-import { sameKnifeState } from '../../shared/knife';
+import {
+    CARRY_DROPPED, CARRY_PICKED, copyCarry, createCarry, resetCarry, restingPoint, sameCarry, stepCarry
+} from '../../shared/bomb';
+import { copyKnifeState, createKnifeState, resetKnife, sameKnifeState, stepKnife } from '../../shared/knife';
 import { copyPlayerState, createPlayerState, stepPlayer } from '../../shared/movement';
 import { decodeClient, decodeServer, encodeClient, encodeServer, type NetCmd, type ServerMsg, type Wire } from '../../shared/protocol';
-import type { MapData } from '../../shared/types';
+import { PLANT_TICKS, canAct, movementLocked, type Phase } from '../../shared/rules';
+import type { MapData, Vec3 } from '../../shared/types';
 import { SLOT_KNIFE, SLOT_PISTOL, SLOT_RIFLE } from '../../shared/weapons';
 import { Game } from './game';
 
@@ -67,7 +71,7 @@ function playThrough(opts: { seed: number; ticks: number; upTicks: number; downT
         game.tick(tick * TICK_MS);
         game.handleCmd(ghostId, {
             seq: ghostSeq++, forward: 0, right: 0, yaw: 0, pitch: 0, jump: false, walk: false, crouch: false, fire: false,
-            use: false, reload: false, slot: 0, swap: false, aim: false, viewTime: game.now
+            use: false, reload: false, slot: 0, swap: false, aim: false, drop: false, viewTime: game.now
         });
 
         // Deliver what has reached the client.
@@ -121,7 +125,7 @@ function playThrough(opts: { seed: number; ticks: number; upTicks: number; downT
             seq, forward, right, yaw, pitch: Math.fround(0.5 + rand() * 0.2), jump: rand() < 0.01, walk: rand() < 0.2, crouch,
             fire: fireHold > 0, use: false, reload: rand() < 0.01,
             slot: r < 0.006 ? 1 : r < 0.012 ? 2 : r < 0.018 ? 3 : r < 0.019 ? 7 : 0, swap: rand() < 0.005, aim: aimHold > 0,
-            viewTime: game.now, live: alive, armed: true
+            drop: seq % 97 === 0, viewTime: game.now, live: alive, armed: true
         };
         seq += opts.seqJump ? opts.seqJump() : 1;
         pending.push(cmd);
@@ -179,5 +183,252 @@ describe('client prediction of the loadout through the wire', () => {
         expect(r.swings).toBeGreaterThan(3);
         expect(r.gunMismatches).toBe(0);
         expect(r.knifeMismatches).toBe(0);
+    });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The bomb carrier: a predicted ghost carries the bomb, drops it, picks it back up after the repick
+// wait, loses it to a teammate (server-side only, so the client learns of it through `bomb` messages),
+// picks it up again where the teammate dropped it, then plants in a site while still pushing the
+// movement keys, and keeps them pressed after the plant completes.
+// ---------------------------------------------------------------------------------------------
+
+const siteMap: MapData = {
+    name: 'site',
+    bounds: { min: [-50, -0.5, -50], max: [50, 4, 50] },
+    boxes: [
+        { min: [-50, -0.5, -50], max: [50, 0, 50] },
+        { min: [8, 0, 4], max: [9, 2, 12] } // a wall to walk along
+    ],
+    spawns: { ghosts: [{ pos: [0, 0, 20], yaw: 0 }, { pos: [3, 0, 20], yaw: 0 }], defenders: [{ pos: [30, 0, -40], yaw: 0 }] },
+    bombSites: [{ name: 'A', min: [-4, 0, -4], max: [4, 3, 4] }]
+};
+
+interface GhostPending extends NetCmd { live: boolean; armed: boolean; acting: boolean }
+
+const yawToward = (from: Vec3, to: Vec3): number => Math.fround(Math.atan2(-(to[0] - from[0]), -(to[2] - from[2])));
+const flat = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[2] - b[2]);
+
+function playGhost(opts: { seed: number; upTicks: number; downTicks: number; seqJump?: () => number }) {
+    const game = new Game(siteMap, { rounds: true });
+    const down: { at: number; wire: Wire }[] = [];
+    const up: { at: number; wire: Wire }[] = [];
+    let tick = 0;
+    const id = game.join({ send: (m: ServerMsg) => down.push({ at: tick + opts.downTicks, wire: encodeServer(m) }) });
+    const defenderId = game.join({ send: () => {} });
+    const mateId = game.join({ send: () => {} });
+    const mate = game.players.get(mateId)!;
+    let mateSeq = 0, defenderSeq = 0;
+
+    // The client's predicted state, as in client/src/main.ts.
+    const curr = createPlayerState([0, 0, 0]);
+    const knife = createKnifeState();
+    const knifeBefore = createKnifeState();
+    const carry = createCarry();
+    const carryBefore = createCarry();
+    const lastGround: Vec3 = [0, 0, 0];
+    let droppedPred: Vec3 | null = null, serverDropped: Vec3 | null = null;
+    let actionTicks = 0, phaseOverride: Phase | null = null;
+    let phase: Phase = 'warmup', bombPos: Vec3 | null = null;
+    const pending: GhostPending[] = [];
+    let alive = false, seq = 0, yaw = 0;
+    const result = {
+        snapshots: 0, posMismatches: 0, knifeMismatches: 0, carryMismatches: 0,
+        drops: 0, pickups: 0, mateHad: false, planted: false, movedAfterPlant: false, lockedTicks: 0
+    };
+
+    const stepObjective = (c: GhostPending): number => {
+        if (curr.onGround) { lastGround[0] = curr.pos[0]; lastGround[1] = curr.pos[1]; lastGround[2] = curr.pos[2]; }
+        const r = stepCarry(carry, c.drop, c.acting, curr, droppedPred);
+        if (r === CARRY_DROPPED) droppedPred = restingPoint(curr, siteMap.boxes, lastGround, [0, 0, 0]);
+        else if (r === CARRY_PICKED) droppedPred = null;
+        if (!c.acting) actionTicks = 0;
+        else if (++actionTicks >= PLANT_TICKS) { actionTicks = 0; carry.carrier = false; phaseOverride = 'planted'; }
+        return r;
+    };
+
+    // The script: where to go next, and what to press there.
+    const rand = rng(opts.seed);
+    let stage = 0, stageTicks = 0, fireHold = 0;
+    const DROP_A: Vec3 = [-10, 0, 10], DROP_B: Vec3 = [-14, 0, 4], MATE_DROP: Vec3 = [12, 0, 0], SITE: Vec3 = [0, 0, 0];
+    let mateStage = 0, mateTicks = 0;
+
+    for (tick = 1; tick <= 120 * TICK_RATE; tick++) {
+        game.tick(tick * TICK_MS);
+        game.handleCmd(defenderId, {
+            seq: defenderSeq++, forward: 0, right: 0, yaw: 0, pitch: 0, jump: false, walk: false, crouch: false, fire: false,
+            use: false, reload: false, slot: 0, swap: false, aim: false, drop: false, viewTime: game.now
+        });
+        // The teammate, simulated by the server only: waits by its spawn, walks to where we dropped the
+        // bomb the second time, carries it to MATE_DROP and drops it there, then walks away.
+        {
+            const m = mate.state.pos;
+            let target: Vec3 | null = null, drop = false;
+            if (mateStage === 0 && game.dropped && flat(game.dropped, DROP_B) < 0.5) mateStage = 1;
+            if (mateStage === 1) { target = DROP_B; if (game.carrierId === mateId) { mateStage = 2; result.mateHad = true; } }
+            if (mateStage === 2) { target = MATE_DROP; if (flat(m, MATE_DROP) < 0.3) { drop = true; mateStage = 3; } }
+            if (mateStage === 3) { target = [20, 0, 10]; if (++mateTicks > 200) target = null; }
+            const go = target !== null && flat(m, target) > 0.2;
+            game.handleCmd(mateId, {
+                seq: mateSeq++, forward: go ? 1 : 0, right: 0, yaw: target ? yawToward(m, target) : 0, pitch: 0, jump: false,
+                walk: target !== null && flat(m, target) < 1.5, crouch: false, fire: false, use: false, reload: false, slot: 0,
+                swap: false, aim: false, drop, viewTime: game.now
+            });
+        }
+
+        while (down.length && down[0].at <= tick) {
+            const msg = decodeServer(down.shift()!.wire);
+            if (msg.type === 'spawn') {
+                copyPlayerState(curr, createPlayerState(msg.pos));
+                yaw = Math.fround(msg.yaw);
+                alive = true;
+                resetKnife(knife);
+                resetCarry(carry);
+                actionTicks = 0;
+                phaseOverride = null;
+            } else if (msg.type === 'round') {
+                phase = msg.phase;
+                bombPos = msg.bomb;
+                phaseOverride = null;
+                if (phase === 'planted') result.planted = true;
+            } else if (msg.type === 'bomb') {
+                serverDropped = msg.dropped ? [...msg.dropped] as Vec3 : null;
+                // Handing out the bomb at the round start (and clearing it) happens outside any command.
+                if (msg.carrier !== undefined && (msg.event === undefined || msg.event === 'assign')) carry.carrier = msg.carrier === id;
+                if (!carry.carrier) droppedPred = serverDropped;
+            } else if (msg.type === 'snap') {
+                result.snapshots++;
+                alive = msg.me.alive;
+                while (pending.length && pending[0].seq <= msg.ack) pending.shift();
+                if (!msg.me.alive) continue;
+                const px = curr.pos[0], py = curr.pos[1], pz = curr.pos[2];
+                curr.pos[0] = msg.me.pos[0]; curr.pos[1] = msg.me.pos[1]; curr.pos[2] = msg.me.pos[2];
+                curr.vel[0] = msg.me.vel[0]; curr.vel[1] = msg.me.vel[1]; curr.vel[2] = msg.me.vel[2];
+                curr.onGround = msg.me.onGround;
+                curr.crouched = msg.me.crouched;
+                copyKnifeState(knifeBefore, knife);
+                copyKnifeState(knife, msg.me.knife);
+                copyCarry(carryBefore, carry);
+                copyCarry(carry, msg.me.carry);
+                const actionBefore = actionTicks;
+                actionTicks = msg.me.actionTicks;
+                droppedPred = serverDropped;
+                phaseOverride = null;
+                for (const c of pending) {
+                    stepPlayer(curr, c, TICK_DT, siteMap.boxes);
+                    if (!c.live) continue;
+                    stepKnife(knife, c.fire, c.armed);
+                    stepObjective(c);
+                }
+                if (!sameKnifeState(knife, knifeBefore)) result.knifeMismatches++;
+                if (!sameCarry(carry, carryBefore) || actionTicks !== actionBefore) result.carryMismatches++;
+                if (curr.pos[0] !== px || curr.pos[1] !== py || curr.pos[2] !== pz) result.posMismatches++;
+            }
+        }
+        if (!alive) continue;
+
+        // Our script, steered on our own predicted position.
+        stageTicks++;
+        let target: Vec3 | null = null, use = false, drop = false, forward = 0, right = 0;
+        if (fireHold > 0) fireHold--; else if (rand() < 0.03 && stage > 0) fireHold = Math.floor(rand() * 30);
+        switch (stage) {
+            case 0: // the freeze: hold use (nothing to plant yet). No movement keys or attack here: the
+                // warmup-to-freeze and freeze-to-live edges reach the client late (HANDOFF.md, phase edges).
+                use = rand() < 0.5;
+                if (phase === 'live' && stageTicks > 60) { stage = 1; stageTicks = 0; }
+                break;
+            case 1: // walk to DROP_A, holding use now and then (outside a site: no effect), and drop it there
+                target = DROP_A; use = rand() < 0.3;
+                if (flat(curr.pos, DROP_A) < 0.25) { drop = true; stage = 2; stageTicks = 0; }
+                break;
+            case 2: // stand on it: picked up again on the 61st command after the drop
+                if (carry.carrier) { stage = 3; stageTicks = 0; }
+                break;
+            case 3: // drop it at DROP_B for the teammate and step back out of reach
+                target = DROP_B;
+                if (carry.carrier && flat(curr.pos, DROP_B) < 0.25) drop = true;
+                if (!carry.carrier && stageTicks > 5) { stage = 4; stageTicks = 0; }
+                break;
+            case 4: // wait well away while the teammate collects it and drops it at MATE_DROP
+                target = [-20, 0, 15];
+                if (serverDropped && flat(serverDropped, MATE_DROP) < 0.5 && mateStage === 3) { stage = 5; stageTicks = 0; }
+                break;
+            case 5: // fetch it from where the teammate left it (known only from the server's `bomb` message)
+                target = MATE_DROP;
+                if (carry.carrier) { stage = 6; stageTicks = 0; }
+                break;
+            case 6: // into the site
+                target = SITE;
+                if (flat(curr.pos, SITE) < 0.5) { stage = 7; stageTicks = 0; }
+                break;
+            case 7: // plant: hold use and keep pushing forward and sideways the whole time, and after
+                use = true; forward = 1; right = rand() < 0.5 ? 1 : -1;
+                if (stageTicks > PLANT_TICKS + 90) { stage = 8; stageTicks = 0; }
+                break;
+            default: // let go
+                forward = rand() < 0.5 ? 1 : 0;
+        }
+        if (target) {
+            yaw = yawToward(curr.pos, target);
+            forward = flat(curr.pos, target) > 0.15 ? 1 : 0;
+        }
+        const cmd: GhostPending = {
+            seq, forward, right, yaw, pitch: 0, jump: false, walk: target !== null && flat(curr.pos, target) < 1.5, crouch: false,
+            fire: fireHold > 0 && stage !== 7, use, reload: false, slot: 0, swap: false, aim: false, drop,
+            viewTime: game.now, live: alive, armed: false, acting: false
+        };
+        const ph = phaseOverride ?? phase;
+        const acting = cmd.use && canAct('ghosts', ph, curr, siteMap, bombPos, carry.carrier);
+        if (movementLocked(cmd.use, 'ghosts', ph, curr, siteMap, bombPos, carry.carrier)) {
+            cmd.forward = 0; cmd.right = 0; cmd.jump = false;
+            if (acting) result.lockedTicks++;
+        }
+        cmd.armed = !acting && ph !== 'freeze';
+        cmd.acting = acting;
+        seq += opts.seqJump ? opts.seqJump() : 1;
+        pending.push(cmd);
+        const bx = curr.pos[0], bz = curr.pos[2];
+        stepPlayer(curr, cmd, TICK_DT, siteMap.boxes);
+        stepKnife(knife, cmd.fire, cmd.armed);
+        const r = stepObjective(cmd);
+        if (r === CARRY_DROPPED) result.drops++;
+        if (r === CARRY_PICKED) result.pickups++;
+        if (stage === 7 && ph === 'planted' && (curr.pos[0] !== bx || curr.pos[2] !== bz)) result.movedAfterPlant = true;
+
+        up.push({ at: tick + opts.upTicks, wire: encodeClient({ type: 'cmd', cmd }) });
+        while (up.length && up[0].at <= tick) {
+            const msg = decodeClient(up.shift()!.wire as Uint8Array);
+            game.handleCmd(id, (msg as { cmd: NetCmd }).cmd);
+        }
+        if (stage === 8 && stageTicks > 60) break;
+    }
+    return { ...result, stage };
+}
+
+describe('client prediction of the bomb carrier through the wire', () => {
+    it('never disagrees around a drop, the repick wait, a pickup, a teammate pickup and a plant', () => {
+        for (const [seed, upTicks, downTicks] of [[1, 4, 5], [2, 1, 1], [3, 9, 9], [4, 0, 15]]) {
+            const r = playGhost({ seed, upTicks, downTicks });
+            expect(r.stage).toBe(8); // the whole script ran
+            expect(r.drops).toBe(2); // at DROP_A, and at DROP_B for the teammate
+            expect(r.pickups).toBe(2); // our own bomb after the wait, and the teammate's drop
+            expect(r.mateHad).toBe(true);
+            expect(r.planted).toBe(true);
+            expect(r.lockedTicks).toBe(PLANT_TICKS); // rooted for exactly the plant, not a command more
+            expect(r.movedAfterPlant).toBe(true); // and free the moment it completed, before the round message
+            expect(r.posMismatches).toBe(0);
+            expect(r.knifeMismatches).toBe(0);
+            expect(r.carryMismatches).toBe(0);
+        }
+    });
+
+    it('never disagrees when the client jumps its command numbers', () => {
+        const jumpy = rng(11);
+        const r = playGhost({ seed: 1, upTicks: 4, downTicks: 5, seqJump: () => 1 + Math.floor(jumpy() * 1000) });
+        expect(r.stage).toBe(8);
+        expect(r.pickups).toBe(2);
+        expect(r.planted).toBe(true);
+        expect(r.posMismatches).toBe(0);
+        expect(r.carryMismatches).toBe(0);
     });
 });

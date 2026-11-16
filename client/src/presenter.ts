@@ -466,6 +466,16 @@ body.sb-lowhp #sb-low { display: block; }
     font: 800 12px/1 system-ui, sans-serif; letter-spacing: .3em; }
 #sb-act .bar { height: 7px; margin-top: 6px; background: rgba(255,255,255,.18); box-shadow: 0 0 3px #000; }
 #sb-act .fill { height: 100%; width: 0; background: #ffd36b; }
+#sb-carrier { margin: 0 0 8px; display: none; width: max-content; padding: 4px 9px 4px 7px; background: rgba(255,211,107,.14);
+    border-left: 3px solid #ffd36b; color: #ffd36b; font: 700 12px/1 'Bahnschrift', system-ui, sans-serif; letter-spacing: .14em; }
+#sb-nobomb { left: 50%; top: 68%; transform: translateX(-50%); display: none; white-space: nowrap;
+    font: 600 15px/1 system-ui, sans-serif; letter-spacing: .05em; opacity: .85; }
+#sb-bombnote { left: 50%; top: 96px; transform: translateX(-50%); display: none; white-space: nowrap; padding: 5px 14px;
+    background: rgba(9,12,16,.6); color: #ffd36b; font: 600 15px/1.2 'Bahnschrift', system-ui, sans-serif; letter-spacing: .05em; }
+#sb-match .bombmark { display: none; font: 700 10px/1 'Bahnschrift', system-ui, sans-serif; letter-spacing: .14em; color: #ffd36b; }
+#sb-match .bombmark.down { color: #ff5a4a; animation: sb-pulse .6s ease-in-out infinite alternate; }
+#sb-scores .row.carrier span:first-child::after { content: '  BOMB'; white-space: pre; color: #ffd36b; font-size: 10px;
+    letter-spacing: .16em; font-weight: 700; }
 #sb-scores { left: 50%; top: 50%; transform: translate(-50%, -50%); display: none; box-sizing: border-box; z-index: 2;
     width: min(520px, calc(100vw - 32px)); padding: 14px 18px 16px; background: rgba(10,12,16,.84);
     box-shadow: 0 6px 28px rgba(0,0,0,.6); font: 500 15px/1.2 system-ui, sans-serif; text-shadow: none; }
@@ -1065,8 +1075,9 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     let blinkPhase = 0;
     let bombX = NaN, bombY = NaN, bombZ = NaN;
 
+    // A dropped bomb uses the same model, unlit (only the planted bomb blinks).
     const updateBomb = (dt: number, match: MatchView): void => {
-        const p = match.bombPos;
+        const p = match.bombPos ?? match.droppedBomb;
         if (!p) {
             if (bomb.enabled) bomb.enabled = false;
             return;
@@ -1094,6 +1105,10 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     const crosshair = document.getElementById('crosshair');
     const vignette = div('sb-vignette');
     const stats = div('sb-stats');
+    // "You have the bomb", above the visibility meter (ghost carriers only).
+    const carrierEl = div('sb-carrier', stats, '');
+    carrierEl.textContent = 'YOU HAVE THE BOMB';
+    let shownCarrier = false;
     const visEl = div('sb-vis', stats, '');
     const visRow = div('', visEl, 'row');
     div('', visRow, '').textContent = 'VISIBILITY';
@@ -1174,6 +1189,10 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         return { box, score, pips };
     };
     const tG = makeTeam('ghosts');
+    // Under the ghosts' pips, for ghosts only: who has the bomb, or that it is lying on the floor.
+    const bombMarkEl = div('', tG.box, 'bombmark');
+    const bombMark = new Slot(bombMarkEl);
+    let shownBombMark = '';
     const mid = div('', matchEl, 'mid');
     matchEl.insertBefore(mid, tG.box.nextSibling);
     div('', mid, 'tag').textContent = 'BOMB PLANTED';
@@ -1198,6 +1217,14 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     const actEl = div('sb-act');
     const actLabel = new Slot(div('', actEl, ''));
     const actFill = div('', div('', actEl, 'bar'), 'fill');
+    // A ghost without the bomb standing in a site.
+    const noBombEl = div('sb-nobomb');
+    noBombEl.textContent = 'Only the bomb carrier can plant';
+    let shownNoBomb = false;
+    // Short bomb notices for ghosts (who has it, dropped, picked up).
+    const bombNoteEl = div('sb-bombnote');
+    const bombNote = new Slot(bombNoteEl);
+    let bombNoteLeft = 0;
 
     // Scoreboard.
     const scoresEl = div('sb-scores');
@@ -1231,7 +1258,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     let shownActPct = -1;
     let shownScores = false;
     let scoresRosterV = -1, scoresLocalId = -1, scoresTeam: Team | null = null;
-    let scoresG = -1, scoresD = -1, scoresRound = -1;
+    let scoresG = -1, scoresD = -1, scoresRound = -1, scoresCarrier = -1;
     let shownDeadKey = NaN;
     let shownDeadEl = false;
 
@@ -1444,6 +1471,16 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             }
         }
         if (match.round !== shownRound) { shownRound = match.round; roundSlot.set(`ROUND ${shownRound}`); }
+        // The bomb's state, for ghosts (a defender's carrierId is always 0 and it only knows a dropped bomb in sight).
+        const ghost = local.team === 'ghosts';
+        const live = match.phase === 'freeze' || match.phase === 'live';
+        const mark = !ghost || !live ? '' : match.droppedBomb ? '\u0001' : match.carrierId > 0 ? playerName(match.carrierId) : '';
+        if (mark !== shownBombMark) {
+            shownBombMark = mark;
+            bombMarkEl.style.display = mark ? 'block' : 'none';
+            bombMarkEl.className = mark === '\u0001' ? 'bombmark down' : 'bombmark';
+            if (mark) bombMark.set(mark === '\u0001' ? 'BOMB DROPPED' : `BOMB · ${mark.toUpperCase()}`);
+        }
     };
 
     const showBanner = (cls: string, seconds: number): void => {
@@ -1515,7 +1552,16 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         if (op !== shownBannerOpacity) { shownBannerOpacity = op; bannerEl.style.opacity = op; }
     };
 
-    const updateUse = (local: LocalView): void => {
+    const updateUse = (dt: number, local: LocalView): void => {
+        const carrier = local.alive && local.carrier;
+        if (carrier !== shownCarrier) { shownCarrier = carrier; carrierEl.style.display = carrier ? 'block' : 'none'; }
+        const noBomb = local.alive && local.siteNoBomb;
+        if (noBomb !== shownNoBomb) { shownNoBomb = noBomb; noBombEl.style.display = noBomb ? 'block' : 'none'; }
+        if (bombNoteLeft > 0) {
+            bombNoteLeft -= dt;
+            if (bombNoteLeft <= 0) bombNoteEl.style.display = 'none';
+            else if (bombNoteLeft < 0.5) bombNoteEl.style.opacity = (bombNoteLeft / 0.5).toFixed(2);
+        }
         const acting = local.alive && local.action > 0;
         const prompt = local.alive && local.canAct && !acting;
         if (prompt !== shownUse) { shownUse = prompt; useEl.style.display = prompt ? 'block' : 'none'; }
@@ -1542,7 +1588,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                 .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths || a.id - b.id);
             if (members.length === 0) div('', scoresEl, 'empty').textContent = 'No players';
             for (const p of members) {
-                const row = div('', scoresEl, `row${p.alive ? '' : ' dead'}${p.id === local.id ? ' me' : ''}`);
+                const carrier = p.id === match.carrierId && team === 'ghosts';
+                const row = div('', scoresEl, `row${p.alive ? '' : ' dead'}${p.id === local.id ? ' me' : ''}${carrier ? ' carrier' : ''}`);
                 span(row, '', p.name || `Player ${p.id}`);
                 span(row, '', String(p.kills));
                 span(row, '', String(p.deaths));
@@ -1558,9 +1605,10 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         }
         if (!shownScores) return;
         if (rosterVersion === scoresRosterV && local.id === scoresLocalId && local.team === scoresTeam &&
-            match.scoreGhosts === scoresG && match.scoreDefenders === scoresD && match.round === scoresRound) return;
+            match.scoreGhosts === scoresG && match.scoreDefenders === scoresD && match.round === scoresRound &&
+            match.carrierId === scoresCarrier) return;
         scoresRosterV = rosterVersion; scoresLocalId = local.id; scoresTeam = local.team;
-        scoresG = match.scoreGhosts; scoresD = match.scoreDefenders; scoresRound = match.round;
+        scoresG = match.scoreGhosts; scoresD = match.scoreDefenders; scoresRound = match.round; scoresCarrier = match.carrierId;
         renderScores(local, match);
     };
 
@@ -1581,7 +1629,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             updateAmmo(local);
             updateMatchBar(local, match);
             updateBanner(dt, local, match);
-            updateUse(local);
+            updateUse(dt, local);
             updateScores(local, match);
         },
 
@@ -1717,6 +1765,13 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             crosshair.style.setProperty('--c', c.color);
             crosshair.style.setProperty('--s', `${c.size}px`);
             xhairEl.style.setProperty('--c', c.color);
+        },
+
+        bombNotice(text: string): void {
+            bombNote.set(text);
+            bombNoteLeft = 3.5;
+            bombNoteEl.style.opacity = '1';
+            bombNoteEl.style.display = 'block';
         },
 
         killFeed(killerId: number, victimId: number, kind: KillKind, zone: HitZone | null, weapon?: string): void {

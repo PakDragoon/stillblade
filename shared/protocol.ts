@@ -1,3 +1,4 @@
+import type { CarryState } from './bomb';
 import type { Phase, RoundReason } from './rules';
 import type { GunState, LoadoutState } from './gun';
 import type { KnifeState } from './knife';
@@ -6,7 +7,7 @@ import type { InputCmd, Vec3 } from './types';
 import { GUN_COUNT } from './weapons';
 import type { HitZone } from './zones';
 
-export const PROTOCOL_VERSION = 10;
+export const PROTOCOL_VERSION = 11;
 export const DEFAULT_PORT = 8080;
 /** Snapshots per second sent to each client. */
 export const SNAPSHOT_RATE = 30;
@@ -30,6 +31,8 @@ export interface NetCmd extends InputCmd {
     swap: boolean;
     /** Aim down sights held (right mouse). */
     aim: boolean;
+    /** Drop the bomb (ghost carrying it; one command per key press). Refused while planting. */
+    drop: boolean;
     /** Server time (ms) at which this client was drawing other players: the lag-compensation target. */
     viewTime: number;
 }
@@ -57,8 +60,11 @@ export interface PlayerSnap {
 export interface SelfSnap {
     /** Sides swap at halftime, so the team can change during a match. */
     team: Team;
-    /** Plant or defuse progress, 0..1; 0 when not doing either. */
-    action: number;
+    /**
+     * Consecutive commands spent planting or defusing (0 when doing neither), exact: the client predicts
+     * when a plant completes (PLANT_TICKS, shared/rules.ts) from it.
+     */
+    actionTicks: number;
     /** The local player's own visibility (see PlayerSnap.vis). */
     vis: number;
     pos: Vec3;
@@ -73,6 +79,11 @@ export interface SelfSnap {
     loadout: LoadoutState;
     /** The ghost knife timing, predicted by the client: sent exactly (small integers). */
     knife: KnifeState;
+    /**
+     * Whether this player carries the bomb, and the repick wait after a deliberate drop (shared/bomb.ts),
+     * predicted by the client: sent exactly. Always false and 0 for defenders.
+     */
+    carry: CarryState;
 }
 
 /**
@@ -108,10 +119,13 @@ export interface SlashEvent {
     killed?: boolean;
 }
 
-/** A sound the recipient is close enough to hear. Never sent to players out of range. */
+/**
+ * A sound the recipient is close enough to hear. Never sent to players out of range. For the bomb sounds
+ * (`bombDrop`, `bombPickup`) a defender gets `id` 0: who carries the bomb is never told to defenders.
+ */
 export interface SoundEvent {
     type: 'sound';
-    kind: 'step' | 'windup' | 'reload';
+    kind: 'step' | 'windup' | 'reload' | 'bombDrop' | 'bombPickup';
     id: number;
     pos: Vec3;
     /** 0..1 loudness at the source. */
@@ -136,6 +150,29 @@ export interface RoundMsg {
     reason?: RoundReason;
     /** The round just won also decided the match. */
     matchOver?: boolean;
+}
+
+/**
+ * What happened to the bomb (ghosts only): `assign` at the round start (`by` carries it), `drop` (`by`
+ * dropped it on purpose), `lost` (`by` died or left with it), `pickup` (`by` picked it up).
+ */
+export type BombEvent = 'assign' | 'drop' | 'lost' | 'pickup';
+
+/**
+ * The bomb before it is planted. Ghosts always know who carries it and where a dropped bomb lies, and get
+ * this on every change. A defender gets only `dropped`, and only while the dropped bomb is in its line of
+ * sight: sent when it comes into sight and again (null) when it leaves sight, is picked up or the round
+ * resets. A defender is never told who carries the bomb. The planted bomb is in `RoundMsg.bomb`.
+ */
+export interface BombMsg {
+    type: 'bomb';
+    /** Where a dropped bomb lies (on the floor); null when none is dropped or (defenders) none is in sight. */
+    dropped: Vec3 | null;
+    /** Ghosts only: the carrier's player id, 0 when nobody carries it. */
+    carrier?: number;
+    /** Ghosts only: what changed, and who it is about. */
+    event?: BombEvent;
+    by?: number;
 }
 
 /** Per-player match statistics. Reset when a new match starts. */
@@ -253,6 +290,7 @@ export type ServerMsg =
     | DamageMsg
     | HitConfirmMsg
     | KillMsg
+    | BombMsg
     /** A server note for this player only (rate limited, idle, refused request). */
     | { type: 'notice'; text: string };
 
@@ -307,16 +345,17 @@ export const REPORT_MAX_BYTES = 4096;
 
 const CMD_TAG = 1;
 const SNAP_TAG = 2;
-const CMD_BYTES = 25;
+const CMD_BYTES = 26;
 /**
  * Self state up to the loadout, then 5 loadout bytes, 7 per gun, 2 for the defender knife, 2 for the
- * ghost knife, 1 player count.
+ * ghost knife, 1 for the bomb repick wait (the carrier flag is a bit of the flags byte), 1 player count.
  */
 const SNAP_LOADOUT = 75;
 const SNAP_GUNS = SNAP_LOADOUT + 5;
 const SNAP_MELEE = SNAP_GUNS + 7 * GUN_COUNT;
 const SNAP_KNIFE = SNAP_MELEE + 2;
-const SNAP_COUNT = SNAP_KNIFE + 2;
+const SNAP_CARRY = SNAP_KNIFE + 2;
+const SNAP_COUNT = SNAP_CARRY + 1;
 const SNAP_HEAD_BYTES = SNAP_COUNT + 1;
 const SNAP_PLAYER_BYTES = 20;
 const ANGLE_SCALE = 32767 / Math.PI;
@@ -338,6 +377,7 @@ function encodeCmd(c: NetCmd): Uint8Array<ArrayBuffer> {
         (c.reload ? 32 : 0) | (c.swap ? 64 : 0) | (c.aim ? 128 : 0));
     v.setFloat64(16, c.viewTime, true);
     v.setUint8(24, c.slot);
+    v.setUint8(25, c.drop ? 1 : 0);
     return out;
 }
 
@@ -353,7 +393,8 @@ function decodeCmd(v: DataView): NetCmd {
         fire: (flags & 8) !== 0, use: (flags & 16) !== 0, reload: (flags & 32) !== 0,
         swap: (flags & 64) !== 0, aim: (flags & 128) !== 0,
         viewTime: v.getFloat64(16, true),
-        slot: v.getUint8(24)
+        slot: v.getUint8(24),
+        drop: (v.getUint8(25) & 1) !== 0
     };
 }
 
@@ -364,9 +405,10 @@ function encodeSnap(m: Extract<ServerMsg, { type: 'snap' }>): Uint8Array<ArrayBu
     v.setUint8(0, SNAP_TAG);
     v.setFloat64(1, m.time, true);
     v.setInt32(9, m.ack, true);
-    v.setUint8(13, (me.team === 'ghosts' ? 1 : 0) | (me.onGround ? 2 : 0) | (me.crouched ? 4 : 0) | (me.alive ? 8 : 0));
+    v.setUint8(13, (me.team === 'ghosts' ? 1 : 0) | (me.onGround ? 2 : 0) | (me.crouched ? 4 : 0) | (me.alive ? 8 : 0) |
+        (me.carry.carrier ? 16 : 0));
     v.setUint8(14, me.health);
-    v.setUint16(15, Math.round(unit(me.action) * 65535), true);
+    v.setUint16(15, Math.min(65535, me.actionTicks), true);
     v.setUint16(17, Math.round(unit(me.vis) * 65535), true);
     for (let k = 0; k < 3; k++) {
         v.setFloat64(19 + k * 8, me.pos[k], true);
@@ -393,6 +435,7 @@ function encodeSnap(m: Extract<ServerMsg, { type: 'snap' }>): Uint8Array<ArrayBu
     v.setUint8(SNAP_MELEE + 1, l.knife.windup);
     v.setUint8(SNAP_KNIFE, me.knife.cooldown);
     v.setUint8(SNAP_KNIFE + 1, me.knife.windup);
+    v.setUint8(SNAP_CARRY, me.carry.wait);
     v.setUint8(SNAP_COUNT, m.players.length);
     let o = SNAP_HEAD_BYTES;
     for (const p of m.players) {
@@ -460,13 +503,14 @@ function decodeSnap(v: DataView): ServerMsg {
             crouched: (flags & 4) !== 0,
             alive: (flags & 8) !== 0,
             health: v.getUint8(14),
-            action: v.getUint16(15, true) / 65535,
+            actionTicks: v.getUint16(15, true),
             vis: v.getUint16(17, true) / 65535,
             pos: [v.getFloat64(19, true), v.getFloat64(27, true), v.getFloat64(35, true)],
             vel: [v.getFloat64(43, true), v.getFloat64(51, true), v.getFloat64(59, true)],
             respawnAt: v.getFloat64(67, true),
             loadout: decodeLoadout(v),
-            knife: { cooldown: v.getUint8(SNAP_KNIFE), windup: v.getUint8(SNAP_KNIFE + 1) }
+            knife: { cooldown: v.getUint8(SNAP_KNIFE), windup: v.getUint8(SNAP_KNIFE + 1) },
+            carry: { carrier: (flags & 16) !== 0, wait: v.getUint8(SNAP_CARRY) }
         },
         players
     };
