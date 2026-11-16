@@ -3,6 +3,8 @@ import type { DamageKind, RosterEntry, Team } from '@shared/protocol';
 import type { Phase, RoundReason } from '@shared/rules';
 import type { Box, Vec3 } from '@shared/types';
 import type { HitZone } from '@shared/zones';
+import type { Tier } from './graphics';
+import type { LookTuning } from './maplook';
 
 /** Another player, already interpolated for this frame. `pos` is the feet position. */
 export interface RemoteView {
@@ -211,6 +213,28 @@ export interface Presenter {
     bombNotice(text: string): void;
     /** A kill anywhere in the room. `zone` as in `died`. */
     killFeed(killerId: number, victimId: number, kind: KillKind, zone: HitZone | null, weapon?: string): void;
+    /**
+     * The graphics tier (client/src/graphics.ts), set before the first frame and again whenever the setting changes.
+     * Low: pooled particles and decals with tight caps, no realtime lights. High adds dynamic lights (muzzle flashes,
+     * the bomb, the explosion) on the world and on players, soft blob shadows under players and floor clutter.
+     */
+    setTier(tier: Tier): void;
+    /**
+     * A map's look was applied (each map load, including a map change): the fog effects should match, and every
+     * decal and particle of the previous map goes. The boxes given to `setWorld` already hold the new map.
+     */
+    setMapLook(tuning: LookTuning): void;
+    /**
+     * Another player's footstep sound arrived (`pos` its feet, `loud` 0..1). Dust is drawn only under a player the
+     * presenter is drawing right now (never for a ghost it was not sent), and for an enemy ghost only as faintly as
+     * its shimmer.
+     */
+    footstep(id: number, pos: Vec3, loud: number): void;
+    /**
+     * A knife hit landed on player `victimId` (the server's slash event with a victim, which only reaches players who
+     * know about that victim). Drawn on the victim if the presenter is drawing it; ignored otherwise (and for us).
+     */
+    knifeHit(victimId: number): void;
 }
 
 export type CreatePresenter = (app: pc.Application, camera: pc.Entity) => Presenter;

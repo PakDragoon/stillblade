@@ -758,7 +758,7 @@ export class Ui {
         slider('Size', 'crosshairSize', 2, 12, 1, v => `${v}px`);
         h('h3', 'group', 'Display', grid);
         toggle('Show FPS and ping', 'showStats');
-        sel('Graphics quality', 'quality', [['low', 'Low (60% resolution)'], ['medium', 'Medium (80%)'], ['high', 'High (full resolution)']]);
+        sel('Graphics quality', 'quality', [['auto', 'Auto (measured while loading)'], ['low', 'Low (laptops, integrated graphics)'], ['gpu', 'High (graphics card)']]);
         h('h3', 'group', 'Controls', grid);
         slider('Aim sensitivity (while aiming)', 'aimSensitivity', 0.25, 2, 0.05, v => `${v.toFixed(2)}x`);
         const mode = (label: string, key: 'crouchToggle' | 'walkToggle' | 'aimToggle'): void => {
