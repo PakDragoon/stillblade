@@ -16,15 +16,28 @@ import {
     instantiateWeapon, loadWeaponModel, makeWeaponMaterial, WEAPON_MESH, type WeaponInstance, type WeaponModel
 } from './weapons';
 import { loadViewmodel, type VmRig } from './viewmodel';
+import { Effects, faceAt, type Surface } from './effects';
+import type { Tier } from './graphics';
+import { DYN_COL_UNIFORM, DYN_LIGHTS, DYN_POS_UNIFORM, type LookTuning } from './maplook';
 
 const DEG = 180 / Math.PI;
 const HEAD_WIDTH = 0.4;
 const CROUCH_RATE = 14;
-const TRACER_COUNT = 16;
 const TRACER_LIFE = 0.09;
 const TRACER_THICKNESS = 0.02;
-const IMPACT_COUNT = 32;
-const IMPACT_LIFE = 4;
+/** High tier: dynamic light of a muzzle flash (radius m, colour x intensity). */
+const FLASH_LIGHT_RADIUS = 6;
+const FLASH_LIGHT: readonly number[] = [3.2, 2.3, 1.1];
+/** The planted bomb's blinking light (High: a dynamic light; both tiers: a glow sprite). */
+const BOMB_LIGHT_RADIUS = 3.2;
+const BOMB_LIGHT: readonly number[] = [2.4, 0.15, 0.08];
+/** The explosion's flash: radius (m), colour x intensity, and how long it fades (s). */
+const BOOM_LIGHT_RADIUS = 12;
+const BOOM_LIGHT: readonly number[] = [3, 1.8, 0.8];
+const BOOM_TIME = 1.1;
+/** High tier: blob shadow radius (m) and darkness under a standing player. */
+const SHADOW_RADIUS = 0.55;
+const SHADOW_ALPHA = 0.5;
 const FLASH_TIME = 0.04;
 /** Unsuppressed guns (room option off): a bigger star-shaped flash, shown a little longer. */
 const LOUD_FLASH_TIME = 0.055;
@@ -286,6 +299,8 @@ void main(void) {
 `;
 
 const GHOST_FS = /* glsl */ `
+#include "gammaPS"
+#include "tonemappingPS"
 uniform vec3 view_position;
 uniform float uVis;
 uniform float uTime;
@@ -325,7 +340,8 @@ void main(void) {
     // Dim interior and bright rim keep a moving ghost a haze outline; spikes (>= 0.6) flare up.
     float flare = smoothstep(0.4, 0.75, uVis);
     vec3 col = uTint * (0.3 + 0.9 * rim + 0.3 * nz) * (0.85 + 0.75 * flare);
-    gl_FragColor = vec4(col, clamp(alpha, 0.0, 1.0));
+    col = mix(col, uTint * 0.1, smoothstep(0.72, 0.95, fres) * (1.0 - flare));   // dark outer edge (characters.ts)
+    gl_FragColor = vec4(gammaCorrectOutput(toneMap(pow(col, vec3(2.2)))), clamp(alpha, 0.0, 1.0));
 }
 `;
 
@@ -483,19 +499,19 @@ body.sb-lowhp #sb-low { display: block; }
 #sb-scores .row.carrier span:first-child::after { content: '  BOMB'; white-space: pre; color: #ffd36b; font-size: 10px;
     letter-spacing: .16em; font-weight: 700; }
 #sb-scores { left: 50%; top: 50%; transform: translate(-50%, -50%); display: none; box-sizing: border-box; z-index: 2;
-    width: min(520px, calc(100vw - 32px)); padding: 14px 18px 16px; background: rgba(10,12,16,.84);
+    width: min(560px, calc(100vw - 32px)); padding: 14px 18px 16px; background: rgba(10,12,16,.84);
     box-shadow: 0 6px 28px rgba(0,0,0,.6); font: 500 15px/1.2 system-ui, sans-serif; text-shadow: none; }
 #sb-scores .title { text-align: center; font: 700 11px/1 system-ui, sans-serif; letter-spacing: .3em; opacity: .65; }
 #sb-scores .hdr { display: flex; justify-content: space-between; margin-top: 12px; padding: 6px;
     border-bottom: 2px solid currentColor; font: 800 16px/1 system-ui, sans-serif; letter-spacing: .15em; }
 #sb-scores .hdr.ghosts { color: #9d8cff; } #sb-scores .hdr.defenders { color: #ff9a3c; }
 #sb-scores .hdr.mine span:first-child::after { content: '  (YOU)'; white-space: pre; font-size: 10px; letter-spacing: .2em; opacity: .7; }
-#sb-scores .row { display: grid; grid-template-columns: 1fr 44px 44px 44px 56px; padding: 4px 6px; }
+#sb-scores .row { display: grid; grid-template-columns: 1fr 40px 40px 40px 52px 74px; column-gap: 2px; align-items: center; padding: 4px 6px; }
 #sb-scores .row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #sb-scores .row span + span { text-align: right; font-variant-numeric: tabular-nums; }
 #sb-scores .row.cols { opacity: .5; font-size: 10px; letter-spacing: .2em; padding-bottom: 2px; }
 #sb-scores .row { position: relative; }
-#sb-scores .row button.kick { position: absolute; right: -78px; top: 1px; pointer-events: auto; font: 700 11px system-ui, sans-serif; padding: 3px 7px; background: rgba(10,12,16,.9); color: #ff9a8f; border: 1px solid rgba(255,90,74,.5); cursor: pointer; }
+#sb-scores .row button.kick { justify-self: end; margin-left: 4px; pointer-events: auto; font: 700 11px system-ui, sans-serif; padding: 3px 7px; background: rgba(10,12,16,.9); color: #ff9a8f; border: 1px solid rgba(255,90,74,.5); cursor: pointer; }
 #sb-scores .row.dead { opacity: .38; }
 #sb-scores .row.me { background: rgba(255,255,255,.14); outline: 1px solid rgba(255,255,255,.4); font-weight: 700; }
 #sb-scores .empty { padding: 4px 6px; opacity: .4; font-style: italic; }
@@ -559,11 +575,12 @@ interface Remote {
     alive: boolean;
     /** Yaw (radians) the body lies along while dead: chosen once at death so it does not fall into a wall. */
     corpseYaw: number;
+    /** Drawn this frame, and how strongly (1 for defenders, the shimmer's opacity for an enemy ghost). */
+    drawn: boolean;
+    vis: number;
 }
 
-interface Tracer { e: pc.Entity; mi: pc.MeshInstance; t: number; }
 interface Flash { e: pc.Entity; loud: pc.Entity; t: number; }
-interface Impact { e: pc.Entity; t: number; }
 interface FeedLine { el: HTMLDivElement; age: number; }
 
 // Knife key poses: position (m, camera space) then Euler angles (degrees).
@@ -627,8 +644,6 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     };
     /** The room's suppressed-weapons option (setSuppressed); false until told. */
     let suppressedLook = false;
-    const tracerMat = makeMaterial(1, 0.95, 0.6, true, 0.9);
-    const impactMat = makeMaterial(0.05, 0.05, 0.05, true);
     const bladeMat = makeMaterial(0.78, 0.8, 0.84, false);
     bladeMat.gloss = 0.7;
     bladeMat.metalness = 0.3;
@@ -639,8 +654,6 @@ export const createPresenter: CreatePresenter = (app, camera) => {
 
     const tmpA = new pc.Vec3();
     const tmpB = new pc.Vec3();
-    const UP = pc.Vec3.UP;
-    const RIGHT = pc.Vec3.RIGHT;
     let time = 0;
 
     // --- Viewmodel layer ---------------------------------------------------------------------
@@ -678,7 +691,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         return {
             id: -1, team: null, look: Look.None, root, body, neck, head, visor,
             bodyMi: body.render!.meshInstances[0], headMi: head.render!.meshInstances[0],
-            char: null, height: HULL_HEIGHT, seen: 0, x: 0, y: 0, z: 0, crouched: false, alive: false, corpseYaw: 0
+            char: null, height: HULL_HEIGHT, seen: 0, x: 0, y: 0, z: 0, crouched: false, alive: false, corpseYaw: 0,
+            drawn: false, vis: 0
         };
     };
 
@@ -776,7 +790,11 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             }
             if (v.id === followId) visible = false; // spectating from inside this player's head
             r.root.enabled = visible;
+            r.drawn = visible;
+            r.vis = look === Look.EnemyGhost ? Math.min(1, v.vis) : look === Look.AllyGhost ? ALLY_GHOST_VIS : 1;
             if (!visible) continue;
+            // High: a soft shadow under the living, as dark as the player is visible (none under a still ghost).
+            if (tier === 'high' && v.alive) effects.blobShadow(v.pos[0], v.pos[1], v.pos[2], SHADOW_RADIUS, SHADOW_ALPHA * r.vis);
             r.root.setPosition(v.pos[0], v.pos[1], v.pos[2]);
             r.root.setEulerAngles(0, (v.alive ? v.yaw : r.corpseYaw) * DEG, 0);
             if (ch) continue;
@@ -788,7 +806,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         for (let j = 0; j < active.length; j++) {
             const r = active[j];
             if (r.seen === stamp) active[w++] = r;
-            else { r.root.enabled = false; r.id = -1; r.alive = false; free.push(r); }
+            else { r.root.enabled = false; r.id = -1; r.alive = false; r.drawn = false; free.push(r); }
         }
         active.length = w;
     };
@@ -1100,21 +1118,47 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         }
     };
 
-    // --- Tracers and impacts --------------------------------------------------------------------
-    const tracers: Tracer[] = [];
-    for (let i = 0; i < TRACER_COUNT; i++) {
-        const e = box(app.root, tracerMat, TRACER_THICKNESS, TRACER_THICKNESS, 1);
-        e.enabled = false;
-        tracers.push({ e, mi: e.render!.meshInstances[0], t: 0 });
-    }
-    let nextTracer = 0;
-    const impacts: Impact[] = [];
-    for (let i = 0; i < IMPACT_COUNT; i++) {
-        const e = box(app.root, impactMat, 0.05, 0.05, 0.05);
-        e.enabled = false;
-        impacts.push({ e, t: 0 });
-    }
-    let nextImpact = 0;
+    // --- Effects: tracers, impacts, dust, decals, glows, shadows (client/src/effects.ts) ----------
+    const effects = new Effects(app);
+    let tier: Tier = 'low';
+    /** High tier: one realtime light for players and the first-person weapon, following the strongest effect light. */
+    const fxLight = new pc.Entity('fx-light');
+    fxLight.addComponent('light', {
+        type: 'omni', color: new pc.Color(1, 0.7, 0.35), intensity: 0, range: FLASH_LIGHT_RADIUS,
+        castShadows: false, layers: [pc.LAYERID_WORLD, vmLayer.id]
+    });
+    fxLight.enabled = false;
+    app.root.addChild(fxLight);
+    const fxColor = new pc.Color();
+    /** The world shader's dynamic lights (High): position + radius, and colour x intensity, written each frame. */
+    const dynPos = new Float32Array(DYN_LIGHTS * 4);
+    const dynCol = new Float32Array(DYN_LIGHTS * 3);
+    const dynPosId = app.graphicsDevice.scope.resolve(DYN_POS_UNIFORM);
+    const dynColId = app.graphicsDevice.scope.resolve(DYN_COL_UNIFORM);
+    let dynCount = 0;
+    /** Adds a light for this frame (High); the first ones added win when there are more than DYN_LIGHTS. */
+    const dynLight = (x: number, y: number, z: number, radius: number, c: readonly number[], k: number): void => {
+        if (dynCount >= DYN_LIGHTS || k <= 0) return;
+        const o = dynCount * 4, q = dynCount * 3;
+        dynPos[o] = x; dynPos[o + 1] = y; dynPos[o + 2] = z; dynPos[o + 3] = radius;
+        dynCol[q] = c[0] * k; dynCol[q + 1] = c[1] * k; dynCol[q + 2] = c[2] * k;
+        if (dynCount === 0) {
+            // The players' and weapon's light follows the first (most important) one.
+            const l = fxLight.light!;
+            fxLight.setPosition(x, y, z);
+            l.range = radius;
+            const peak = Math.max(c[0], c[1], c[2]);
+            l.intensity = Math.min(4, peak * k * 0.7);
+            fxColor.set(c[0] / peak, c[1] / peak, c[2] / peak);
+            l.color = fxColor;
+        }
+        dynCount++;
+    };
+    /** Explosion flash time left (s) and where. */
+    let boomT = 0;
+    let boomX = 0, boomY = 0, boomZ = 0;
+    const faceHit = { axis: 1, sign: 1, surface: 'concrete' as Surface };
+
     // Muzzle flashes of remote defenders: world-space effects like the tracers (not part of a character).
     const remoteFlashes: Flash[] = [];
     for (let i = 0; i < REMOTE_FLASH_COUNT; i++) {
@@ -1140,6 +1184,17 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         return best;
     };
 
+    /** A player drawn right now whose body contains (or nearly contains) the point, or null. */
+    const drawnNear = (x: number, y: number, z: number): Remote | null => {
+        for (let i = 0; i < active.length; i++) {
+            const r = active[i];
+            if (!r.drawn) continue;
+            const dx = x - r.x, dz = z - r.z;
+            if (dx * dx + dz * dz < 0.6 * 0.6 && y > r.y - 0.1 && y < r.y + r.height + 0.2) return r;
+        }
+        return null;
+    };
+
     const updateEffects = (dt: number): void => {
         for (let i = 0; i < REMOTE_FLASH_COUNT; i++) {
             const f = remoteFlashes[i];
@@ -1147,19 +1202,28 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             f.t -= dt;
             if (f.t <= 0) f.e.enabled = f.loud.enabled = false;
         }
-        for (let i = 0; i < TRACER_COUNT; i++) {
-            const tr = tracers[i];
-            if (tr.t <= 0) continue;
-            tr.t -= dt;
-            if (tr.t <= 0) { tr.e.enabled = false; continue; }
-            tr.mi.setParameter('material_opacity', 0.9 * (tr.t / TRACER_LIFE));
+        // Dynamic lights for this frame (High): the explosion, our own muzzle, the bomb, other players' muzzles.
+        dynCount = 0;
+        if (tier === 'high') {
+            if (boomT > 0) dynLight(boomX, boomY + 1.2, boomZ, BOOM_LIGHT_RADIUS, BOOM_LIGHT, boomT / BOOM_TIME);
+            if (flashT > 0 && vmSlot >= 0 && gun.enabled) {
+                const mp = vmGuns[vmSlot].muzzle.getPosition();
+                dynLight(mp.x, mp.y, mp.z, FLASH_LIGHT_RADIUS * (suppressedLook ? 0.6 : 1), FLASH_LIGHT, suppressedLook ? 0.5 : 1);
+            }
+            if (bomb.enabled && bombLit) dynLight(bombX, bombY + 0.25, bombZ, BOMB_LIGHT_RADIUS, BOMB_LIGHT, 1);
+            for (let i = 0; i < REMOTE_FLASH_COUNT; i++) {
+                const f = remoteFlashes[i];
+                if (f.t <= 0) continue;
+                const mp = (f.e.enabled ? f.e : f.loud).getPosition();
+                dynLight(mp.x, mp.y, mp.z, FLASH_LIGHT_RADIUS * (suppressedLook ? 0.6 : 1), FLASH_LIGHT, suppressedLook ? 0.5 : 1);
+            }
+            for (let i = dynCount; i < DYN_LIGHTS; i++) { dynCol[i * 3] = dynCol[i * 3 + 1] = dynCol[i * 3 + 2] = 0; dynPos[i * 4 + 3] = 1; }
+            dynPosId.setValue(dynPos);
+            dynColId.setValue(dynCol);
+            if (dynCount === 0) fxLight.light!.intensity = 0;
         }
-        for (let i = 0; i < IMPACT_COUNT; i++) {
-            const im = impacts[i];
-            if (im.t <= 0) continue;
-            im.t -= dt;
-            if (im.t <= 0) im.e.enabled = false;
-        }
+        if (boomT > 0) boomT = Math.max(0, boomT - dt);
+        effects.update(dt, camera);
     };
 
     // --- Bomb ------------------------------------------------------------------------------------
@@ -1201,6 +1265,17 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             bombLit = lit;
             bombLight.render!.material = lit ? bombLightOn : bombLightOff;
         }
+        // Both tiers: a small red glow on the blinking light, so a planted bomb reads in a dark corner.
+        if (lit) effects.glow(bombX - 0.04, bombY + 0.16, bombZ - 0.05, tier === 'high' ? 0.22 : 0.16, 1, 0.12, 0.06, 0.9);
+    };
+    /** The round ended with the bomb going off (`over`, reason `exploded`): once per round. */
+    let boomRound = -1;
+    const updateExplosion = (match: MatchView): void => {
+        if (match.phase !== 'over' || match.reason !== 'exploded' || !match.bombPos || boomRound === match.round) return;
+        boomRound = match.round;
+        boomX = match.bombPos[0]; boomY = match.bombPos[1]; boomZ = match.bombPos[2];
+        boomT = BOOM_TIME;
+        effects.explosion(boomX, boomY, boomZ);
     };
 
     // --- HUD -------------------------------------------------------------------------------------
@@ -1690,7 +1765,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             span(hdr, '', TEAM_LABEL[team]);
             span(hdr, '', String(team === 'ghosts' ? match.scoreGhosts : match.scoreDefenders));
             const cols = div('', scoresEl, 'row cols');
-            span(cols, '', 'NAME'); span(cols, '', 'K'); span(cols, '', 'D'); span(cols, '', 'A'); span(cols, '', 'PING');
+            span(cols, '', 'NAME'); span(cols, '', 'K'); span(cols, '', 'D'); span(cols, '', 'A'); span(cols, '', 'PING'); span(cols, '', '');
             const members = roster.filter(p => p.team === team)
                 .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths || a.id - b.id);
             if (members.length === 0) div('', scoresEl, 'empty').textContent = 'No players';
@@ -1702,7 +1777,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                 span(row, '', String(p.deaths));
                 span(row, '', String(p.assists));
                 span(row, 'ping', p.bot ? 'BOT' : pingOf.has(p.id) ? String(pingOf.get(p.id)) : '-');
-                if (voteKick && !p.bot && p.id !== local.id) {
+                if (!voteKick || p.bot || p.id === local.id) span(row, '', '');
+                else {
                     const id = p.id, kick = voteKick;
                     const b = document.createElement('button');
                     b.type = 'button'; b.className = 'kick'; b.textContent = 'Vote out'; b.title = 'Start a vote to remove this player from the room';
@@ -1738,14 +1814,16 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             followId = local.spectateId;
             updateRemotes(dt, remotes);
             updateViewmodel(dt, local);
-            updateEffects(dt);
             updateBomb(dt, match);
+            updateExplosion(match);
             updateHud(dt, local, match.phase);
             updateAmmo(local);
             updateMatchBar(local, match);
             updateBanner(dt, local, match);
             updateUse(dt, local);
             updateScores(local, match);
+            // Last: effects queued by the updates above (shadows, glows) are drawn this frame.
+            updateEffects(dt);
         },
 
         setPings(pings: readonly [number, number][]): void {
@@ -1818,24 +1896,23 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                 }
             }
             tmpB.set(to[0], to[1], to[2]);
-
-            const im = impacts[nextImpact];
-            nextImpact = (nextImpact + 1) % IMPACT_COUNT;
-            im.e.setPosition(tmpB);
-            im.e.enabled = true;
-            im.t = IMPACT_LIFE;
-
             const dx = tmpB.x - tmpA.x, dy = tmpB.y - tmpA.y, dz = tmpB.z - tmpA.z;
             const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            const il = len > 1e-4 ? 1 / len : 0;
+            // Where it ended: a map face (dust or sparks by surface, and a hole), else a player we are drawing (a
+            // puff), else nothing (the end of the range). Only what this event already told us is shown.
+            if (faceAt(world, to, faceHit)) {
+                effects.impact(to[0], to[1], to[2], faceHit.axis, faceHit.sign, faceHit.surface, dx * il, dy * il, dz * il);
+            } else {
+                const r = drawnNear(to[0], to[1], to[2]);
+                if (r) effects.bodyHit(to[0], to[1], to[2], dx * il, dy * il, dz * il, r.team === 'ghosts');
+            }
+            if (isLocal && localAlive && vmSlot >= 0) {
+                const mp = vmGuns[vmSlot].muzzle.getPosition();
+                effects.muzzleSmoke(mp.x, mp.y, mp.z, dx * il, dy * il, dz * il);
+            }
             if (len < 0.05) return;
-            const tr = tracers[nextTracer];
-            nextTracer = (nextTracer + 1) % TRACER_COUNT;
-            tr.e.enabled = true;
-            tr.e.setPosition(tmpA.x + dx * 0.5, tmpA.y + dy * 0.5, tmpA.z + dz * 0.5);
-            tr.e.lookAt(tmpB, Math.abs(dy) > 0.99 * len ? RIGHT : UP);
-            tr.e.setLocalScale(TRACER_THICKNESS * fx, TRACER_THICKNESS * fx, len);
-            tr.mi.setParameter('material_opacity', 0.9);
-            tr.t = TRACER_LIFE;
+            effects.tracer(tmpA.x, tmpA.y, tmpA.z, tmpB.x, tmpB.y, tmpB.z, TRACER_THICKNESS * fx, TRACER_LIFE);
         },
 
         setSuppressed(on: boolean): void {
@@ -1919,6 +1996,37 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             el.style.opacity = '';
             feedEl.insertBefore(el, feedEl.firstChild);
             feed.unshift({ el, age: 0 });
+        },
+
+        setTier(t: Tier): void {
+            tier = t;
+            effects.setTier(t);
+            fxLight.enabled = t === 'high';
+            if (t !== 'high') boomT = Math.min(boomT, BOOM_TIME);
+        },
+
+        setMapLook(tuning: LookTuning): void {
+            effects.setFog(tuning);
+            effects.reset(world);
+        },
+
+        footstep(id: number, pos: Vec3, loud: number): void {
+            for (let i = 0; i < active.length; i++) {
+                const r = active[i];
+                if (r.id !== id) continue;
+                // Only under a player drawn right now, and no fainter-than-the-shimmer ghost gets more than its shimmer.
+                if (r.drawn && r.alive) effects.footstep(pos[0], pos[1], pos[2], Math.min(1, loud), r.vis);
+                return;
+            }
+        },
+
+        knifeHit(victimId: number): void {
+            for (let i = 0; i < active.length; i++) {
+                const r = active[i];
+                if (r.id !== victimId) continue;
+                if (r.drawn) effects.knifeHit(r.x, r.y, r.z, r.team === 'ghosts');
+                return;
+            }
         }
     };
 };

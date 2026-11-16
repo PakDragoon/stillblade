@@ -1,3 +1,4 @@
+import { PingProbe } from './ping-probe';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -51,7 +52,7 @@ const roomList = new RoomListCache();
 const perIp = new Map<string, number>();
 const alive = new WeakSet<WebSocket>();
 /** When each connection's latest measuring ping went out (transport measurement only; wall-clock time is fine here). */
-const pingSent = new WeakMap<WebSocket, number>();
+const probes = new WeakMap<WebSocket, PingProbe>();
 let ticks = 0;
 
 // Plain HTTP on the same port for uptime checks and load balancers.
@@ -127,10 +128,10 @@ wss.on('connection', (ws, req) => {
             // Malformed input from a client is ignored, never fatal.
         }
     });
-    ws.on('pong', () => {
+    ws.on('pong', (payload: Buffer) => {
         alive.add(ws);
-        const sent = pingSent.get(ws);
-        if (sent !== undefined) { pingSent.delete(ws); room.setPing(id, performance.now() - sent); }
+        const rtt = probes.get(ws)?.pong(payload, performance.now());
+        if (rtt !== undefined) room.setPing(id, rtt);
     });
     ws.on('close', (code, reason) => {
         rooms.leave(roomId, id);
@@ -153,9 +154,10 @@ const heartbeat = setInterval(() => {
 // Measure each connection's round trip every 2 s and tell each room every 3 s (the scoreboard's ping column).
 const pinger = setInterval(() => {
     for (const ws of wss.clients) {
-        if (pingSent.has(ws)) continue; // the last one is still out
-        pingSent.set(ws, performance.now());
-        ws.ping();
+        let probe = probes.get(ws);
+        if (!probe) probes.set(ws, probe = new PingProbe());
+        if (probe.busy) continue; // the last one is still out
+        ws.ping(probe.start(performance.now()));
     }
 }, 2000);
 const pingTell = setInterval(() => { for (const game of rooms.rooms.values()) game.sendPings(); }, 3000);

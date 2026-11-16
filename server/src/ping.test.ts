@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PING_MAX, decodeClient, type ServerMsg } from '../../shared/protocol';
 import type { MapData } from '../../shared/types';
+import { PingProbe } from './ping-probe';
 import { Game, smoothPing } from './game';
 
 const MAP: MapData = {
@@ -61,5 +62,26 @@ describe('scoreboard ping', () => {
         expect(roster.players.every(p => !('ping' in p))).toBe(true);
         expect(() => decodeClient(JSON.stringify({ type: 'pings', pings: [[1, 1]] }))).toThrow();
         expect(() => decodeClient(JSON.stringify({ type: 'ping', ping: 1 }))).toThrow();
+    });
+});
+
+describe('PingProbe', () => {
+    it('samples only a pong that echoes its own token', () => {
+        const probe = new PingProbe();
+        expect(probe.busy).toBe(false);
+        const payload = probe.start(1000);
+        expect(probe.busy).toBe(true);
+        expect(probe.pong(Buffer.alloc(0), 1010)).toBeUndefined(); // a heartbeat pong (empty payload)
+        expect(probe.pong(Buffer.from([0, 0, 0, 99]), 1010)).toBeUndefined(); // some other token
+        expect(probe.busy).toBe(true);
+        expect(probe.pong(payload, 1042)).toBe(42);
+        expect(probe.busy).toBe(false);
+        expect(probe.pong(payload, 1100)).toBeUndefined(); // the same pong twice gives nothing
+    });
+    it('ignores a late pong from an earlier probe', () => {
+        const probe = new PingProbe();
+        const first = Buffer.from(probe.start(0));
+        probe.start(500);
+        expect(probe.pong(first, 520)).toBeUndefined();
     });
 });

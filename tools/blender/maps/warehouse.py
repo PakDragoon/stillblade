@@ -43,7 +43,7 @@ m.varied_surfaces = {"crate"}
 m.paint_surface = "wh_floor"
 m.noise_amp = {"wh_floor": 0.14, "wh_block": 0.08, "wh_paint": 0.06, "wh_tiles": 0.05}
 m.max_sightline = 30.0
-m.lightmap_size = 3072
+m.lightmap_size = 4096           # package G: sharper (about 3.2 cm per texel where players look, was 5.1)
 m.samples = 1024
 m.max_glb_bytes = 4 * 1024 * 1024
 m.site_h = 2.5
@@ -654,3 +654,39 @@ m.floor_rect(-3.9, -4.4, -3.75, 11.8, G, YELLOW)
 m.floor_rect(1.05, 3.2, 1.2, 11.8, G, YELLOW)
 # mezzanine edge: yellow kick plate line
 m.floor_rect(4.15, DOCK[1] + 0.1, 4.3, 11.8, M, YELLOW)
+
+# ---- package G: site warning stripes, sign panels, stair risers, grime, yard floodlights ----------
+DARK_PAINT = (0.07, 0.07, 0.08)
+SIGN = (0.82, 0.8, 0.74)
+STAIN = (0.32, 0.31, 0.29)
+for name, (x0, y0), (x1, y1), z in m.sites:
+    line = RED if name == "A" else BLUE
+    # site B straddles a seam of the ground slab at y = 7.6 (the S3 stair hole's edge): no slanted stripe across it
+    m.hazard_band(x0 + LINE_W, y0 + LINE_W, x1 - LINE_W, y1 - LINE_W, z, line, width=0.3, stripe=0.22, gap=0.3,
+                  skip_y=(7.6,) if name == "B" else ())
+# pale panels behind the site letters on walls, so the red and blue read on grey block
+m.wall_rect((13.4, -4.0, B + 1.7), 1, 1, 1.3, 1.6, SIGN, layer=0)
+m.wall_rect((4.5, 3.9, B + 1.7), 0, 1, 1.1, 1.4, SIGN, layer=0)
+m.wall_rect((-16.0, DOCK[1], G + 3.6), 1, 1, 1.3, 1.6, SIGN, layer=0)
+m.wall_rect((-13.0, DOCK[0], G + 3.8), 1, -1, 1.3, 1.6, SIGN, layer=0)
+# a dark band at the top of every riser, under the yellow nosing: the step edge reads from below too
+for fl in m.flights:
+    steps_ = [by_name[nm] for nm in fl["steps"]]
+    up_y = len(steps_) > 1 and steps_[1]["mn"][1] > steps_[0]["mn"][1]
+    for b in steps_:
+        top = b["mx"][2]
+        xm, w = (b["mn"][0] + b["mx"][0]) / 2, b["mx"][0] - b["mn"][0] - 0.1
+        if up_y:
+            m.wall_rect((xm, b["mn"][1], top - 0.07), 1, -1, w, 0.1, DARK_PAINT, layer=0)
+        else:
+            m.wall_rect((xm, b["mx"][1], top - 0.07), 1, 1, w, 0.1, DARK_PAINT, layer=0)
+# oil stains in the car park aisles and tyre marks in the loading bay (paint: no extra draw call)
+for cx, cy, sx, sy in ((-14.5, -5.5, 1.2, 0.8), (-15.2, 1.0, 0.9, 1.1), (-8.5, -1.0, 1.4, 0.9), (-8.0, 9.0, 1.0, 0.7),
+                       (-1.0, 0.5, 1.1, 1.0), (2.5, -6.0, 0.9, 0.7)):
+    m.floor_rect(cx - sx / 2, cy - sy / 2, cx + sx / 2, cy + sy / 2, B, STAIN, layer=0)
+for x0 in (-15.6, -14.3, 0.6, 12.6):
+    m.floor_rect(x0, Y0 + 2.2, x0 + 0.22, -7.0 if x0 < 0 else -9.5, G, STAIN, layer=0)
+# floodlights on the yard face of the building, above the loading doors' reach
+for i, x in enumerate((-11.0, 5.5, 16.8)):
+    m.visual("flood_%d" % (i + 1), "wh_metal", (x - 0.3, Y0 - WT - 0.2, 4.6), (x + 0.3, Y0 - WT, 4.78), (0.3, 0.32, 0.35))
+    m.point_light((x, Y0 - WT - 0.6, 4.35), (1.0, 0.82, 0.6), 110.0, 0.15)

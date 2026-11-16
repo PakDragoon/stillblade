@@ -22,7 +22,7 @@ import {
     type SoundEvent
 } from '@shared/protocol';
 import { DEFAULT_MAP, isMapId, type MapListEntry } from '@shared/maps';
-import { QUALITY_RES, SettingsStore } from './settings';
+import { SettingsStore, type Quality } from './settings';
 import { Radar } from './radar';
 import { Ui, type JoinChoice } from './ui';
 import { DEFUSE_TICKS, PLANT_TICKS, canAct, insideSite, movementLocked, type Phase } from '@shared/rules';
@@ -32,7 +32,8 @@ import { createAudio } from './audio';
 import type { BombView, ListenerView } from './audio-api';
 import { bindings, inputMatches, mouseInput } from './bindings';
 import { Input } from './input';
-import { applyMapLook } from './maplook';
+import { applyMapLook, type LookTuning, type MapLookHandle } from './maplook';
+import { measureTier, rendererName, resolveTier, tierFromRenderer, urlTier, type Tier, type TierChoice } from './graphics';
 import { Net } from './net';
 import { isTouchOnly, showPhoneNotice } from './phone';
 import { reporter } from './report';
@@ -67,6 +68,8 @@ const serverBase = (
 const ASSETS = import.meta.env.BASE_URL;
 /** `?res=0.7` pins the render resolution; otherwise it adapts to hold the frame rate. */
 const fixedRes = Math.min(1, Math.max(0, Number(params.get('res')) || 0));
+/** `?tier=low` or `?tier=high` forces a graphics tier over the setting (client/src/graphics.ts). */
+const forcedTier = urlTier(location.search);
 /** `?lag=150` adds 150 ms of artificial round-trip latency. */
 const lagMs = Math.max(0, Number(params.get('lag')) || 0);
 
@@ -115,6 +118,99 @@ camera.addComponent('camera', {
 });
 app.root.addChild(camera);
 
+// ---- Graphics tier (package G) -------------------------------------------------------------------------------
+/** The GPU's name, and what it alone says about the tier (null: measure). */
+const gpuName = rendererName(app.graphicsDevice);
+const gpuTier = tierFromRenderer(gpuName);
+/** The loading-screen measurement's result, once known (kept for the session, so a reconnect does not redo it). */
+let measuredTier: Tier | null = gpuTier;
+try {
+    const t = sessionStorage.getItem('sb-tier');
+    if (!measuredTier && (t === 'low' || t === 'high')) measuredTier = t;
+} catch { /* not kept */ }
+let tierChoice: TierChoice = 'auto';
+let tier: Tier = resolveTier(forcedTier, tierChoice, measuredTier);
+/** Everything that follows the tier: the map's shader variant, the presenter's effects, the post-processing. */
+const tierListeners: ((t: Tier) => void)[] = [];
+const applyTier = (): void => {
+    const next = resolveTier(forcedTier, tierChoice, measuredTier);
+    if (next === tier) return;
+    tier = next;
+    for (const fn of tierListeners) fn(tier);
+};
+/** The settings value for the tier. */
+const choiceOf = (q: Quality): TierChoice => (q === 'gpu' ? 'high' : q === 'low' ? 'low' : 'auto');
+let measuring = false;
+/** Measures on the loading screen when the choice is Auto and nothing decided it yet (the chip's name, the address). */
+const startMeasuring = (): void => {
+    if (measuring || measuredTier || forcedTier || tierChoice !== 'auto') return;
+    measuring = true;
+    void measureTier(app, camera).then(t => {
+        measuredTier = t;
+        try { sessionStorage.setItem('sb-tier', t); } catch { /* not kept */ }
+        applyTier();
+    });
+};
+
+/**
+ * High tier post-processing: one CameraFrame (scene in a linear HDR target, ambient occlusion, bloom, a neutral
+ * filmic tone map). Created the first time High is used; disabled in Low, where the camera renders straight to
+ * the screen as before.
+ */
+let cameraFrame: pc.CameraFrame | null = null;
+const NEUTRAL_NO_TOE = /* glsl */ `
+vec3 toneMap(vec3 color) {
+    color *= getExposure();
+    const float start = 0.7;
+    float peak = max(color.r, max(color.g, color.b));
+    if (peak < start) return color;
+    const float d = 1.0 - start;
+    float newPeak = 1.0 - d * d / (peak + d - start);
+    color *= newPeak / peak;
+    float g = 1.0 - 1.0 / (0.15 * (peak - newPeak) + 1.0);
+    return mix(color, vec3(newPeak), g);
+}
+`;
+const setPostProcessing = (on: boolean): void => {
+    if (!on) {
+        if (cameraFrame) cameraFrame.enabled = false;
+        return;
+    }
+    if (!cameraFrame) {
+        // The engine's Khronos "neutral" curve also pulls every colour down by up to 0.04 (a toe), which darkened the
+        // basement far below the Low tier's look. Ours is the same curve without that offset: identical to Low below
+        // 0.7 and a soft shoulder above, so muzzle flashes, the explosion and bloom sources roll off instead of clipping.
+        pc.ShaderChunks.get(app.graphicsDevice, 'glsl').set('tonemappingNeutralPS', NEUTRAL_NO_TOE);
+        const f = new pc.CameraFrame(app, camera.camera!);
+        f.rendering.toneMapping = pc.TONEMAP_NEUTRAL;
+        f.rendering.samples = 1;
+        // Ambient occlusion reads a depth prepass: the viewmodel layer clears depth before the weapon is drawn, so
+        // the depth left after the scene would only hold the weapon. The map shader writes the prepass's depth.
+        f.rendering.sceneDepthMap = true;
+        f.bloom.intensity = 0.018;
+        f.bloom.blurLevel = 5;
+        f.ssao.type = pc.SSAOTYPE_COMBINE;
+        f.ssao.intensity = 0.25;
+        f.ssao.radius = 10;
+        f.ssao.samples = 10;
+        f.ssao.power = 4;
+        f.ssao.scale = 0.5;
+        f.ssao.blurEnabled = true;
+        cameraFrame = f;
+    }
+    cameraFrame.enabled = true;
+    cameraFrame.update();
+};
+/** The same fog as the map shader, on the scene, for the lit materials (players and weapons). */
+const setSceneFog = (t: LookTuning): void => {
+    const fog = app.scene.fog;
+    fog.type = pc.FOG_LINEAR;
+    fog.color.set(t.fogColor[0], t.fogColor[1], t.fogColor[2]);
+    fog.start = t.fogStart;
+    fog.end = t.fogStart + (t.fogEnd - t.fogStart) / Math.max(0.05, t.fogMax);
+};
+tierListeners.push(t => setPostProcessing(t === 'high'));
+
 function loadContainer(url: string): Promise<pc.Asset> {
     return new Promise((resolve, reject) => {
         const asset = new pc.Asset(url, 'container', { url });
@@ -140,6 +236,8 @@ async function fetchMapList(): Promise<MapListEntry[]> {
 /** A map in the scene: its gameplay data, and the way to take every part of it out again (a map change). */
 interface LoadedMap {
     data: MapData;
+    /** The map's look (shader variant per tier, fog and grade), or null for a map without baked look data. */
+    look: MapLookHandle | null;
     unload(): void;
 }
 
@@ -155,18 +253,18 @@ async function loadMap(id: string): Promise<LoadedMap> {
     ]);
     const mapEntity = (mapAsset.resource as pc.ContainerResource).instantiateRenderEntity();
     app.root.addChild(mapEntity);
-    let disposeLook: (() => void) | null = null;
+    let look: MapLookHandle | null = null;
     const unload = (): void => {
-        disposeLook?.();
+        look?.dispose();
         mapEntity.destroy();
         app.assets.remove(mapAsset);
         mapAsset.unload();
     };
     // Baked maps draw unlit (albedo x baked light): no realtime lighting cost on the world at all.
     if (mapData.look) {
-        try { disposeLook = await applyMapLook(app, mapEntity, camera, mapData, `${ASSETS}maps/`); } catch (err) { unload(); throw err; }
+        try { look = await applyMapLook(app, mapEntity, camera, mapData, `${ASSETS}maps/`, tier); } catch (err) { unload(); throw err; }
     }
-    return { data: mapData, unload };
+    return { data: mapData, look, unload };
 }
 
 /** The public room list for the menu (`GET /rooms` on the game server, same address as the socket). */
@@ -180,8 +278,13 @@ async function fetchRooms(): Promise<RoomListEntry[]> {
 async function start(): Promise<void> {
     const mapList = await fetchMapList();
     const settings = new SettingsStore();
+    tierChoice = choiceOf(settings.value.quality);
+    tier = resolveTier(forcedTier, tierChoice, measuredTier);
+    startMeasuring();
     const input = new Input(canvas);
     const presenter = createPresenter(app, camera);
+    presenter.setTier(tier);
+    setPostProcessing(tier === 'high');
     // Audio needs the map's boxes for occlusion; the array is filled once the room's map is known.
     const boxes: Box[] = [];
     const audio = createAudio(boxes);
@@ -285,6 +388,15 @@ async function start(): Promise<void> {
     }
     boxes.push(...mapData.boxes);
     radar.setMap(mapData);
+    /** A map's look is in: the presenter's effects and the scene fog follow it. */
+    const lookLoaded = (l: LoadedMap): void => {
+        if (!l.look) return;
+        l.look.setTier(tier);
+        setSceneFog(l.look.tuning);
+        presenter.setMapLook(l.look.tuning);
+    };
+    lookLoaded(loaded);
+    tierListeners.push(t => { loaded.look?.setTier(t); presenter.setTier(t); });
     // A dropped connection gets one automatic reconnect to the same room, then asks.
     net.onClose = (code, reason) => {
         console.warn(`connection closed: ${code} ${reason}`);
@@ -437,6 +549,7 @@ async function start(): Promise<void> {
             radar.setMap(mapData);
             measureMap();
             old.unload();
+            lookLoaded(next);
             reporter.mapName = name;
             ui.setMap(id, name);
             ui.setMapStatus(`${name} is ready.`);
@@ -539,13 +652,17 @@ async function start(): Promise<void> {
                 audio.knifeSlash(ev.pos, hit, false);
                 presenter.remoteSlash(ev.attacker);
             } else if (hit) audio.knifeSlash(ev.pos, true, true);
+            if (ev.victim !== undefined && ev.victim !== net.id) presenter.knifeHit(ev.victim);
         },
         kill(ev): void {
             presenter.killFeed(ev.killer, ev.victim, ev.kind, ev.zone ?? null,
                 ev.weapon !== undefined ? WEAPONS[ev.weapon]?.label : ev.kind === 'shot' ? undefined : DEFENDER_KNIFE.label);
         },
         sound(ev: SoundEvent): void {
-            if (ev.kind === 'step') audio.step(ev.pos, ev.loud, false);
+            if (ev.kind === 'step') {
+                audio.step(ev.pos, ev.loud, false);
+                presenter.footstep(ev.id, ev.pos, ev.loud);
+            }
             else if (ev.kind === 'reload') audio.reload(ev.pos, false, ev.weapon ?? 0, ev.id);
             else if (ev.kind === 'bombDrop') audio.bomb('drop', ev.pos, false);
             else if (ev.kind === 'bombPickup') audio.bomb('pickup', ev.pos, false);
@@ -685,8 +802,8 @@ async function start(): Promise<void> {
 
     // Adaptive resolution: integrated GPUs are fill-rate bound, so when frames run long the cheapest
     // fix is fewer pixels. Steps down quickly, and back up only after a long smooth stretch.
-    /** The graphics setting caps the adaptive step; `?res=` overrides everything. */
-    let resCap = 1;
+    /** Both tiers let the adaptive step reach full resolution; `?res=` overrides everything. */
+    const resCap = 1;
     let resScale = fixedRes > 0 ? Math.max(0.4, fixedRes) : 1;
     let slowTime = 0, smoothTime = 0, sinceStepUp = Infinity, stepUpWait = 12;
     const setRes = (scale: number): void => {
@@ -704,9 +821,10 @@ async function start(): Promise<void> {
         audio.setVolumes({ master: st.master, effects: st.effects, footsteps: st.footsteps });
         presenter.setCrosshair({ style: st.crosshairStyle, color: st.crosshairColor, size: st.crosshairSize });
         ui.applySettingsToPage(st);
-        resCap = QUALITY_RES[st.quality];
-        if (fixedRes === 0 && resScale > resCap) setRes(resCap);
-        else if (fixedRes === 0 && st.quality === 'high' && resScale < 1) { /* adaptive step-up takes it back */ }
+        // Graphics quality picks the tier (Auto measures on the loading screen); it no longer caps the resolution.
+        tierChoice = choiceOf(st.quality);
+        startMeasuring();
+        applyTier();
     });
     const adaptResolution = (dt: number): void => {
         if (fixedRes > 0 || dt > 0.2) return; // pinned, or a stall (tab switch) rather than a slow GPU
@@ -934,7 +1052,8 @@ async function start(): Promise<void> {
             hudTimer = 0;
             const p = curr.pos;
             hud.textContent =
-                `${fps.toFixed(0)} fps${resScale < 1 ? `  res ${Math.round(resScale * 100)}%` : ''}${lagMs ? `  (+${lagMs} ms test lag)` : ''}\n` +
+                `${fps.toFixed(0)} fps  ${tier === 'high' ? 'High' : 'Low'}${forcedTier ? ' (address)' : tierChoice === 'auto' ? ' (auto)' : ''}  ${app.stats.drawCalls.total} draws` +
+                `${resScale < 1 ? `  res ${Math.round(resScale * 100)}%` : ''}${lagMs ? `  (+${lagMs} ms test lag)` : ''}\n` +
                 `speed ${horizontalSpeed(curr).toFixed(2)} m/s${curr.onGround ? '' : ' (air)'}${curr.crouched ? ' (crouch)' : ''}\n` +
                 `pos ${p[0].toFixed(1)} ${p[1].toFixed(1)} ${p[2].toFixed(1)}`;
         }
@@ -944,6 +1063,8 @@ async function start(): Promise<void> {
     Object.assign(window, {
         __sb: {
             app, state: curr, input, net, mapList, audio, presenter, match, ui,
+            /** The graphics tier in force, the settings choice, the measurement and the GPU's name (package G). */
+            get graphics() { return { tier, choice: tierChoice, forced: forcedTier, measured: measuredTier, gpu: gpuName, gpuTier, cameraFrame }; },
             loadout, knife,
             stats: () => ({
                 fps, resScale, alive, health, vis, pending: pending.length, error: Math.hypot(...errorOffset),

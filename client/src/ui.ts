@@ -926,7 +926,7 @@ export class Ui {
 
     /** The graphics quality choice, one self-contained block (its option list is the only thing that changes with the quality tiers). */
     private qualityControl(grid: HTMLElement): void {
-        this.select(grid, 'Graphics quality', 'quality', [['low', 'Low (60% resolution)'], ['medium', 'Medium (80%)'], ['high', 'High (full resolution)']]);
+        this.select(grid, 'Graphics quality', 'quality', [['auto', 'Auto (measured while loading)'], ['low', 'Low (laptops, integrated graphics)'], ['gpu', 'High (graphics card)']]);
     }
 
     private tabAudio(body: HTMLElement): void {

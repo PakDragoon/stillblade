@@ -1,0 +1,578 @@
+[
+ {
+  "map": "greybox",
+  "tier": "low",
+  "view": "players_defenders",
+  "all": {
+   "total": 16,
+   "forward": 16,
+   "misc": 0,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 9,
+   "forward": 9,
+   "misc": 0,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "greybox",
+  "tier": "low",
+  "view": "mid",
+  "all": {
+   "total": 8,
+   "forward": 8,
+   "misc": 0,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 8,
+   "forward": 8,
+   "misc": 0,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "greybox",
+  "tier": "low",
+  "view": "site_a",
+  "all": {
+   "total": 9,
+   "forward": 9,
+   "misc": 0,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 9,
+   "forward": 9,
+   "misc": 0,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "greybox",
+  "tier": "low",
+  "view": "explosion_staged",
+  "all": {
+   "total": 11,
+   "forward": 11,
+   "misc": 0,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 11,
+   "forward": 11,
+   "misc": 0,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "greybox",
+  "tier": "low",
+  "view": "stairs",
+  "all": {
+   "total": 20,
+   "forward": 20,
+   "misc": 0,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 10,
+   "forward": 10,
+   "misc": 0,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "greybox",
+  "tier": "low",
+  "view": "site_b_close",
+  "all": {
+   "total": 10,
+   "forward": 10,
+   "misc": 0,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 10,
+   "forward": 10,
+   "misc": 0,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "greybox",
+  "tier": "low",
+  "view": "ghosts_running_035",
+  "all": {
+   "total": 12,
+   "forward": 12,
+   "misc": 0,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 8,
+   "forward": 8,
+   "misc": 0,
+   "immediate": 0
+  },
+  "players": 4
+ },
+ {
+  "map": "greybox",
+  "tier": "low",
+  "view": "firing",
+  "all": {
+   "total": 16,
+   "forward": 16,
+   "misc": 0,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 12,
+   "forward": 12,
+   "misc": 0,
+   "immediate": 0
+  },
+  "players": 4
+ },
+ {
+  "map": "greybox",
+  "tier": "high",
+  "view": "players_defenders",
+  "all": {
+   "total": 44,
+   "forward": 30,
+   "misc": 14,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 30,
+   "forward": 16,
+   "misc": 14,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "greybox",
+  "tier": "high",
+  "view": "mid",
+  "all": {
+   "total": 30,
+   "forward": 16,
+   "misc": 14,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 29,
+   "forward": 15,
+   "misc": 14,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "greybox",
+  "tier": "high",
+  "view": "site_a",
+  "all": {
+   "total": 30,
+   "forward": 16,
+   "misc": 14,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 30,
+   "forward": 16,
+   "misc": 14,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "greybox",
+  "tier": "high",
+  "view": "explosion_staged",
+  "all": {
+   "total": 32,
+   "forward": 18,
+   "misc": 14,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 32,
+   "forward": 18,
+   "misc": 14,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "greybox",
+  "tier": "high",
+  "view": "stairs",
+  "all": {
+   "total": 51,
+   "forward": 37,
+   "misc": 14,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 31,
+   "forward": 17,
+   "misc": 14,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "greybox",
+  "tier": "high",
+  "view": "site_b_close",
+  "all": {
+   "total": 31,
+   "forward": 17,
+   "misc": 14,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 31,
+   "forward": 17,
+   "misc": 14,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "greybox",
+  "tier": "high",
+  "view": "ghosts_running_035",
+  "all": {
+   "total": 34,
+   "forward": 20,
+   "misc": 14,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 29,
+   "forward": 15,
+   "misc": 14,
+   "immediate": 0
+  },
+  "players": 4
+ },
+ {
+  "map": "greybox",
+  "tier": "high",
+  "view": "firing",
+  "all": {
+   "total": 37,
+   "forward": 23,
+   "misc": 14,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 33,
+   "forward": 19,
+   "misc": 14,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "warehouse",
+  "tier": "low",
+  "view": "players_defenders",
+  "all": {
+   "total": 9,
+   "forward": 9,
+   "misc": 0,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 9,
+   "forward": 9,
+   "misc": 0,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "warehouse",
+  "tier": "low",
+  "view": "yard",
+  "all": {
+   "total": 11,
+   "forward": 11,
+   "misc": 0,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 9,
+   "forward": 9,
+   "misc": 0,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "warehouse",
+  "tier": "low",
+  "view": "site_b",
+  "all": {
+   "total": 9,
+   "forward": 9,
+   "misc": 0,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 9,
+   "forward": 9,
+   "misc": 0,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "warehouse",
+  "tier": "low",
+  "view": "stairs_s2",
+  "all": {
+   "total": 10,
+   "forward": 10,
+   "misc": 0,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 10,
+   "forward": 10,
+   "misc": 0,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "warehouse",
+  "tier": "low",
+  "view": "site_a",
+  "all": {
+   "total": 10,
+   "forward": 10,
+   "misc": 0,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 10,
+   "forward": 10,
+   "misc": 0,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "warehouse",
+  "tier": "low",
+  "view": "explosion_staged",
+  "all": {
+   "total": 12,
+   "forward": 12,
+   "misc": 0,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 12,
+   "forward": 12,
+   "misc": 0,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "warehouse",
+  "tier": "low",
+  "view": "ghosts_running_035",
+  "all": {
+   "total": 16,
+   "forward": 16,
+   "misc": 0,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 10,
+   "forward": 10,
+   "misc": 0,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "warehouse",
+  "tier": "low",
+  "view": "firing",
+  "all": {
+   "total": 19,
+   "forward": 19,
+   "misc": 0,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 13,
+   "forward": 13,
+   "misc": 0,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "warehouse",
+  "tier": "high",
+  "view": "players_defenders",
+  "all": {
+   "total": 32,
+   "forward": 18,
+   "misc": 14,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 32,
+   "forward": 18,
+   "misc": 14,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "warehouse",
+  "tier": "high",
+  "view": "yard",
+  "all": {
+   "total": 36,
+   "forward": 22,
+   "misc": 14,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 31,
+   "forward": 17,
+   "misc": 14,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "warehouse",
+  "tier": "high",
+  "view": "site_b",
+  "all": {
+   "total": 30,
+   "forward": 16,
+   "misc": 14,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 30,
+   "forward": 16,
+   "misc": 14,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "warehouse",
+  "tier": "high",
+  "view": "stairs_s2",
+  "all": {
+   "total": 32,
+   "forward": 18,
+   "misc": 14,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 32,
+   "forward": 18,
+   "misc": 14,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "warehouse",
+  "tier": "high",
+  "view": "site_a",
+  "all": {
+   "total": 32,
+   "forward": 18,
+   "misc": 14,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 32,
+   "forward": 18,
+   "misc": 14,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "warehouse",
+  "tier": "high",
+  "view": "explosion_staged",
+  "all": {
+   "total": 34,
+   "forward": 20,
+   "misc": 14,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 34,
+   "forward": 20,
+   "misc": 14,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "warehouse",
+  "tier": "high",
+  "view": "ghosts_running_035",
+  "all": {
+   "total": 40,
+   "forward": 26,
+   "misc": 14,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 32,
+   "forward": 18,
+   "misc": 14,
+   "immediate": 0
+  },
+  "players": 5
+ },
+ {
+  "map": "warehouse",
+  "tier": "high",
+  "view": "firing",
+  "all": {
+   "total": 41,
+   "forward": 27,
+   "misc": 14,
+   "immediate": 0
+  },
+  "noPlayers": {
+   "total": 35,
+   "forward": 21,
+   "misc": 14,
+   "immediate": 0
+  },
+  "players": 5
+ }
+]

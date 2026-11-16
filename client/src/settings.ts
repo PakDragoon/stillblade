@@ -1,6 +1,11 @@
 /** Player settings, kept in localStorage and applied the moment they change. */
 
-export type Quality = 'low' | 'medium' | 'high';
+/**
+ * Graphics quality (package G): "auto" picks the tier on the loading screen, "low" forces the Low tier and "gpu"
+ * the High tier (client/src/graphics.ts). Not "high": that was the old default (full resolution) and is read as
+ * "auto". Both tiers adapt the render resolution between 100% and 50% to hold the frame rate.
+ */
+export type Quality = 'auto' | 'low' | 'gpu';
 
 export interface Settings {
     /** Multiplier on the base mouse sensitivity (1 = 0.0022 rad per pixel). */
@@ -27,12 +32,17 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
     sensitivity: 1, invertY: false, fov: 74, master: 0.8, effects: 1, footsteps: 1,
-    crosshairStyle: 'dot', crosshairColor: '#e8eaed', crosshairSize: 4, showStats: false, quality: 'high',
+    crosshairStyle: 'dot', crosshairColor: '#e8eaed', crosshairSize: 4, showStats: false, quality: 'auto',
     crouchToggle: false, walkToggle: false, aimToggle: false, aimSensitivity: 1
 };
 
-/** What each graphics choice does for now: the highest render-resolution scale the adaptive step may reach. */
-export const QUALITY_RES: Record<Quality, number> = { low: 0.6, medium: 0.8, high: 1 };
+/**
+ * A stored quality. From before the tiers: "low" and "medium" (60% and 80% resolution caps) asked for lighter
+ * graphics and become Low; "high" was the default and becomes Auto.
+ */
+export function parseQuality(v: unknown): Quality {
+    return v === 'low' || v === 'medium' ? 'low' : v === 'gpu' ? 'gpu' : 'auto';
+}
 
 const KEY = 'sb-settings';
 
@@ -58,7 +68,7 @@ export function loadSettings(): Settings {
         crosshairColor: typeof raw.crosshairColor === 'string' && /^#[0-9a-f]{6}$/i.test(raw.crosshairColor) ? raw.crosshairColor : d.crosshairColor,
         crosshairSize: Math.round(clamp(raw.crosshairSize, 2, 12, d.crosshairSize)),
         showStats: raw.showStats === true,
-        quality: raw.quality === 'low' || raw.quality === 'medium' ? raw.quality : 'high',
+        quality: parseQuality(raw.quality),
         crouchToggle: raw.crouchToggle === true,
         walkToggle: raw.walkToggle === true,
         aimToggle: raw.aimToggle === true,

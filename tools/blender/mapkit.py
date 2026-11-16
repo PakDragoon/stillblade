@@ -271,6 +271,36 @@ class MapDef:
             pts = [(centre[0] + rx * u + ux * v, centre[1] + ry * u + uy * v, z) for u, v in q]
             self.decal(pts, 2, 1, off, colour)
 
+    def hazard_band(self, x0, y0, x1, y1, z, colour, width=0.35, stripe=0.3, gap=0.35, layer=1, skip_y=()):
+        """Diagonal warning stripes painted in a band `width` wide just inside the rectangle's edges
+        (a bomb site's border). Each stripe is a parallelogram with two edges on the band's edges, so it
+        lies inside the band; the corners are left plain. `skip_y` lists floor seams (y values) a stripe
+        must not cross, since a slanted decal has to sit on one face."""
+        off = (0.006, 0.012, 0.018)[layer]
+        pitch = stripe + gap
+
+        def ok(ya, yb):
+            return not any(ya - 1e-6 < s < yb + 1e-6 for s in skip_y)
+
+        # along x (south and north edges)
+        for yb, d in ((y0, 1), (y1, -1)):
+            ya, yc = (yb, yb + width) if d > 0 else (yb - width, yb)
+            x = x0 + width
+            while x + stripe + width <= x1 - width + 1e-9:
+                if ok(ya, yc):
+                    pts = [(x, ya, z), (x + stripe, ya, z), (x + stripe + width, yc, z), (x + width, yc, z)]
+                    self.decal(pts, 2, 1, off, colour)
+                x += pitch
+        # along y (west and east edges)
+        for xb, d in ((x0, 1), (x1, -1)):
+            xa, xc = (xb, xb + width) if d > 0 else (xb - width, xb)
+            y = y0 + width
+            while y + stripe + width <= y1 - width + 1e-9:
+                if ok(y, y + stripe + width):
+                    pts = [(xa, y, z), (xc, y + width, z), (xc, y + stripe + width, z), (xa, y + stripe, z)]
+                    self.decal(pts, 2, 1, off, colour)
+                y += pitch
+
     def wall_rect(self, centre, axis, sign, w, h, colour, layer=0):
         """Rectangle painted on a wall face whose outward normal is (axis, sign); `centre` on the face."""
         off = (0.008, 0.014, 0.02)[layer]
