@@ -38,8 +38,8 @@ The owner has no game development experience and expects the game to have every 
 |---|---|---|---|
 | 1 | A. Combat core: defender knife, body-part damage, suppressor option (**built and reviewed; merged into branch `wave-1`, protocol 9; not yet on `main`**) | Opus 5.5 | nothing |
 | 1 | B. Client utilities: key bindings, phone notice, feedback button, error reports (**built and reviewed; merged into branch `wave-1`, protocol 10; not yet on `main`**) | Sonnet 5.5 | nothing |
-| 2 | C. Bomb carrier (**built and reviewed; merged into branch `wave-2`, protocol 11; not yet on `main`; never seen in a browser**) | Opus 5.5 | A merged |
-| 2 | D. Rooms and community: room list, room options, vote kick, name filter, map vote (**built and reviewed; merged into branch `wave-2`, protocol 12; not yet on `main`; never seen in a browser**) | Sonnet 5.5 | A merged |
+| 2 | C. Bomb carrier (**built and reviewed; merged into branch `wave-2`, protocol 11; not yet on `main`; checked in a browser by its build session**) | Opus 5.5 | A merged |
+| 2 | D. Rooms and community: room list, room options, vote kick, name filter, map vote (**built and reviewed; merged into branch `wave-2`, protocol 12; not yet on `main`; checked in a browser by its build session**) | Sonnet 5.5 | A merged |
 | 3 | E. Bots that fight, and a practice range (**built and reviewed; merged into branch `wave-3`, protocol 13; not yet on `main`; never seen in a browser**) | Opus 5.5 | C merged |
 | 3 | F. Hands and animations: first-person hands, real reloads, pistol pose, knife (**built and reviewed; merged into branch `wave-3`, no protocol change; not yet on `main`; seen only in Blender renders, never in the game**) | Opus 5.5 | A merged |
 | 4 | G. Graphics tiers and effects | Opus 5.5 | F merged |
