@@ -152,6 +152,11 @@ export class Net {
         else this.ws.send(data);
     }
 
+    /** True while the socket can carry a message. */
+    get isOpen(): boolean {
+        return this.ws.readyState === WebSocket.OPEN;
+    }
+
     /** Sends a JSON message (ready, start, team switch, chat). */
     sendMsg(msg: Exclude<ClientMsg, { type: 'cmd' }>): void {
         if (this.ws.readyState !== WebSocket.OPEN) return;

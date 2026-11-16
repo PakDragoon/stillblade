@@ -17,11 +17,18 @@ export interface Settings {
     crosshairSize: number;
     showStats: boolean;
     quality: Quality;
+    /** Crouch, quiet walk and aim: false = hold the key, true = press once to switch on, again to switch off. */
+    crouchToggle: boolean;
+    walkToggle: boolean;
+    aimToggle: boolean;
+    /** Multiplier on mouse look while aiming down sights, on top of the zoom slowdown. */
+    aimSensitivity: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
     sensitivity: 1, invertY: false, fov: 74, master: 0.8, effects: 1, footsteps: 1,
-    crosshairStyle: 'dot', crosshairColor: '#e8eaed', crosshairSize: 4, showStats: false, quality: 'high'
+    crosshairStyle: 'dot', crosshairColor: '#e8eaed', crosshairSize: 4, showStats: false, quality: 'high',
+    crouchToggle: false, walkToggle: false, aimToggle: false, aimSensitivity: 1
 };
 
 /** What each graphics choice does for now: the highest render-resolution scale the adaptive step may reach. */
@@ -51,7 +58,11 @@ export function loadSettings(): Settings {
         crosshairColor: typeof raw.crosshairColor === 'string' && /^#[0-9a-f]{6}$/i.test(raw.crosshairColor) ? raw.crosshairColor : d.crosshairColor,
         crosshairSize: Math.round(clamp(raw.crosshairSize, 2, 12, d.crosshairSize)),
         showStats: raw.showStats === true,
-        quality: raw.quality === 'low' || raw.quality === 'medium' ? raw.quality : 'high'
+        quality: raw.quality === 'low' || raw.quality === 'medium' ? raw.quality : 'high',
+        crouchToggle: raw.crouchToggle === true,
+        walkToggle: raw.walkToggle === true,
+        aimToggle: raw.aimToggle === true,
+        aimSensitivity: clamp(raw.aimSensitivity, 0.25, 2, d.aimSensitivity)
     };
 }
 

@@ -36,8 +36,8 @@ The owner has no game development experience and expects the game to have every 
 
 | Wave | Package | Model | Depends on |
 |---|---|---|---|
-| 1 | A. Combat core: defender knife, body-part damage, suppressor option (**built on `claude/combat-core-c154af`, protocol 9; not yet reviewed or merged**) | Opus 5.5 | nothing |
-| 1 | B. Client utilities: key bindings, phone notice, feedback button, error reports | Sonnet 5.5 | nothing |
+| 1 | A. Combat core: defender knife, body-part damage, suppressor option (**built and reviewed; merged into branch `wave-1`, protocol 9; not yet on `main`**) | Opus 5.5 | nothing |
+| 1 | B. Client utilities: key bindings, phone notice, feedback button, error reports (**built and reviewed; merged into branch `wave-1`, protocol 10; not yet on `main`**) | Sonnet 5.5 | nothing |
 | 2 | C. Bomb carrier | Opus 5.5 | A merged |
 | 2 | D. Rooms and community: room list, room options, vote kick, name filter, map vote | Sonnet 5.5 | A merged |
 | 3 | E. Bots that fight, and a practice range | Opus 5.5 | C merged |
@@ -56,7 +56,7 @@ Housekeeping folded into package A: the unused `IDLE_MS` is deleted on its branc
 
 ## A. Combat core (Opus 5.5)
 
-**Status (2026-11-16): built on branch `claude/combat-core-c154af` at protocol 9, 201 tests passing, browser-checked at `?lag=150` on both maps; waiting for review and the owner's go-ahead to merge. What was built, every decision taken, and what was not verified are in `HANDOFF.md` ("Package A (combat core) in detail"). Open point for the reviewer: the existing shot-event position leak and its suggested fix (`HANDOFF.md`, Known problems). Package B merges after it.** The specification below is kept as written.
+**Status (2026-11-16): built, reviewed and merged into branch `wave-1` (protocol 9); not yet on `main`. What was built, every decision taken, and what was not verified are in `HANDOFF.md` ("Package A (combat core) in detail"). Open point for the reviewer: the existing shot-event position leak and its suggested fix (`HANDOFF.md`, Known problems). Package B merges after it.** The specification below is kept as written.
 
 Three changes to the same combat code, so one package. Shared simulation and binary format: read the rules in `HANDOFF.md` first, and keep `server/src/prediction.test.ts` passing.
 
@@ -77,6 +77,8 @@ Put the zone function and the multipliers in `shared/` (a table next to the weap
 **Done means:** tests for the knife slot (timing, damage front and back, switching, nothing changing when `seq` jumps), for every zone and multiplier standing and crouched, for the option reaching `welcome` and changing gunshot range; `prediction.test.ts` extended to three slots and still at zero disagreements; browser check at `?lag=150` on both maps with mismatches at 0; screenshots of the knife in first and third person and of both gun variants; `HANDOFF.md` updated.
 
 ## B. Client utilities (Sonnet 5.5)
+
+**Status (2026-11-16): built, reviewed and merged into branch `wave-1` (protocol 10); not yet on `main`. `HANDOFF.md` ("Client utilities") describes what exists and what was not verified.**
 
 Client-side features plus two tiny server endpoints. Stays out of `shared/gun.ts`, `shared/knife.ts`, the binary format and the prediction loop.
 

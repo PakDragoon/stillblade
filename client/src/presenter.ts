@@ -8,6 +8,7 @@ import type { Vec3 } from '@shared/types';
 import type { CreatePresenter, CrosshairConfig, KillKind, LocalView, MatchView, RemoteView } from './presenter-api';
 import { Character, CharLook, loadCharacterModel, makeSkinnedGhostMaterial, type CharacterModel } from './characters';
 import { TICK_RATE } from '@shared/constants';
+import { bindings } from './bindings';
 import { SLOT_COUNT, SLOT_KNIFE, WEAPONS, slotLabel, type WeaponId } from '@shared/weapons';
 import type { HitZone } from '@shared/zones';
 import {
@@ -1192,7 +1193,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     // Use prompt and plant/defuse progress (lower centre).
     const useEl = div('sb-use');
     useEl.appendChild(document.createTextNode('Hold'));
-    useEl.appendChild(document.createElement('b')).textContent = 'E';
+    const useKey = new Slot(useEl.appendChild(document.createElement('b')));
     const useVerb = new Slot(span(useEl));
     const actEl = div('sb-act');
     const actLabel = new Slot(div('', actEl, ''));
@@ -1390,11 +1391,11 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         const reloading = local.reload > 0;
         const level = mag <= 0 ? 2 : mag <= local.magSize / 4 ? 1 : 0;
         const state = reloading ? 1 : level > 0 && reserve > 0 ? 2 : mag <= 0 ? 3 : 0;
-        const key = level + 3 * state;
+        const key = level + 3 * state + 16 * bindings().version;
         if (key !== shownAmmoKey) {
             shownAmmoKey = key;
             ammoEl.className = `sb-ui ${AMMO_CLS[level]}${AMMO_STATE_CLS[state]}`;
-            reloadLabel.set(AMMO_LABEL[state]);
+            reloadLabel.set(state === 2 ? `${bindings().hint('reload')}  RELOAD` : AMMO_LABEL[state]);
             shownReloadPct = -1;
         }
         if (reloading) {
@@ -1518,7 +1519,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         const acting = local.alive && local.action > 0;
         const prompt = local.alive && local.canAct && !acting;
         if (prompt !== shownUse) { shownUse = prompt; useEl.style.display = prompt ? 'block' : 'none'; }
-        if (prompt) useVerb.set(USE_VERB[local.team]);
+        if (prompt) { useVerb.set(USE_VERB[local.team]); useKey.set(bindings().hint('use')); }
         if (acting !== shownAct) { shownAct = acting; actEl.style.display = acting ? 'block' : 'none'; }
         if (acting) {
             actLabel.set(ACT_LABEL[local.team]);

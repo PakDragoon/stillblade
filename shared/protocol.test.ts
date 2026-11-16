@@ -13,8 +13,8 @@ const cmd: NetCmd = {
 const SNAP_HEAD = 75 + 5 + 7 * GUN_COUNT + 2 + 2 + 1;
 
 describe('wire format', () => {
-    it('is protocol version 9', () => {
-        expect(PROTOCOL_VERSION).toBe(9);
+    it('is protocol version 10', () => {
+        expect(PROTOCOL_VERSION).toBe(10);
     });
 
     it('round-trips a command exactly, in 25 bytes', () => {
@@ -136,6 +136,20 @@ describe('wire format', () => {
             players: [{ id: 3, team: 'defenders', pos: [0, 0, 0], yaw: 0, pitch: 0, crouched: false, alive: true, vis: 1, reloading: false, weapon: SLOT_KNIFE, switching: true, aiming: false }]
         }) as Uint8Array);
         expect(back.type === 'snap' && back.players[0]).toMatchObject({ weapon: SLOT_KNIFE, switching: true });
+    });
+
+    it('decodes a report frame, keeps its shape only, and refuses a malformed one', () => {
+        const msg = { type: 'report' as const, kind: 'error' as const, text: 'boom', stack: 'at x', ctx: { fps: 60, ua: 'x' } };
+        expect(decodeClient(encodeClient(msg) as string)).toEqual(msg);
+        expect(decodeClient('{"type":"report","kind":"feedback","text":"hi","ctx":{}}')).toEqual({ type: 'report', kind: 'feedback', text: 'hi', ctx: {} });
+        for (const bad of [
+            '{"type":"report","kind":"other","text":"x","ctx":{}}', '{"type":"report","kind":"feedback","text":5,"ctx":{}}',
+            '{"type":"report","kind":"feedback","text":"x"}', '{"type":"report","kind":"feedback","text":"x","ctx":[]}'
+        ]) expect(() => decodeClient(bad)).toThrow();
+        // Reports may be long; every other JSON message keeps the 600 character limit.
+        expect(decodeClient(JSON.stringify({ type: 'report', kind: 'feedback', text: 'x'.repeat(3000), ctx: {} })).type).toBe('report');
+        expect(() => decodeClient(JSON.stringify({ type: 'chat', team: false, text: 'x'.repeat(700) }))).toThrow();
+        expect(() => decodeClient(JSON.stringify({ type: 'report', kind: 'feedback', text: 'x'.repeat(5000), ctx: {} }))).toThrow();
     });
 
     it('keeps an acknowledgement of -1 (nothing simulated yet)', () => {

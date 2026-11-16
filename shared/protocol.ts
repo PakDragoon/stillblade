@@ -6,7 +6,7 @@ import type { InputCmd, Vec3 } from './types';
 import { GUN_COUNT } from './weapons';
 import type { HitZone } from './zones';
 
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 export const DEFAULT_PORT = 8080;
 /** Snapshots per second sent to each client. */
 export const SNAPSHOT_RATE = 30;
@@ -262,9 +262,38 @@ export type ClientMsg =
     | { type: 'ready'; ready: boolean }
     | { type: 'start' }
     | { type: 'team' }
-    | { type: 'chat'; team: boolean; text: string };
+    | { type: 'chat'; team: boolean; text: string }
+    | ReportMsg;
 
 export const CHAT_MAX_CHARS = 120;
+
+/** What the client knows about its own machine when it files a report. The server adds everything it knows itself. */
+export interface ReportCtx {
+    /** Frames per second, render scale (0..1) and round-trip ping in ms. */
+    fps?: number;
+    renderScale?: number;
+    ping?: number;
+    /** Browser user agent, graphics card string and page path (no query). */
+    ua?: string;
+    gpu?: string;
+    path?: string;
+}
+
+/**
+ * A feedback note typed by the player, or an automatic error report. Never carries chat or the player's
+ * name: the server attaches the room, map, team, player id and the name it already holds. `stack` is
+ * only for errors.
+ */
+export interface ReportMsg { type: 'report'; kind: 'feedback' | 'error'; text: string; stack?: string; ctx: ReportCtx }
+
+/** Caps in characters (code points). A report frame is at most REPORT_MAX_BYTES bytes in UTF-8. */
+export const FEEDBACK_MAX_CHARS = 500;
+export const ERROR_MAX_CHARS = 300;
+export const STACK_MAX_CHARS = 1500;
+export const REPORT_UA_MAX_CHARS = 200;
+export const REPORT_GPU_MAX_CHARS = 200;
+export const REPORT_PATH_MAX_CHARS = 100;
+export const REPORT_MAX_BYTES = 4096;
 
 // ---------------------------------------------------------------------------------------------
 // Wire format. The two messages that flow constantly (commands up, snapshots down) are packed
@@ -464,8 +493,9 @@ export function encodeClient(m: ClientMsg): Wire {
 /** Throws on anything that is not a well-formed message: the server treats that as "ignore". */
 export function decodeClient(data: ArrayBuffer | Uint8Array | string): ClientMsg {
     if (typeof data === 'string') {
-        if (data.length > 600) throw new Error('message too long');
+        if (data.length > REPORT_MAX_BYTES) throw new Error('message too long');
         const m = JSON.parse(data) as Record<string, unknown>;
+        if (m.type !== 'report' && data.length > 600) throw new Error('message too long');
         switch (m.type) {
             case 'ready': return { type: 'ready', ready: m.ready === true };
             case 'start': return { type: 'start' };
@@ -473,6 +503,14 @@ export function decodeClient(data: ArrayBuffer | Uint8Array | string): ClientMsg
             case 'chat':
                 if (typeof m.text !== 'string') throw new Error('bad chat');
                 return { type: 'chat', team: m.team === true, text: m.text };
+            case 'report': {
+                // Shape only; the server cleans and caps every field (server/src/reports.ts).
+                if ((m.kind !== 'feedback' && m.kind !== 'error') || typeof m.text !== 'string') throw new Error('bad report');
+                if (typeof m.ctx !== 'object' || m.ctx === null || Array.isArray(m.ctx)) throw new Error('bad report');
+                const msg: ReportMsg = { type: 'report', kind: m.kind, text: m.text, ctx: m.ctx as ReportCtx };
+                if (typeof m.stack === 'string') msg.stack = m.stack;
+                return msg;
+            }
             default: throw new Error('unknown client message');
         }
     }
