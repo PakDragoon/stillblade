@@ -19,7 +19,11 @@ import type { Settings, SettingsStore } from './settings';
  * `options` apply only when this join creates the room ("Create room"); `quick` asks the server for the fullest
  * public room with space (Quick play), `room` being empty then.
  */
-export interface JoinChoice { name: string; room: string; map: string; options?: RoomOptions; quick?: boolean }
+export interface JoinChoice {
+    name: string; room: string; map: string; options?: RoomOptions; quick?: boolean;
+    /** The practice range, on this side: a private room of one's own with targets (the server makes a fresh one). */
+    practice?: Team;
+}
 
 /** What the menus ask the game to do. The Ui itself never touches the network or the simulation. */
 export interface UiHooks {
@@ -120,6 +124,9 @@ export class Ui {
     private mapStatus = '';
     private pausePlayers: HTMLElement | null = null;
     private serverNow = 0;
+    /** In a practice range: no lobby, the strip shows the last hits instead. */
+    private practice = false;
+    private readonly practiceHits: string[] = [];
 
     constructor(private readonly settings: SettingsStore, private readonly hooks: UiHooks) {
         this.root.id = 'ui';
@@ -303,6 +310,12 @@ export class Ui {
         code.setAttribute('aria-label', 'Room code');
         const join = h('button', defaults.room ? 'primary' : '', 'Join room', joinRow);
         const quick = h('button', '', 'Quick play (public room)', card);
+        h('p', 'or', 'or practise alone', card);
+        const practiceRow = h('div', 'row', '', card);
+        const practiceDef = h('button', '', 'Practice range: defender', practiceRow);
+        const practiceGhost = h('button', '', 'Practice range: ghost', practiceRow);
+        practiceDef.title = 'Shoot at targets that stand and move, with unlimited spare ammunition, on the map chosen above';
+        practiceGhost.title = 'Knife targets that stand and move, on the map chosen above';
         const err = h('p', 'dim', '', card);
 
         const side = h('div', 'stack', '', wrap);
@@ -325,11 +338,15 @@ export class Ui {
         setTimeout(() => (defaults.room ? code : name).focus(), 0);
 
         return new Promise(resolve => {
-            const go = (room: string, mapId: string, options?: RoomOptions, quick = false): void => {
+            const go = (room: string, mapId: string, options?: RoomOptions, quick = false, practice?: Team): void => {
                 const n = name.value.trim();
                 try { localStorage.setItem('sb-name', n); localStorage.setItem('sb-howto', '1'); } catch { /* not remembered */ }
-                resolve({ name: n, room, map: mapId, options, quick });
+                const choice: JoinChoice = { name: n, room, map: mapId, options, quick };
+                if (practice) choice.practice = practice;
+                resolve(choice);
             };
+            practiceDef.addEventListener('click', e => { e.preventDefault(); go('', map.value, undefined, false, 'defenders'); });
+            practiceGhost.addEventListener('click', e => { e.preventDefault(); go('', map.value, undefined, false, 'ghosts'); });
             const list = roomListView(side, loadRooms, code => go(code, ''));
             side.insertBefore(list.el, how);
             create.addEventListener('click', e => { e.preventDefault(); go(makeRoomCode(), map.value, chosen); });
@@ -369,16 +386,29 @@ export class Ui {
     }
 
     /** The match is on: hides the pre-game screens and shows the lobby while the room is in warmup. */
-    enterGame(room: string, mapId: string, mapName: string, options: RoomOptions = DEFAULT_ROOM_OPTIONS): void {
+    enterGame(room: string, mapId: string, mapName: string, options: RoomOptions = DEFAULT_ROOM_OPTIONS, practice = false): void {
         this.hideScreens();
         this.inGame = true;
+        this.practice = practice;
         this.room = room;
         this.mapId = mapId;
         this.mapName = mapName;
         this.options = { ...options };
         this.refreshStrip();
-        if (this.phase === 'warmup' && !this.quiet) this.openLobby();
+        if (this.phase === 'warmup' && !this.quiet && !practice) this.openLobby();
         else this.refreshHint();
+    }
+
+    /**
+     * Practice range: one of our hits on a target (damage, where, whether it killed), shown in the strip at the
+     * top with the four before it.
+     */
+    practiceHit(damage: number, kind: string, zone: string | null, kill: boolean): void {
+        const zones: Record<string, string> = { head: 'head', torso: 'body', arms: 'arm', legs: 'leg' };
+        const where = zone ? zones[zone] ?? zone : kind === 'backstab' ? 'knife, from behind' : 'knife';
+        this.practiceHits.unshift(`${damage} ${where}${kill ? ' (down)' : ''}`);
+        if (this.practiceHits.length > 5) this.practiceHits.length = 5;
+        this.refreshStrip();
     }
 
     /** The creator changed the options (or the room's map changed): the lobby shows them. */
@@ -427,10 +457,18 @@ export class Ui {
         const warm = this.inGame && this.phase === 'warmup' && !this.lobby.classList.contains('open') && !this.summaryOpen;
         this.strip.style.display = warm ? 'block' : 'none';
         if (!warm) return;
-        const ready = this.roster.filter(p => p.ready).length;
         const me = this.me();
         this.strip.replaceChildren();
-        this.strip.append(`Warmup: ${ready} of ${this.roster.length} ready.  `);
+        if (this.practice) {
+            this.strip.append('Practice range.  ');
+            h('b', '', hintText(bindings().value, 'switchTeam'), this.strip);
+            this.strip.append(me?.team === 'ghosts' ? ' practise as a defender' : ' practise as a ghost');
+            this.strip.append(this.practiceHits.length ? `   Hits: ${this.practiceHits.join(', ')}` : '   Hit a target to see the damage and where it landed.');
+            return;
+        }
+        const people = this.roster.filter(p => !p.bot);
+        const ready = people.filter(p => p.ready).length;
+        this.strip.append(`Warmup: ${ready} of ${people.length} ready.  `);
         const key = (id: ActionId): void => { h('b', '', hintText(bindings().value, id), this.strip); };
         key('ready');
         this.strip.append(me?.ready ? ' unready  ' : ' ready  ');
@@ -483,6 +521,7 @@ export class Ui {
             if (members.length === 0) h('p', 'empty', 'Nobody yet', col);
             for (const p of members) {
                 const row = h('div', p.id === this.localId ? 'p me' : 'p', p.name, col);
+                if (p.bot) h('span', 'host', 'bot', row);
                 if (p.creator) h('span', 'host', 'creator', row);
                 h('span', p.ready ? 'st ready' : 'st', p.ready ? 'Ready' : 'Not ready', row);
                 this.addRemoveButton(row, p);
@@ -502,7 +541,7 @@ export class Ui {
         }
         h('span', 'sp', '', row);
         button('Walk around', '', row, () => this.resume());
-        const everyone = this.roster.length > 0 && this.roster.every(p => p.ready);
+        const everyone = this.roster.some(p => !p.bot) && this.roster.every(p => p.ready || p.bot);
         this.lobbyMsg.textContent = !bothTeams ? 'Waiting for a player on each team. You can walk around in the meantime.'
             : everyone ? 'Everyone is ready: starting.' : 'The match starts when everyone is ready, or the creator starts it.';
     }
@@ -512,11 +551,12 @@ export class Ui {
      * room of two in warmup. The server checks every rule again.
      */
     private addRemoveButton(row: HTMLElement, p: RosterEntry): void {
-        if (p.id === this.localId) return;
+        if (p.id === this.localId || p.bot) return;
         const me = this.me();
-        if (this.roster.length === 2 && me?.creator && this.phase === 'warmup') {
+        const people = this.roster.filter(o => !o.bot).length; // bots never count for removals
+        if (people === 2 && me?.creator && this.phase === 'warmup') {
             button('Remove', 'mini danger', row, () => this.hooks.removePlayer(p.id));
-        } else if (this.roster.length >= 3 && !this.kickInfo) {
+        } else if (people >= 3 && !this.kickInfo) {
             button('Vote out', 'mini', row, () => this.hooks.voteKick(p.id)).title = 'Start a vote to remove this player from the room';
         }
     }

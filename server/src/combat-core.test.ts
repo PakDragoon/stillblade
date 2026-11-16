@@ -97,7 +97,7 @@ describe('defender knife on the server', () => {
         expect(w.P(ghost).health).toBe(MAX_HEALTH - DEFENDER_KNIFE.damage);
         expect(ghost.last('dmg')).toMatchObject({ amount: 35, kind: 'knife' });
         expect(ghost.last('dmg').zone).toBeUndefined(); // knife hits ignore zones
-        expect(defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'knife', kill: false });
+        expect(defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'knife', kill: false, damage: 35 });
         expect(defender.shots()).toHaveLength(0); // no gunshot either
     });
 
@@ -247,11 +247,11 @@ describe('body-part damage on the server', () => {
 
     it('confirms the zone to the shooter, counts headshots by zone, and names the zone in the kill', () => {
         const limb = shoot(0, 0.4);
-        expect(limb.defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'shot', zone: 'legs', kill: false });
+        expect(limb.defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'shot', zone: 'legs', kill: false, damage: 17 });
         const headHit = shoot(0, 1.65);
-        expect(headHit.defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'shot', zone: 'head', kill: false });
+        expect(headHit.defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'shot', zone: 'head', kill: false, damage: 68 });
         const head = shoot(0, 1.65, false, 50); // a wounded ghost: the headshot kills
-        expect(head.defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'shot', zone: 'head', kill: true });
+        expect(head.defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'shot', zone: 'head', kill: true, damage: 68 });
         expect(head.w.P(head.defender).stats.headshots).toBe(1);
         expect(limb.w.P(limb.defender).stats.headshots).toBe(0);
         // Every player gets the kill, with how but not where.

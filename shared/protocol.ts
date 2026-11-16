@@ -7,7 +7,7 @@ import type { InputCmd, Vec3 } from './types';
 import { GUN_COUNT } from './weapons';
 import type { HitZone } from './zones';
 
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 13;
 export const DEFAULT_PORT = 8080;
 /** Snapshots per second sent to each client. */
 export const SNAPSHOT_RATE = 30;
@@ -200,6 +200,8 @@ export interface RosterEntry extends MatchStats {
     creator: boolean;
     /** Moved to spectate-only for sending no input changes during live rounds. */
     idle: boolean;
+    /** A computer player run by the server (its name also starts with "BOT"). */
+    bot: boolean;
 }
 
 /**
@@ -259,6 +261,8 @@ export interface HitConfirmMsg {
     zone?: HitZone;
     /** The hit killed. */
     kill: boolean;
+    /** Health the hit took (its full amount, before any cap at the victim's remaining health). */
+    damage: number;
 }
 
 /**
@@ -277,7 +281,8 @@ export interface KillMsg {
 
 export type ServerMsg =
     /** `map` is the room's map id (load maps/<map>.json and .glb before spawning); `mapName` its display name. */
-    | { type: 'welcome'; version: number; id: number; team: Team; map: string; mapName: string; time: number; options: RoomOptions; room: string }
+    /** `practice`: the room is a private practice range (no rounds, reserves kept full: the client predicts that too). */
+    | { type: 'welcome'; version: number; id: number; team: Team; map: string; mapName: string; time: number; options: RoomOptions; room: string; practice?: boolean }
     | { type: 'snap'; time: number; ack: number; me: SelfSnap; players: PlayerSnap[] }
     | { type: 'spawn'; pos: Vec3; yaw: number }
     | ShotEvent

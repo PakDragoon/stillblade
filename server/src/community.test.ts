@@ -98,12 +98,12 @@ describe('room options: who may change them and when', () => {
         expect(r.game.options.maxPlayers).toBe(10);
 
         creator.send({ type: 'options', options: { maxPlayers: 4, roundsToWin: 9, public: true, suppressed: true, fillBots: true } });
-        expect(r.game.options).toEqual({ maxPlayers: 4, roundsToWin: 9, public: true, suppressed: true, fillBots: true });
+        expect(r.game.options).toEqual({ maxPlayers: 4, roundsToWin: 9, public: true, suppressed: true, fillBots: true, botLevel: 'normal' });
         for (const c of r.clients) expect(c.last('options').options).toEqual(r.game.options);
 
         // Invalid fields keep their value; the valid ones in the same message still apply.
         creator.send({ type: 'options', options: { maxPlayers: 99, roundsToWin: 4, public: 'x', suppressed: false } });
-        expect(r.game.options).toEqual({ maxPlayers: 4, roundsToWin: 9, public: true, suppressed: false, fillBots: true });
+        expect(r.game.options).toEqual({ maxPlayers: 4, roundsToWin: 9, public: true, suppressed: false, fillBots: true, botLevel: 'normal' });
         // An unchanged message sends nothing.
         const n = bob.all('options').length;
         creator.send({ type: 'options', options: {} });
@@ -422,8 +422,8 @@ describe('public room list and Quick play', () => {
         const list = listPublicRooms(rooms.rooms);
         expect(list.map(e => e.code)).toEqual(['pub-one', 'pub-two']);
         expect(list[0]).toEqual({
-            code: 'pub-one', map: 'alpha', mapName: 'Map alpha', players: 2, capacity: 6, phase: 'lobby', score: null,
-            options: { suppressed: false, public: true, maxPlayers: 6, roundsToWin: 6, fillBots: false }
+            code: 'pub-one', map: 'alpha', mapName: 'Map alpha', players: 2, bots: 0, capacity: 6, phase: 'lobby', score: null,
+            options: { suppressed: false, public: true, maxPlayers: 6, roundsToWin: 6, fillBots: false, botLevel: 'normal' }
         });
         expect(list[1]).toMatchObject({ map: 'beta', mapName: 'Map beta', capacity: 10, options: { suppressed: true } });
         const json = JSON.stringify(list);
@@ -497,7 +497,7 @@ describe('GET /rooms', () => {
             writeHead(s: number) { this.status = s; return this; },
             end(b = '') { this.body = b; }
         };
-        const entry = { code: 'x', map: 'alpha', mapName: 'A', players: 1, capacity: 10, phase: 'lobby' as const, score: null, options: { ...DEFAULT_ROOM_OPTIONS, public: true } };
+        const entry = { code: 'x', map: 'alpha', mapName: 'A', players: 1, bots: 0, capacity: 10, phase: 'lobby' as const, score: null, options: { ...DEFAULT_ROOM_OPTIONS, public: true } };
         const handled = handleRoomsRequest({ url, method, headers: origin ? { origin } : headers } as never, res as never, { list: () => [entry], allowedOrigins: allowed });
         return { handled, res };
     }

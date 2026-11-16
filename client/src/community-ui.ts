@@ -1,4 +1,4 @@
-import { ROOM_MAX_PLAYERS, ROOM_MIN_PLAYERS, ROUNDS_TO_WIN_CHOICES, type RoomOptions } from '@shared/room-options';
+import { BOT_LEVELS, ROOM_MAX_PLAYERS, ROOM_MIN_PLAYERS, ROUNDS_TO_WIN_CHOICES, type BotLevel, type RoomOptions } from '@shared/room-options';
 import type { RoomListEntry } from '@shared/room-list';
 import { button, h } from './dom';
 
@@ -32,11 +32,19 @@ export function optionControls(
     win.value = String(value.roundsToWin);
     win.addEventListener('change', () => onChange({ roundsToWin: Number(win.value) }));
 
-    const bots = h('label', 'opt off', '', grid);
+    const bots = h('label', 'opt', '', grid);
     const botBox = h('input', '', '', bots);
-    botBox.type = 'checkbox'; botBox.id = `${idPrefix}bots`; botBox.checked = value.fillBots; botBox.disabled = true;
+    botBox.type = 'checkbox'; botBox.id = `${idPrefix}bots`; botBox.checked = value.fillBots;
+    botBox.addEventListener('change', () => onChange({ fillBots: botBox.checked }));
     bots.append('Fill with bots');
-    h('small', 'dim', 'Coming soon', bots);
+    h('small', 'dim', 'Bots keep both teams at half the room size; each leaves when a person joins', bots);
+
+    const levelL = h('label', 'f', 'Bot skill', grid);
+    const level = h('select', '', '', levelL);
+    level.id = `${idPrefix}level`;
+    for (const l of BOT_LEVELS) level.add(new Option(l === 'easy' ? 'Easy' : l === 'hard' ? 'Hard' : 'Normal', l));
+    level.value = value.botLevel;
+    level.addEventListener('change', () => onChange({ botLevel: level.value as BotLevel }));
     return grid;
 }
 
@@ -47,7 +55,7 @@ export function optionChips(parent: HTMLElement, o: RoomOptions): void {
     chip(`Up to ${o.maxPlayers} players`);
     chip(`First to ${o.roundsToWin}`);
     chip(o.suppressed ? 'Suppressed weapons' : 'Unsuppressed weapons', o.suppressed);
-    if (o.fillBots) chip('Bots fill empty places', true);
+    if (o.fillBots) chip(`Bots fill empty places (${o.botLevel})`, true);
 }
 
 /** The public room list in the menu: a refresh button, one row per room, a join button on each. */
@@ -80,6 +88,7 @@ export function roomListView(
                 const full = r.players >= r.capacity;
                 const state = r.phase === 'match' && r.score ? `In match ${r.score.ghosts}:${r.score.defenders}` : 'In the lobby';
                 const bits = [`${r.players} / ${r.capacity} players`, state, `first to ${r.options.roundsToWin}`];
+                if (r.bots > 0) bits.push(`${r.bots} bots`);
                 if (r.options.suppressed) bits.push('suppressed');
                 h('div', 'dim small', bits.join(' · '), info);
                 const go = button(full ? 'Full' : 'Join', full ? '' : 'primary', row, () => join(r.code));

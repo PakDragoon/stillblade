@@ -14,6 +14,7 @@ Engine space (glTF, Y up, -Z forward) = (x, z, -y).
 
 import heapq
 import importlib
+import json
 import math
 import os
 import sys
@@ -534,6 +535,157 @@ class WalkGraph:
 
 
 # ---------------------------------------------------------------------------------------------
+# Navigation graph for the server's bots (written into the map JSON as "nav").
+#
+# The walk graph's reachable spots (0.25 m grid) are grouped into NAV_CELLS x NAV_CELLS blocks
+# (1 m); inside a block, spots joined by walking moves form one node, placed on the spot nearest
+# their middle. Two nodes are linked when a fine move joins their blocks, and only if a player
+# walking the straight line between the two node points stays on spots of the walk graph using
+# moves of the graph (so a bot steering straight at the next node never cuts a corner or climbs
+# a stair from its side). Edge kinds: 0 walk (level), 1 step (stairs or a small rise), 2 jump,
+# 3 drop. Positions are feet positions in engine coordinates.
+# ---------------------------------------------------------------------------------------------
+NAV_CELLS = 4
+NAV_KINDS = {"walk": 0, "step": 1, "jump": 2, "drop": 3}
+
+
+def _trace_line(g, reach, a, b, kinds):
+    """Follows the straight line from fine node a to fine node b over graph moves; True if it arrives."""
+    ax, ay = g.centre(*g.nodes[a][:2])
+    bx, by = g.centre(*g.nodes[b][:2])
+    length = math.hypot(bx - ax, by - ay)
+    steps = max(1, int(length / (CELL * 0.4)) + 1)
+    cur = a
+    for k in range(1, steps + 1):
+        t = k / steps
+        x, y = ax + (bx - ax) * t, ay + (by - ay) * t
+        cell = (int((x - g.x0) / CELL), int((y - g.y0) / CELL))
+        ix, iy, z = g.nodes[cur]
+        if cell == (ix, iy):
+            continue
+        best = None
+        for j, _c, kind in g.neighbours(cur):
+            jx, jy, jz = g.nodes[j]
+            if (jx, jy) != cell or j not in reach or kind not in kinds:
+                continue
+            # Prefer level moves, then the height nearest the target's (several floors share a cell).
+            score = (0 if kind == "walk" else 1, abs(jz - g.nodes[b][2]))
+            if best is None or score < best[0]:
+                best = (score, j)
+        if best is None:
+            return False
+        cur = best[1]
+    return cur == b or abs(g.nodes[cur][2] - g.nodes[b][2]) < 1e-3
+
+
+def nav_graph(m):
+    """The bots' navigation graph from the verified walk graph (`verify` must have run)."""
+    g, reach = m._graph, m._reach
+    blocks = {}
+    for n in reach:
+        ix, iy, _z = g.nodes[n]
+        blocks.setdefault((ix // NAV_CELLS, iy // NAV_CELLS), []).append(n)
+    comp = {}
+    nodes = []          # (fine node of the representative, block key)
+    for key in sorted(blocks):
+        members = set(blocks[key])
+        for n in sorted(members):
+            if n in comp:
+                continue
+            group, stack = [], [n]
+            comp[n] = len(nodes)
+            while stack:
+                c = stack.pop()
+                group.append(c)
+                for j, _cost, kind in g.neighbours(c):
+                    if kind == "walk" and j in members and j not in comp:
+                        comp[j] = len(nodes)
+                        stack.append(j)
+            cx = sum(g.centre(*g.nodes[c][:2])[0] for c in group) / len(group)
+            cy = sum(g.centre(*g.nodes[c][:2])[1] for c in group) / len(group)
+            cz = sum(g.nodes[c][2] for c in group) / len(group)
+            rep = min(group, key=lambda c: (math.hypot(g.centre(*g.nodes[c][:2])[0] - cx,
+                                                      g.centre(*g.nodes[c][:2])[1] - cy),
+                                           abs(g.nodes[c][2] - cz), c))
+            nodes.append(rep)
+    links = {}
+    for n in reach:
+        a = comp[n]
+        for j, _cost, kind in g.neighbours(n):
+            b = comp.get(j)
+            if b is None or b == a:
+                continue
+            # A fall of up to a step's height is still a walk; anything more is a drop.
+            if kind == "fall":
+                kind = "drop"
+            prev = links.get((a, b))
+            order = ("walk", "drop", "jump")
+            if prev is None or order.index(kind) < order.index(prev):
+                links[(a, b)] = kind
+    edges = []
+    dropped = 0
+    for (a, b), kind in sorted(links.items()):
+        ra, rb = nodes[a], nodes[b]
+        allowed = {"walk"} if kind == "walk" else {"walk", "fall", "jump"}
+        if not _trace_line(g, reach, ra, rb, allowed):
+            dropped += 1
+            continue
+        dz = g.nodes[rb][2] - g.nodes[ra][2]
+        if kind == "walk":
+            kind = "walk" if abs(dz) < 0.05 else "step"
+        edges.append((a, b, NAV_KINDS[kind]))
+    pts = []
+    for rep in nodes:
+        ix, iy, z = g.nodes[rep]
+        x, y = g.centre(ix, iy)
+        # Engine coordinates: (x, z, -y).
+        pts.append([round(x, 3), round(z, 3), round(-y, 3) + 0.0])
+    return {"cell": CELL * NAV_CELLS, "nodes": pts, "edges": [list(e) for e in edges]}, comp, dropped
+
+
+NAV_BOTH = 4    # added to an edge kind in the file: the link goes both ways
+
+
+def nav_json(nav):
+    """The "nav" member as written into the map JSON: flat arrays, a link that goes both ways with the
+    same kind written once with NAV_BOTH added, a few values per line to keep the file diffable."""
+    kinds = {(a, b): k for a, b, k in nav["edges"]}
+    flat_edges = []
+    for (a, b), k in sorted(kinds.items()):
+        back = kinds.get((b, a))
+        if back == k:
+            if a < b:
+                flat_edges += [a, b, k + NAV_BOTH]
+            continue
+        flat_edges += [a, b, k]
+    flat_nodes = [c for p in nav["nodes"] for c in p]
+
+    def rows(values, per):
+        lines = []
+        for i in range(0, len(values), per):
+            lines.append("      " + ", ".join(json.dumps(v) for v in values[i:i + per]))
+        return "[\n" + ",\n".join(lines) + "\n    ]"
+    return ('{\n    "cell": %s,\n    "nodes": %s,\n    "edges": %s\n  }'
+            % (json.dumps(nav["cell"]), rows(flat_nodes, 24), rows(flat_edges, 30)))
+
+
+def nav_reach(nav, starts):
+    """Node ids reachable over the nav graph's directed edges from `starts`."""
+    out = {}
+    for a, b, _k in nav["edges"]:
+        out.setdefault(a, []).append(b)
+    seen = set(starts)
+    stack = list(starts)
+    while stack:
+        n = stack.pop()
+        for b in out.get(n, ()):
+            if b not in seen:
+                seen.add(b)
+                stack.append(b)
+    return seen
+
+
+# ---------------------------------------------------------------------------------------------
 # Verification
 # ---------------------------------------------------------------------------------------------
 def check_constants(errors):
@@ -803,6 +955,29 @@ def verify(m, log=print):
             log("%s path %-9s -> site %s: %s m walking, %s m with jumps"
                 % (tag, team, name, "-" if walk is None else "%.1f" % walk, "-" if jump is None else "%.1f" % jump))
     m.path_lengths = lengths
+
+    # The bots' navigation graph: every spawn must reach every site over it, and back.
+    nav, comp, dropped_links = nav_graph(m)
+    m.nav = nav
+    rev_nav = {"edges": [[b, a, k] for a, b, k in nav["edges"]]}
+    for team, nodes in spawn_nodes.items():
+        starts = [comp[n] for n in nodes if n in comp]
+        fwd = nav_reach(nav, starts)
+        back = nav_reach(rev_nav, starts)
+        for name, ids in site_nodes.items():
+            sids = set(comp[n] for n in ids if n in comp)
+            if not sids & fwd:
+                errors.append("nav graph: %s spawn cannot reach site %s" % (team, name))
+            if not sids & back:
+                errors.append("nav graph: site %s cannot get back to the %s spawn" % (name, team))
+    all_starts = [comp[n] for ns in spawn_nodes.values() for n in ns if n in comp]
+    orphans = len(nav["nodes"]) - len(nav_reach(nav, all_starts))
+    kinds = [0, 0, 0, 0]
+    for _a, _b, k in nav["edges"]:
+        kinds[k] += 1
+    log("%s nav graph: %d nodes, %d edges (walk %d, step %d, jump %d, drop %d), %d links refused by the line test, "
+        "%d nodes not reachable from a spawn" % (tag, len(nav["nodes"]), len(nav["edges"]), kinds[0], kinds[1],
+                                                 kinds[2], kinds[3], dropped_links, orphans))
 
     # Distinct routes: each gate alone must connect the ghost spawn to the site, and closing every
     # gate must cut the site off (so the gates really are separate ways in).

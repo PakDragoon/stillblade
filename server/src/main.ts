@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { TICK_RATE } from '../../shared/constants';
-import { DEFAULT_PORT, decodeClient, encodeServer } from '../../shared/protocol';
+import { DEFAULT_PORT, decodeClient, encodeServer, type Team } from '../../shared/protocol';
 import { parseRoomOptions } from '../../shared/room-options';
 import { defaultMapId, loadMaps } from './maps';
 import { handleReportRequest } from './report-http';
@@ -73,7 +73,7 @@ wss.on('connection', (ws, req) => {
     const open = perIp.get(ip) ?? 0;
     if (open >= MAX_CONNECTIONS_PER_IP) { ws.close(1013, 'Too many connections'); return; }
 
-    // ws://host:port/?room=CODE&name=NICK&map=ID&suppressed=1&public=1&max=6&rounds=3 (map and options only matter to
+    // ws://host:port/?room=CODE&name=NICK&map=ID&suppressed=1&public=1&max=6&rounds=3&bots=1&level=hard (map and options only matter to
     // whoever creates the room); quick=1 without a room picks the fullest public room, or makes a public one.
     const query = new URL(req.url ?? '/', 'ws://localhost').searchParams;
     const conn = {
@@ -84,12 +84,15 @@ wss.on('connection', (ws, req) => {
     const name = query.get('name') ?? '';
     const options = parseRoomOptions(query);
     let roomId = cleanRoomId(query.get('room'));
-    if (query.get('quick') === '1' && !query.get('room')) {
+    // practice=1&side=ghosts|defenders: a private practice range of one's own (a fresh room every time).
+    const practice: Team | undefined = query.get('practice') === '1' ? (query.get('side') === 'ghosts' ? 'ghosts' : 'defenders') : undefined;
+    if (practice) roomId = rooms.newQuickCode('practice');
+    else if (query.get('quick') === '1' && !query.get('room')) {
         const found = rooms.quickRoom(conn, name);
         roomId = found ?? rooms.newQuickCode();
         if (!found) options.public = true;
     }
-    const joined = rooms.join(roomId, query.get('map'), conn, name, ticks * TICK_MS, options);
+    const joined = rooms.join(roomId, query.get('map'), conn, name, ticks * TICK_MS, options, practice);
     if (!joined.ok) { ws.close(joined.reason === 'Unknown map' ? 1008 : 1013, joined.reason); return; }
 
     perIp.set(ip, open + 1);

@@ -185,6 +185,15 @@ export function resetLoadout(l: LoadoutState): void {
     resetKnife(l.knife);
 }
 
+/**
+ * Practice range: every gun's spare rounds back to full. Called after `stepLoadout` for every command
+ * a defender simulates in a practice room, by the server and by the client's prediction and replay
+ * alike (the client knows from `welcome.practice`), so reloading never runs out and both sides agree.
+ */
+export function fillReserves(l: LoadoutState): void {
+    for (let i = 0; i < GUN_COUNT; i++) l.guns[i].reserve = WEAPONS[i].reserve;
+}
+
 /** Death: reloads in progress give nothing, and a knife swing in progress never lands. */
 export function cancelReloads(l: LoadoutState): void {
     for (let i = 0; i < GUN_COUNT; i++) l.guns[i].reload = 0;

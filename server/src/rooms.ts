@@ -1,4 +1,5 @@
 import { DEFAULT_ROOM_OPTIONS, type RoomOptions } from '../../shared/room-options';
+import type { Team } from '../../shared/protocol';
 import type { MapData } from '../../shared/types';
 import { Game, type Connection } from './game';
 import { cleanName } from './namefilter';
@@ -40,13 +41,15 @@ export class Rooms {
      * even when the room exists, so a bad link fails loudly.
      */
     join(roomId: string, mapId: string | null, conn: Connection, name: string, now: number,
-        options: RoomOptions = DEFAULT_ROOM_OPTIONS): JoinResult {
+        options: RoomOptions = DEFAULT_ROOM_OPTIONS, practice?: Team): JoinResult {
         if (mapId !== null && mapId !== '' && !this.maps.has(mapId)) return { ok: false, reason: 'Unknown map' };
         let game = this.rooms.get(roomId);
         let created = false;
         if (!game) {
             if (this.rooms.size >= this.limits.maxRooms) return { ok: false, reason: 'Server full' };
-            game = new Game(this.maps.get(mapId || this.defaultMap)!, { lobby: true, options, maps: this.maps });
+            game = practice
+                ? new Game(this.maps.get(mapId || this.defaultMap)!, { lobby: true, practice: true, options: { ...options, public: false } })
+                : new Game(this.maps.get(mapId || this.defaultMap)!, { lobby: true, options, maps: this.maps });
             game.code = roomId;
             // A new room starts at the current tick time so its clock is never behind the loop's.
             game.now = now;
@@ -54,10 +57,12 @@ export class Rooms {
             created = true;
         } else if (game.bans.isBanned(conn.ip, cleanName(name), game.now)) {
             return { ok: false, reason: 'Removed from this room' };
-        } else if (game.players.size >= Math.min(this.limits.maxPlayersPerRoom, game.options.maxPlayers)) {
+        } else if (game.practice) {
+            return { ok: false, reason: 'Room full' }; // a practice range is for one person
+        } else if (game.humanCount() >= Math.min(this.limits.maxPlayersPerRoom, game.options.maxPlayers)) {
             return { ok: false, reason: 'Room full' };
         }
-        const id = game.join(conn, name);
+        const id = game.join(conn, name, practice ? { team: practice } : {});
         return { ok: true, roomId, game, id, created };
     }
 
@@ -67,13 +72,13 @@ export class Rooms {
      */
     quickRoom(conn: Connection, name: string): string | null {
         const clean = cleanName(name);
-        return fullestPublicRoom(this.rooms, g => !g.bans.isBanned(conn.ip, clean, g.now) && g.players.size < this.limits.maxPlayersPerRoom);
+        return fullestPublicRoom(this.rooms, g => !g.bans.isBanned(conn.ip, clean, g.now) && g.humanCount() < this.limits.maxPlayersPerRoom);
     }
 
-    /** A fresh room code for a Quick play room that nobody is in yet. */
-    newQuickCode(): string {
+    /** A fresh room code for a Quick play room (or, with `prefix`, a practice range) that nobody is in yet. */
+    newQuickCode(prefix = 'quick'): string {
         for (;;) {
-            const code = `quick-${Math.random().toString(36).slice(2, 6)}`;
+            const code = `${prefix}-${Math.random().toString(36).slice(2, 6)}`;
             if (!this.rooms.has(code)) return code;
         }
     }
@@ -83,7 +88,7 @@ export class Rooms {
         const game = this.rooms.get(roomId);
         if (!game) return;
         game.leave(id);
-        if (game.players.size === 0) this.rooms.delete(roomId);
+        if (game.humanCount() === 0) this.rooms.delete(roomId); // bots never keep a room open
     }
 
     tick(now: number): void {

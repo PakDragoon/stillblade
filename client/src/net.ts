@@ -71,6 +71,8 @@ export interface Welcome {
     options: RoomOptions;
     /** The room's code (a Quick play join learns it here). */
     room: string;
+    /** A practice range: no rounds, reserves kept full (predicted with `fillReserves`). */
+    practice: boolean;
 }
 
 const MAX_SAMPLES = 24;
@@ -156,7 +158,8 @@ export class Net {
             this.welcomed = true;
             this.resolveWelcome({
                 id: msg.id, team: msg.team, map: msg.map, mapName: msg.mapName ?? msg.map,
-                options: { ...DEFAULT_ROOM_OPTIONS, ...msg.options }, room: msg.room ?? ''
+                options: { ...DEFAULT_ROOM_OPTIONS, ...msg.options }, room: msg.room ?? '',
+                practice: msg.practice === true
             });
         } else if (this.handlers && !this.paused) {
             this.receive(msg);

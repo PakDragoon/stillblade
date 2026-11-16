@@ -6,8 +6,8 @@ import {
     STEP_RANGE, TICK_DT, TICK_RATE, VIS_HURT_SPIKE, VIS_SWING_SPIKE
 } from '../../shared/constants';
 import {
-    GUN_RELOAD, MELEE_SLASH, MELEE_SWING, aimFraction, cancelReloads, createLoadout, heldGun, resetLoadout, shotDirectionFor,
-    stepLoadout
+    GUN_RELOAD, MELEE_SLASH, MELEE_SWING, aimFraction, cancelReloads, createLoadout, fillReserves, heldGun, resetLoadout,
+    shotDirectionFor, stepLoadout
 } from '../../shared/gun';
 import { KNIFE_SLASH, KNIFE_SWING, createKnifeState, resetKnife, stepKnife } from '../../shared/knife';
 import {
@@ -27,13 +27,15 @@ import {
 import { cleanChat } from '../../shared/chat';
 import { ASSIST_MS, emptyStats, pickMvp } from '../../shared/stats';
 import { rayBox, rayWorld, viewDir } from '../../shared/raycast';
-import { DEFAULT_ROOM_OPTIONS, cleanRoomOptions, halftimeRound, type RoomOptions } from '../../shared/room-options';
+import { DEFAULT_ROOM_OPTIONS, botTeamSize, cleanRoomOptions, halftimeRound, type RoomOptions } from '../../shared/room-options';
+import { NavGraph } from '../../shared/nav';
 import type { MapData, PlayerState, Vec3 } from '../../shared/types';
 import { ghostVisTarget, stepVis } from '../../shared/visibility';
 import { DEFENDER_KNIFE, WEAPONS } from '../../shared/weapons';
 import { hitZone, zoneDamage, type HitZone } from '../../shared/zones';
 import { chooseName, cleanName, maskChat } from './namefilter';
 import { Bans, KickVote, MAP_VOTE_LEAD_MS, MapVote } from './votes';
+import { BOT_NAMES, BotBrain, BotRng, hashSeed, siteNodes, type BotRole, type BotWorld } from './bots';
 
 export interface Connection {
     send(msg: ServerMsg): void;
@@ -88,8 +90,14 @@ export class Player {
     ready = false;
     /** The name the player asked for (cleaned, before the filter and numbering): what the rejoin restore and bans go by. */
     baseName = '';
-    /** A computer player: never counts for votes or the creator role (package E adds bots). */
+    /** A computer player (server/src/bots.ts): never counts for votes, the creator role, room size or idleness. */
     bot = false;
+    /** The bot's mind; it produces this player's command every tick. Null for people. */
+    brain: BotBrain | null = null;
+    /** Practice targets spawn here instead of at a team spawn. */
+    spawnAt: { pos: Vec3; yaw: number } | null = null;
+    /** A bot added by the room's fill option (only these are added and removed by `fillWithBots`). */
+    filler = false;
     /**
      * Marked after IDLE_ROUNDS consecutive complete rounds without a single input change; not spawned
      * at the next round start; cleared by the next input change. Nobody is ever removed mid-round.
@@ -175,6 +183,11 @@ export class Player {
 }
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
+/** One navigation graph per map, built on first use. */
+const navCache = new WeakMap<MapData, NavGraph | null>();
+/** Practice targets: how many of each kind. */
+const PRACTICE_STATIC = 3;
+const PRACTICE_MOVING = 2;
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const dist = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
@@ -182,7 +195,7 @@ const dist = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], 
  * The authoritative match. Knows nothing about sockets: the transport hands it commands and a
  * `Connection` to send through, which keeps it unit-testable and transport-agnostic.
  */
-export class Game {
+export class Game implements BotWorld {
     readonly players = new Map<number, Player>();
     /** Server time in ms, advanced only by `tick`. */
     now = 0;
@@ -238,13 +251,23 @@ export class Game {
     readonly bans = new Bans();
     private readonly mapVote = new MapVote();
     private mapDecided = false;
+    /** A private practice range (no rounds, targets, reserves kept full). */
+    readonly practice: boolean;
+    /** Bots added so far (names and seeds). */
+    private botCount = 0;
+    /** Plans shared by each team's bots, picked per round from a generator seeded by the room code. */
+    private botRng: BotRng | null = null;
+    private readonly teamSites: Record<Team, number> = { ghosts: 0, defenders: 0 };
 
     /**
      * `rounds: false` keeps the match in warmup (free roam with respawns), for tests of the core mechanics.
      * `map` changes between matches through `swapMap` (the map vote), never during one.
      */
-    constructor(public map: MapData, opts: { rounds?: boolean; lobby?: boolean; options?: Partial<RoomOptions>; maps?: ReadonlyMap<string, MapData> } = {}) {
-        this.rounds = opts.rounds ?? true;
+    constructor(public map: MapData, opts: {
+        rounds?: boolean; lobby?: boolean; options?: Partial<RoomOptions>; maps?: ReadonlyMap<string, MapData>; practice?: boolean
+    } = {}) {
+        this.practice = opts.practice ?? false;
+        this.rounds = this.practice ? false : (opts.rounds ?? true);
         this.lobby = opts.lobby ?? false;
         this.options = cleanRoomOptions({ ...opts.options }, DEFAULT_ROOM_OPTIONS);
         this.maps = opts.maps;
@@ -288,7 +311,7 @@ export class Game {
         for (const p of this.players.values()) {
             players.push({
                 id: p.id, name: p.name, team: p.team, alive: p.alive, ...p.stats,
-                ready: p.ready, creator: p.id === creator, idle: p.idle
+                ready: p.ready, creator: p.id === creator, idle: p.idle, bot: p.bot
             });
         }
         return players;
@@ -304,32 +327,40 @@ export class Game {
         return n;
     }
 
-    join(conn: Connection, name = ''): number {
+    /**
+     * Adds a player. `as.team` puts them on a side (bots, and the practice range's chosen side); otherwise
+     * a person joins the smaller team. `as.brain` makes the player a bot run by the server.
+     */
+    join(conn: Connection, name = '', as: { team?: Team; brain?: BotBrain; spawnAt?: { pos: Vec3; yaw: number } } = {}): number {
         let ghosts = 0;
         for (const p of this.players.values()) if (p.team === 'ghosts') ghosts++;
-        let team: Team = ghosts <= this.players.size - ghosts ? 'ghosts' : 'defenders';
+        let team: Team = as.team ?? (ghosts <= this.players.size - ghosts ? 'ghosts' : 'defenders');
         let group = team === 'ghosts' ? this.ghostGroup : ((1 - this.ghostGroup) as 0 | 1);
         const id = this.nextId++;
-        const clean = cleanName(name);
+        const clean = as.brain ? '' : cleanName(name);
         // Blocked and reserved names become "Player", a name already in the room gets " (2)"; nothing asked for is "Player <id>".
-        const shown = chooseName(clean, [...this.players.values()].map(o => o.name), name) || `Player ${id}`;
+        // Bots are named by the server ("BOT <name>") and skip the filter.
+        const shown = as.brain ? name : chooseName(clean, [...this.players.values()].map(o => o.name), name) || `Player ${id}`;
         // Returning within the grace period under the same (unique) name: previous side and statistics back.
         this.purgeDeparted();
         // Departed players are remembered by the name that was shown, so a numbered "Sam (2)" is restored when
         // the same request ("Sam") is numbered the same way again (see `leave` for the ambiguous case).
-        const back = clean ? this.departed.get(shown) ?? undefined : undefined;
+        const back = clean && !as.team ? this.departed.get(shown) ?? undefined : undefined;
         if (back) {
             group = back.group;
             team = this.teamOf(group);
         }
         const player = new Player(id, group, team, shown, conn);
         player.baseName = clean;
+        if (as.brain) { player.bot = true; player.brain = as.brain; player.ready = true; }
+        if (as.spawnAt) player.spawnAt = as.spawnAt;
         if (back) { player.stats = { ...back.stats }; this.departed.delete(shown); }
         player.joinedAt = player.chatTokensAt = this.now;
         this.players.set(id, player);
         conn.send({
             type: 'welcome', version: PROTOCOL_VERSION, id, team, map: this.map.name,
-            mapName: this.map.displayName ?? this.map.name, time: this.now, options: { ...this.options }, room: this.code
+            mapName: this.map.displayName ?? this.map.name, time: this.now, options: { ...this.options }, room: this.code,
+            ...(this.practice ? { practice: true } : {})
         });
         conn.send(this.roundMsg());
         if (this.summary && this.phase === 'over') { // joined during the result screen
@@ -341,7 +372,146 @@ export class Game {
         if (this.phase === 'warmup') this.spawn(player);
         if (team === 'ghosts') conn.send(this.ghostBombMsg());
         this.sendRoster();
+        if (!as.brain) {
+            if (this.practice) this.setUpPractice(player);
+            else this.fillWithBots(this.phase === 'warmup');
+        }
         return id;
+    }
+
+    /** Connected people (not bots): what room size, quick play and an empty room are judged by. */
+    humanCount(): number {
+        let n = 0;
+        for (const p of this.players.values()) if (!p.bot) n++;
+        return n;
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Bots (server/src/bots.ts). A bot is a player whose connection feeds its brain and whose brain
+    // sends one command per tick through `handleCmd`, so every rule applies to it.
+    // -----------------------------------------------------------------------------------------
+
+    /** The map's navigation graph; null when the map has none (then no bots can be added). */
+    get nav(): NavGraph | null {
+        let g = navCache.get(this.map);
+        if (g === undefined) {
+            g = this.map.nav && this.map.nav.nodes.length > 0 ? new NavGraph(this.map.nav) : null;
+            navCache.set(this.map, g);
+        }
+        return g;
+    }
+
+    /** BotWorld: nothing solid between two points (map geometry only). */
+    clearLine(a: Vec3, b: Vec3): boolean {
+        return this.lineClear(a[0], a[1], a[2], b[0], b[1], b[2]);
+    }
+
+    /** BotWorld: the site index each team's bots favour this round. */
+    teamSite(team: Team): number {
+        return this.teamSites[team];
+    }
+
+    private rngForBots(): BotRng {
+        return this.botRng ??= new BotRng(hashSeed(this.code || 'room', hashSeed(this.map.name)));
+    }
+
+    /** Adds one bot to a team. Returns its id, or 0 when the map has no navigation graph. */
+    addBot(team: Team, role: BotRole = 'player', place?: { pos: Vec3; yaw: number }, filler = false): number {
+        if (!this.nav) return 0;
+        const k = this.botCount++;
+        const taken = new Set<string>();
+        for (const p of this.players.values()) taken.add(p.name);
+        let name = `BOT ${BOT_NAMES[k % BOT_NAMES.length]}`;
+        for (let n = 2; taken.has(name); n++) name = `BOT ${BOT_NAMES[k % BOT_NAMES.length]} ${n}`;
+        const brain = new BotBrain(role, this.options.botLevel, hashSeed(this.code || 'room', k + 1), place?.yaw ?? 0);
+        const id = this.join(brain.conn, name, { team, brain, spawnAt: place });
+        const p = this.players.get(id);
+        if (p) p.filler = filler;
+        return id;
+    }
+
+    /** Runs every bot's mind once: one command each, through `handleCmd` like a person's. */
+    private stepBots(): void {
+        for (const p of this.players.values()) {
+            if (p.brain) this.handleCmd(p.id, p.brain.think(p, this));
+        }
+    }
+
+    /**
+     * Keeps each team at `botTeamSize` with bots while the room's `fillBots` option is on (and removes them
+     * all when it is off). Bots are added at any time (a bot added mid-round waits for the next round
+     * like a person would); they are removed only when `removeNow` (warmup, or a round start), so a person
+     * who joins mid-round takes a bot's place at the next round start.
+     */
+    fillWithBots(removeNow: boolean): void {
+        if (this.practice || !this.nav) return;
+        const size = botTeamSize(this.options);
+        const humans = { ghosts: 0, defenders: 0 };
+        const bots: Record<Team, Player[]> = { ghosts: [], defenders: [] };
+        for (const p of this.players.values()) {
+            if (p.filler) bots[p.team].push(p);
+            else humans[p.team]++; // people, and bots added by hand (tests, tools), count as players
+        }
+        const total = humans.ghosts + humans.defenders;
+        if (this.humanCount() === 0) return; // an empty room is about to close
+        const want: Record<Team, number> = {
+            ghosts: this.options.fillBots ? Math.max(0, size - humans.ghosts) : 0,
+            defenders: this.options.fillBots ? Math.max(0, size - humans.defenders) : 0
+        };
+        // Never more than the room's size in all.
+        while (total + want.ghosts + want.defenders > this.options.maxPlayers && want.ghosts + want.defenders > 0) {
+            if (want.ghosts >= want.defenders) want.ghosts--; else want.defenders--;
+        }
+        for (const team of ['ghosts', 'defenders'] as const) {
+            const list = bots[team];
+            if (removeNow) {
+                // The newest bots leave first.
+                while (list.length > want[team]) this.leave(list.pop()!.id);
+            }
+            for (let n = list.length; n < want[team]; n++) this.addBot(team, 'player', undefined, true);
+        }
+    }
+
+    /** The practice range: targets on the other side, placed where the person can see them from their spawn. */
+    private setUpPractice(person: Player): void {
+        for (const p of [...this.players.values()]) if (p.bot) this.leave(p.id);
+        const targets: Team = person.team === 'ghosts' ? 'defenders' : 'ghosts';
+        const posts = this.practicePosts(person.team);
+        for (let i = 0; i < posts.length; i++) {
+            this.addBot(targets, i < PRACTICE_STATIC ? 'target-static' : 'target-moving', posts[i]);
+        }
+    }
+
+    /**
+     * Up to five places 6 to 28 m from the person's spawn, in its view (eye to chest clear), spread apart,
+     * each facing the spawn. Falls back to places in reach without a clear view on a map that has too few.
+     */
+    private practicePosts(team: Team): { pos: Vec3; yaw: number }[] {
+        const nav = this.nav;
+        if (!nav) return [];
+        const from = this.map.spawns[team][0].pos;
+        const eye: Vec3 = [from[0], from[1] + EYE_HEIGHT, from[2]];
+        const chest: Vec3 = [0, 0, 0];
+        const candidates: { n: number; d: number; seen: boolean }[] = [];
+        for (let n = 0; n < nav.count; n++) {
+            const d = nav.flatDist(n, from[0], from[2]);
+            if (d < 6 || d > 28 || Math.abs(nav.y[n] - from[1]) > 3) continue;
+            chest[0] = nav.x[n]; chest[1] = nav.y[n] + 1.2; chest[2] = nav.z[n];
+            candidates.push({ n, d, seen: this.clearLine(eye, chest) });
+        }
+        candidates.sort((a, b) => Number(b.seen) - Number(a.seen) || a.d - b.d || a.n - b.n);
+        const chosen: number[] = [];
+        for (const minGap of [4, 2.5, 1.2]) {
+            for (const c of candidates) {
+                if (chosen.length >= PRACTICE_STATIC + PRACTICE_MOVING) break;
+                if (chosen.includes(c.n)) continue;
+                if (chosen.every(o => Math.hypot(nav.x[o] - nav.x[c.n], nav.z[o] - nav.z[c.n]) >= minGap)) chosen.push(c.n);
+            }
+        }
+        return chosen.map(n => ({
+            pos: [nav.x[n], nav.y[n], nav.z[n]] as Vec3,
+            yaw: Math.atan2(-(from[0] - nav.x[n]), -(from[2] - nav.z[n]))
+        }));
     }
 
     leave(id: number): void {
@@ -355,7 +525,10 @@ export class Game {
             for (const [key, d] of this.departed) if (key === p.name || (d && d.base === p.baseName)) { this.departed.set(key, null); twin = true; }
             this.departed.set(p.name, twin ? null : { stats: { ...p.stats }, group: p.group, at: this.now, base: p.baseName });
         }
-        if (this.players.delete(id)) this.sendRoster();
+        if (this.players.delete(id)) {
+            this.sendRoster();
+            if (p && !p.bot) this.fillWithBots(this.phase === 'warmup');
+        }
     }
 
     /** A match is on, or held waiting for players: the room is not in its lobby. */
@@ -399,8 +572,8 @@ export class Game {
     }
 
     private everyoneReady(): boolean {
-        if (this.players.size === 0) return false;
-        for (const p of this.players.values()) if (!p.ready) return false;
+        if (this.humanCount() === 0) return false;
+        for (const p of this.players.values()) if (!p.ready && !p.bot) return false;
         return true;
     }
 
@@ -415,14 +588,24 @@ export class Game {
 
     /** Warmup only, and only if the teams then differ by at most MAX_TEAM_GAP players. */
     private switchTeam(p: Player): void {
+        if (p.bot) return;
         if (this.phase !== 'warmup') { this.notice(p, 'Teams can only be changed in warmup.'); return; }
-        const n = this.teamCounts();
+        // With bots filling the teams, only people count: a bot makes way on the other side.
+        const n = this.options.fillBots && this.nav ? this.humanTeamCounts() : this.teamCounts();
         const to: Team = p.team === 'ghosts' ? 'defenders' : 'ghosts';
-        if (Math.abs((n[to] + 1) - (n[p.team] - 1)) > MAX_TEAM_GAP) { this.notice(p, 'That would make the teams uneven.'); return; }
+        if (!this.practice && Math.abs((n[to] + 1) - (n[p.team] - 1)) > MAX_TEAM_GAP) { this.notice(p, 'That would make the teams uneven.'); return; }
         p.group = (1 - p.group) as 0 | 1;
         p.team = this.teamOf(p.group);
         this.spawn(p);
         this.sendRoster();
+        if (this.practice) this.setUpPractice(p); // the targets change sides with the person
+        else this.fillWithBots(true);
+    }
+
+    private humanTeamCounts(): Record<Team, number> {
+        const n = { ghosts: 0, defenders: 0 };
+        for (const p of this.players.values()) if (!p.bot) n[p.team]++;
+        return n;
     }
 
     /**
@@ -465,7 +648,7 @@ export class Game {
      */
     private countQuietRounds(): void {
         for (const p of this.players.values()) {
-            if (!p.inRound) continue;
+            if (!p.inRound || p.bot) continue;
             p.quietRounds = p.changedThisRound ? 0 : p.quietRounds + 1;
             if (p.quietRounds >= IDLE_ROUNDS && !p.idle) {
                 p.idle = true;
@@ -480,7 +663,7 @@ export class Game {
     }
 
     /** Stats for one landed hit, and the hit messages to both sides. `zone` only for shots. */
-    private recordHit(victim: Player, attacker: Player, dealt: number, kind: DamageKind, weapon?: number, zone?: HitZone): void {
+    private recordHit(victim: Player, attacker: Player, amount: number, dealt: number, kind: DamageKind, weapon?: number, zone?: HitZone): void {
         if (!this.held) { // warmup play while a match is held must not change its statistics
             attacker.stats.damage += dealt;
             if (zone === 'head') attacker.stats.headshots++;
@@ -499,7 +682,7 @@ export class Game {
             dmg.dist = Math.round(dist(victim.state.pos, attacker.state.pos) * 10) / 10;
         }
         victim.conn.send(dmg);
-        const confirm: ServerMsg = { type: 'hitconfirm', kind, kill: killed };
+        const confirm: ServerMsg = { type: 'hitconfirm', kind, kill: killed, damage: amount };
         if (zone !== undefined) confirm.zone = zone;
         attacker.conn.send(confirm);
     }
@@ -519,7 +702,7 @@ export class Game {
 
     private spawn(p: Player): void {
         const spawns = this.map.spawns[p.team];
-        const spawn = spawns[this.spawnCursor[p.team]++ % spawns.length];
+        const spawn = p.spawnAt ?? spawns[this.spawnCursor[p.team]++ % spawns.length];
         p.state = createPlayerState(spawn.pos);
         p.yaw = (spawn.yaw * Math.PI) / 180;
         p.pitch = 0;
@@ -594,6 +777,7 @@ export class Game {
         const armed = !acting && this.phase !== 'freeze';
         if (p.team === 'defenders') {
             const r = stepLoadout(p.loadout, cmd, armed);
+            if (this.practice) fillReserves(p.loadout); // after the step, so it always shows full; the client does the same (welcome.practice)
             if (r >= 0) this.fire(p, cmd, r);
             else if (r === GUN_RELOAD) this.emitSound(p, 'reload', 1, RELOAD_SOUND_RANGE, p.loadout.slot);
             // The defender knife: the same windup warning and the same landing as a ghost's swing.
@@ -731,7 +915,7 @@ export class Game {
         const dealt = Math.min(amount, victim.health);
         victim.health = Math.max(0, victim.health - amount);
         if (victim.team === 'ghosts') victim.vis = Math.max(victim.vis, VIS_HURT_SPIKE);
-        this.recordHit(victim, attacker, dealt, kind, weapon, zone);
+        this.recordHit(victim, attacker, amount, dealt, kind, weapon, zone);
         if (victim.health > 0) return false;
         victim.alive = false;
         // Only warmup has respawns; in a round the dead wait for the next one.
@@ -899,11 +1083,13 @@ export class Game {
     tick(now: number): void {
         this.now = now;
         this.tickCount++;
+        this.stepBots();
         for (const p of this.players.values()) {
             if (p.credits < MAX_CMD_CREDITS) p.credits++;
             if (!p.alive && p.respawnAt > 0 && now >= p.respawnAt) this.spawn(p);
             if (p.team === 'ghosts') {
                 p.vis = p.alive ? stepVis(p.vis, ghostVisTarget(horizontalSpeed(p.state)), TICK_DT) : 0;
+                if (p.spawnAt && p.alive) p.vis = 1; // practice targets are shown in full, still or not
             }
             p.record(now);
         }
@@ -926,6 +1112,14 @@ export class Game {
         this.winner = this.reason = undefined;
         this.summary = null;
         this.spawnCursor.ghosts = this.spawnCursor.defenders = 0;
+        this.fillWithBots(true); // people who joined during the last round take bots' places now
+        const nav = this.nav;
+        if (nav) {
+            const sites = Math.max(1, siteNodes(this.map, nav).length);
+            const rng = this.rngForBots();
+            this.teamSites.ghosts = rng.int(sites);
+            this.teamSites.defenders = rng.int(sites);
+        }
         for (const p of this.players.values()) {
             p.ready = false;
             p.hurtBy.clear();
@@ -1143,10 +1337,14 @@ export class Game {
         if (p.id !== this.creatorId) { this.notice(p, 'Only the room creator can change the options.'); return; }
         if (this.phase !== 'warmup' || this.matchInProgress()) { this.notice(p, 'Options can only be changed before the match starts.'); return; }
         const next = cleanRoomOptions(raw, this.options);
-        if (next.maxPlayers < this.players.size) { this.notice(p, `There are already ${this.players.size} players in the room.`); return; }
+        const people = this.humanCount();
+        if (next.maxPlayers < people) { this.notice(p, `There are already ${people} players in the room.`); return; }
         if ((Object.keys(next) as (keyof RoomOptions)[]).every(k => next[k] === this.options[k])) return;
+        const level = next.botLevel !== this.options.botLevel;
         this.options = next;
         this.broadcast({ type: 'options', options: { ...next } });
+        if (level) for (const b of [...this.players.values()]) if (b.filler) this.leave(b.id); // new bots at the new level
+        this.fillWithBots(true);
     }
 
     private kickInfo(viewer: Player): KickVoteInfo | null {
@@ -1199,10 +1397,10 @@ export class Game {
     private removePlayer(p: Player, target: number): void {
         const t = this.players.get(target);
         if (p.id !== this.creatorId) { this.notice(p, 'Only the room creator can remove a player.'); return; }
-        if (this.players.size !== 2 || this.phase !== 'warmup' || this.matchInProgress()) {
+        if (this.humanCount() !== 2 || this.phase !== 'warmup' || this.matchInProgress()) {
             this.notice(p, 'You can remove a player directly only in warmup, in a room of two. With more players, call a vote.'); return;
         }
-        if (!t || t === p) return;
+        if (!t || t === p || t.bot) return;
         this.removeFromRoom(t, 'The room creator removed you from this room. You cannot rejoin it for 10 minutes.');
     }
 
