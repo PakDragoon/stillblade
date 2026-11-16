@@ -9,7 +9,7 @@ import {
 import { createPlayerState } from './movement';
 import { viewDir } from './raycast';
 import type { Vec3 } from './types';
-import { SLOT_PISTOL, SLOT_RIFLE, WEAPONS, WEAPON_COUNT, type WeaponDef } from './weapons';
+import { DEFENDER_KNIFE, GUN_COUNT, SLOT_COUNT, SLOT_PISTOL, SLOT_RIFLE, WEAPONS, type WeaponDef } from './weapons';
 
 const RIFLE = WEAPONS[SLOT_RIFLE];
 const PISTOL = WEAPONS[SLOT_PISTOL];
@@ -40,8 +40,8 @@ function pistolReady(): LoadoutState {
 
 describe('weapon table', () => {
     it('keeps the rifle as it was and gives the pistol its own numbers', () => {
-        expect(RIFLE).toMatchObject({ auto: true, fireInterval: 6, magSize: 30, reserve: 90, reloadTicks: 132, bodyDamage: 34, headDamage: 100 });
-        expect(PISTOL).toMatchObject({ auto: false, fireInterval: 9, magSize: 12, reserve: 36, reloadTicks: 84, bodyDamage: 26, headDamage: 100 });
+        expect(RIFLE).toMatchObject({ auto: true, fireInterval: 6, magSize: 30, reserve: 90, reloadTicks: 132, bodyDamage: 34 });
+        expect(PISTOL).toMatchObject({ auto: false, fireInterval: 9, magSize: 12, reserve: 36, reloadTicks: 84, bodyDamage: 26 });
         expect(RIFLE.drawTicks).toBe(24); // 0.4 s
         expect(PISTOL.drawTicks).toBe(15); // 0.25 s
         expect(PISTOL.spreadStill).toBeLessThan(RIFLE.spreadStill);
@@ -51,7 +51,7 @@ describe('weapon table', () => {
     });
 
     it('fits every counter of every weapon in the one byte the snapshot gives it', () => {
-        expect(WEAPON_COUNT).toBeLessThanOrEqual(15); // the command's slot field and the remote weapon byte
+        expect(SLOT_COUNT).toBeLessThanOrEqual(15); // the command's slot field and the remote weapon byte
         for (const d of WEAPONS) {
             for (const v of [d.magSize, d.reserve, d.reloadTicks, d.drawTicks, d.adsTicks, d.fireInterval, d.patternDeg.length, DRY_FIRE_TICKS]) {
                 expect(Number.isInteger(v)).toBe(true);
@@ -67,8 +67,14 @@ describe('weapon table', () => {
             expect(d.adsRecoil).toBeLessThan(1);
         }
         // The spread seed (shots + 256 * slot) stays a small integer; the knife timing travels in one byte each too.
-        expect(255 + 256 * (WEAPON_COUNT - 1)).toBeLessThan(2 ** 31);
+        expect(255 + 256 * (GUN_COUNT - 1)).toBeLessThan(2 ** 31);
         for (const v of [KNIFE_COOLDOWN_TICKS, KNIFE_WINDUP_TICKS]) expect(v).toBeLessThanOrEqual(255);
+        // The defender knife (slot 3): its draw, windup and cooldown counters travel in one byte each.
+        for (const v of [DEFENDER_KNIFE.drawTicks, DEFENDER_KNIFE.windupTicks, DEFENDER_KNIFE.cooldownTicks]) {
+            expect(Number.isInteger(v)).toBe(true);
+            expect(v).toBeGreaterThan(0);
+            expect(v).toBeLessThanOrEqual(255);
+        }
     });
 });
 
@@ -227,17 +233,17 @@ describe('semi-automatic trigger', () => {
 
     it('needs a new press after a reload on empty and between dry clicks', () => {
         const l = pistolReady();
-        heldGun(l).mag = 0;
+        heldGun(l)!.mag = 0;
         expect(stepLoadout(l, input({ fire: true }), true)).toBe(GUN_RELOAD);
         // Still holding through the reload: nothing fires when it completes.
         expect(shotsIn(runL(l, PISTOL.reloadTicks + 30, () => ({ fire: true })))).toBe(0);
-        expect(heldGun(l).mag).toBe(PISTOL.magSize);
+        expect(heldGun(l)!.mag).toBe(PISTOL.magSize);
         runL(l, 1);
         expect(stepLoadout(l, input({ fire: true }), true)).toBe(0);
 
         const dry = pistolReady();
-        heldGun(dry).mag = 0;
-        heldGun(dry).reserve = 0;
+        heldGun(dry)!.mag = 0;
+        heldGun(dry)!.reserve = 0;
         const held = runL(dry, 100, () => ({ fire: true }));
         expect(held.filter(r => r === GUN_DRY)).toHaveLength(1);
     });
@@ -252,7 +258,7 @@ describe('semi-automatic trigger', () => {
         runL(l, 3, () => ({ fire: true }));
         runL(l, PISTOL.drawTicks + 10, i => ({ fire: true, slot: i === 0 ? 2 : 0 }));
         expect(l.slot).toBe(SLOT_PISTOL);
-        expect(heldGun(l).mag).toBe(PISTOL.magSize);
+        expect(heldGun(l)!.mag).toBe(PISTOL.magSize);
         runL(l, 1);
         expect(stepLoadout(l, input({ fire: true }), true)).toBe(0);
     });
@@ -287,7 +293,7 @@ describe('switching', () => {
 
     it('ignores a request for the slot in hand or a slot that does not exist', () => {
         const l = createLoadout();
-        for (const slot of [1, 0, WEAPON_COUNT + 1, 15, 255]) stepLoadout(l, input({ slot }), true);
+        for (const slot of [1, 0, SLOT_COUNT + 1, 15, 255]) stepLoadout(l, input({ slot }), true);
         expect(l).toMatchObject({ slot: SLOT_RIFLE, draw: 0 });
         expect(sameLoadout(l, createLoadout())).toBe(true);
     });
@@ -338,11 +344,11 @@ describe('switching', () => {
 
     it('resets to the rifle with every weapon full at spawn, and death cancels every reload', () => {
         const l = pistolReady();
-        heldGun(l).mag = 1;
+        heldGun(l)!.mag = 1;
         stepLoadout(l, input({ reload: true, aim: true }), true);
         cancelReloads(l);
         expect(l.guns.every(g => g.reload === 0)).toBe(true);
-        expect(heldGun(l).mag).toBe(1);
+        expect(heldGun(l)!.mag).toBe(1);
         resetLoadout(l);
         expect(sameLoadout(l, createLoadout())).toBe(true);
         const copy = createLoadout();
@@ -372,7 +378,7 @@ describe('aim down sights', () => {
         expect(l.aim).toBe(0);
         stepLoadout(l, input({ aim: true }), true);
         expect(l.aim).toBe(1);
-        heldGun(l).mag = 3;
+        heldGun(l)!.mag = 3;
         runL(l, PISTOL.adsTicks, () => ({ aim: true }));
         stepLoadout(l, input({ aim: true, reload: true }), true);
         runL(l, PISTOL.adsTicks, () => ({ aim: true }));

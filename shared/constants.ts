@@ -51,7 +51,7 @@ export const VIS_FALL_TIME = 0.3;
 export const VIS_SWING_SPIKE = 0.6;
 export const VIS_HURT_SPIKE = 0.8;
 
-// Knife (ghosts). Timings are in the attacker's own commands, like the fire rate.
+// Knife (ghosts; the defender knife in shared/weapons.ts uses the same timing, reach and cone). Timings are in the attacker's own commands, like the fire rate.
 export const KNIFE_WINDUP_TICKS = 12;
 export const KNIFE_COOLDOWN_TICKS = 42;
 export const KNIFE_RANGE = 2.0;
@@ -71,6 +71,12 @@ export const STEP_LOUD_CROUCH = 0.18;
 /** A ghost's breathing is audible, and its position known to the client, inside this radius. */
 export const BREATH_RANGE = 8;
 export const KNIFE_SOUND_RANGE = 14;
+/**
+ * How far a gunshot is heard (m). Beyond it a shot reaches only players who can see the shooter,
+ * drawn without sound. Starting numbers, untuned.
+ */
+export const GUNSHOT_RANGE = 60;
+export const GUNSHOT_RANGE_SUPPRESSED = 20;
 
 // Netcode.
 /** Clients draw other players this far in the past so there are always two snapshots to blend. */

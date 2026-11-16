@@ -14,10 +14,12 @@
  *   master(Gain 0.8) -> DynamicsCompressor (gentle limiter) -> destination
  */
 import {
-    BREATH_RANGE, EYE_HEIGHT, GHOST_MAX_VIS, KNIFE_SOUND_RANGE, RELOAD_SOUND_RANGE, STEP_RANGE, TICK_RATE
+    BREATH_RANGE, EYE_HEIGHT, GHOST_MAX_VIS, GUNSHOT_RANGE, GUNSHOT_RANGE_SUPPRESSED, KNIFE_SOUND_RANGE, RELOAD_SOUND_RANGE,
+    STEP_RANGE, TICK_RATE
 } from '@shared/constants';
+import { BOMB_SOUND_RANGE } from '@shared/bomb';
 import { rayWorld } from '@shared/raycast';
-import { WEAPONS, type WeaponId } from '@shared/weapons';
+import { DEFENDER_KNIFE, SLOT_KNIFE, WEAPONS, type WeaponId } from '@shared/weapons';
 import type { Box, Vec3 } from '@shared/types';
 import type { AudioEngine, BombView, CreateAudio, CueKind, ListenerView } from './audio-api';
 import type { RemoteView } from './presenter-api';
@@ -29,7 +31,6 @@ import type { RemoteView } from './presenter-api';
 const MASTER_GAIN = 0.8;
 /** Simultaneous one-shot voices; breathing loops are not counted. */
 const MAX_VOICES = 24;
-const GUN_RANGE = 45;
 const IMPACT_RANGE = 25;
 /** Fade for breathing loops starting/stopping, seconds. */
 const LOOP_FADE = 0.15;
@@ -48,6 +49,10 @@ const HEAD_STAND = 1.5;
 const HEAD_CROUCH = 0.95;
 /** Small lead so scheduled envelopes never start in the past. */
 const LEAD = 0.005;
+/** A reload cut this close to its end is one completing normally: nothing is silenced (s). */
+const RELOAD_TAIL = 0.15;
+/** A remote reload whose `reloading` flag has not shown up this long after its sound is treated as already over (s). */
+const RELOAD_SEEN_GRACE = 0.35;
 /** Bomb beep: audible range, height of the emitter above the bomb's floor position, level. */
 const BOMB_RANGE = 35;
 const BOMB_LIFT = 0.15;
@@ -254,6 +259,66 @@ const synthGun: Synth = (v, t) => {
     const click = v.gain(v.input);
     v.noise(v.bank.white, tc, 0.03, v.filter('bandpass', 3000, 4, click));
     env(click.gain, tc, 0.0005, 0.35, 0.015);
+};
+
+/**
+ * Unsuppressed rifle (room option off): a sharp crack, a heavy low-passed muzzle blast, a falling low boom
+ * and a long dull tail (the report rolling off walls), then the action cycling. About 0.9 s in all.
+ */
+const synthLoudRifle: Synth = (v, t) => {
+    const crack = v.gain(v.input);
+    v.noise(v.bank.white, t, 0.05, v.filter('highpass', 3000, 0.7, crack));
+    env(crack.gain, t, 0.0004, 1.1, 0.03);
+
+    const blast = v.gain(v.input);
+    v.noise(v.bank.pink, t, 0.3, v.filter('lowpass', 2400 * jitter(0.05), 0.8, blast));
+    env(blast.gain, t, 0.001, 1.5, 0.16);
+
+    const boom = v.gain(v.input);
+    const o = v.osc('sine', 120 * jitter(0.04), t, 0.36, boom);
+    o.frequency.exponentialRampToValueAtTime(38, t + 0.26);
+    env(boom.gain, t, 0.002, 1.2, 0.3);
+
+    const tt = t + 0.03;
+    const tail = v.gain(v.input);
+    v.noise(v.bank.brown, tt, 0.9, v.filter('lowpass', 650, 0.7, tail));
+    tail.gain.setValueAtTime(0, tt);
+    tail.gain.linearRampToValueAtTime(0.55, tt + 0.06);
+    tail.gain.exponentialRampToValueAtTime(0.0001, tt + 0.88);
+
+    const tc = t + 0.045;
+    const click = v.gain(v.input);
+    v.noise(v.bank.white, tc, 0.03, v.filter('bandpass', 3000, 4, click));
+    env(click.gain, tc, 0.0005, 0.3, 0.015);
+};
+
+/** Unsuppressed pistol: a higher, snappier crack and blast, a shorter boom and tail, the slide. About 0.65 s. */
+const synthLoudPistol: Synth = (v, t) => {
+    const crack = v.gain(v.input);
+    v.noise(v.bank.white, t, 0.04, v.filter('highpass', 3800, 0.7, crack));
+    env(crack.gain, t, 0.0003, 1.15, 0.022);
+
+    const blast = v.gain(v.input);
+    v.noise(v.bank.pink, t, 0.22, v.filter('lowpass', 3200 * jitter(0.05), 0.9, blast));
+    env(blast.gain, t, 0.0008, 1.35, 0.11);
+
+    const boom = v.gain(v.input);
+    const o = v.osc('sine', 175 * jitter(0.04), t, 0.24, boom);
+    o.frequency.exponentialRampToValueAtTime(55, t + 0.16);
+    env(boom.gain, t, 0.0015, 0.95, 0.19);
+
+    const tt = t + 0.025;
+    const tail = v.gain(v.input);
+    v.noise(v.bank.brown, tt, 0.62, v.filter('lowpass', 800, 0.7, tail));
+    tail.gain.setValueAtTime(0, tt);
+    tail.gain.linearRampToValueAtTime(0.42, tt + 0.05);
+    tail.gain.exponentialRampToValueAtTime(0.0001, tt + 0.6);
+
+    const back = t + 0.03;
+    const click = v.gain(v.input);
+    v.noise(v.bank.white, back, 0.025, v.filter('bandpass', 3600, 4, click));
+    env(click.gain, back, 0.0004, 0.35, 0.012);
+    metalClick(v, back + 0.03, 4400, 0.25);
 };
 
 /** Bullet impact: very short high-passed crack, a tiny random-pitch tick, a dull low knock. */
@@ -479,6 +544,27 @@ const synthDry: Synth = (v, t) => {
     env(tick.gain, t, 0.001, 0.25, 0.018);
 };
 
+/** The bomb dropped onto the floor: a dull case thud and a small rattle of its straps. */
+const synthBombDrop: Synth = (v, t) => {
+    const thud = v.gain(v.input);
+    const o = v.osc('sine', 120, t, 0.16, thud);
+    o.frequency.exponentialRampToValueAtTime(60, t + 0.12);
+    env(thud.gain, t, 0.002, 0.7, 0.12);
+    const body = v.gain(v.input);
+    v.noise(v.bank.brown, t, 0.12, v.filter('bandpass', 420, 1.4, body));
+    env(body.gain, t, 0.002, 0.6, 0.09);
+    metalClick(v, t + 0.05, 2600, 0.25);
+};
+
+/** The bomb picked up: two quick strap and buckle clicks over a short cloth scuff. */
+const synthBombPickup: Synth = (v, t) => {
+    const scuff = v.gain(v.input);
+    v.noise(v.bank.pink, t, 0.14, v.filter('bandpass', 1400, 1.2, scuff));
+    env(scuff.gain, t, 0.01, 0.3, 0.1);
+    metalClick(v, t + 0.04, 3400, 0.35);
+    metalClick(v, t + 0.11, 3900, 0.3);
+};
+
 /** Hurt: a short, felt-more-than-heard low thump. */
 const synthHurt: Synth = (v, t) => {
     const thump = v.gain(v.input);
@@ -690,6 +776,37 @@ function linearGain(d: number, ref: number, max: number): number {
 // Breathing loops
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Distance attenuation of a ghost's breathing (amplitude, 1 = the old level at point blank). The panner only
+ * places it (HRTF direction) and this curve, applied by its own gain stage, sets how loud it is:
+ *   - inside BREATH_NEAR (2.5 m): a flat BREATH_NEAR_GAIN, about -10 dB below the old level at 1 m, so a ghost
+ *     right next to you is no longer deafening (the owner found it far too loud up close);
+ *   - BREATH_NEAR to BREATH_KNEE (6 m): eases down in decibels to the old curve's level at 6 m;
+ *   - BREATH_KNEE to BREATH_RANGE: exactly the old curve (linear from 0.8 m to silence at 8 m), so it is heard at
+ *     6 to 8 m as before and fades to nothing at the gameplay range.
+ * Changed by measurement only (2026-11-16); needs the owner's ear.
+ */
+const BREATH_NEAR = 2.5;
+const BREATH_NEAR_GAIN = 0.32;
+const BREATH_KNEE = 6;
+/** The old breathing panner: linear from 0.8 m (full) to BREATH_RANGE (silent). */
+const BREATH_OLD_REF = 0.8;
+const BREATH_KNEE_DB = 20 * Math.log10(linearGainOld(BREATH_KNEE));
+const BREATH_NEAR_DB = 20 * Math.log10(BREATH_NEAR_GAIN);
+/** Smoothing (s) of the breathing level as the distance changes. */
+const BREATH_GAIN_SMOOTH = 0.03;
+
+function linearGainOld(d: number): number {
+    return linearGain(d, BREATH_OLD_REF, BREATH_RANGE);
+}
+
+export function breathDistanceGain(d: number): number {
+    if (d <= BREATH_NEAR) return BREATH_NEAR_GAIN;
+    if (d >= BREATH_KNEE) return linearGainOld(d);
+    const t = (d - BREATH_NEAR) / (BREATH_KNEE - BREATH_NEAR);
+    return Math.pow(10, (BREATH_NEAR_DB + (BREATH_KNEE_DB - BREATH_NEAR_DB) * t) / 20);
+}
+
 interface Breather {
     id: number;
     src: AudioBufferSourceNode;
@@ -699,6 +816,8 @@ interface Breather {
     occF: BiquadFilterNode;
     occG: GainNode;
     fade: GainNode;
+    /** Distance level (`breathDistanceGain`); the panner itself does not attenuate. */
+    dist: GainNode;
     panner: PannerNode;
     /** Frame number in which the ghost was last present and alive. */
     seen: number;
@@ -719,10 +838,14 @@ interface Breather {
 // ---------------------------------------------------------------------------------------------
 
 const STEP_CFG: ShotCfg = { range: STEP_RANGE, ref: 1, hrtf: true, occLift: 0.4 };
-const GUN_CFG: ShotCfg = { range: GUN_RANGE, ref: 2, hrtf: false, occLift: 0 };
+/** Gunshots fade to silence exactly where the server stops sending them as sounds (shared/constants.ts). */
+const GUN_CFG: ShotCfg = { range: GUNSHOT_RANGE_SUPPRESSED, ref: 2, hrtf: false, occLift: 0 };
+const LOUD_GUN_CFG: ShotCfg = { range: GUNSHOT_RANGE, ref: 4, hrtf: false, occLift: 0 };
 const IMPACT_CFG: ShotCfg = { range: IMPACT_RANGE, ref: 1, hrtf: false, occLift: 0 };
 const KNIFE_CFG: ShotCfg = { range: KNIFE_SOUND_RANGE, ref: 1, hrtf: true, occLift: 0 };
 const BOMB_CFG: ShotCfg = { range: BOMB_RANGE, ref: 2, hrtf: true, occLift: 0 };
+/** Dropping and picking up the bomb: quiet, heard within BOMB_SOUND_RANGE like a soft footstep. */
+const BOMB_HANDLE_CFG: ShotCfg = { range: BOMB_SOUND_RANGE, ref: 1, hrtf: true, occLift: 0.3 };
 /** Reload: emitted from about hand height (RELOAD_LIFT above the feet); HRTF so it can be placed. */
 const RELOAD_LIFT = 1.0;
 const RELOAD_CFG: ShotCfg = { range: RELOAD_SOUND_RANGE, ref: 1, hrtf: true, occLift: 0 };
@@ -731,10 +854,10 @@ const CUE_CFG: ShotCfg = { range: 1, ref: 1, hrtf: false, occLift: 0 };
 /** Scratch config for footsteps, whose range depends on loudness. */
 const stepCfg: ShotCfg = { ...STEP_CFG };
 
-/** Each weapon's shot and reload sounds, by id, then per slot of the weapon table. */
-const WEAPON_SOUNDS: Record<WeaponId, { shot: Synth; reload: Synth }> = {
-    rifle: { shot: synthGun, reload: synthReload },
-    pistol: { shot: synthPistol, reload: synthPistolReload }
+/** Each gun's suppressed and unsuppressed shot and its reload, by id, then per slot of the weapon table. */
+const WEAPON_SOUNDS: Record<WeaponId, { shot: Synth; loud: Synth; reload: Synth }> = {
+    rifle: { shot: synthGun, loud: synthLoudRifle, reload: synthReload },
+    pistol: { shot: synthPistol, loud: synthLoudPistol, reload: synthPistolReload }
 };
 const SLOT_SOUNDS = WEAPONS.map(w => WEAPON_SOUNDS[w.id]);
 
@@ -793,19 +916,20 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
         return v.priority * left;
     }
 
+    /** Builds and starts one sound; returns its voice, or null when nothing was started. */
     function oneShot(pos: Vec3 | null, cfg: ShotCfg, gain: number, synth: Synth, x: number, flag: boolean,
-        weight = 1): void {
-        if (!ctx || !master || !bank) return;
+        weight = 1): Voice | null {
+        if (!ctx || !master || !bank) return null;
         const now = ctx.currentTime;
         gain *= stepMode ? volSteps : volEffects;
-        if (gain <= 0) return;
+        if (gain <= 0) return null;
 
         let att = 1, occ = false;
         if (pos && haveListener) {
             const dx = pos[0] - lpos[0], dy = pos[1] - lpos[1], dz = pos[2] - lpos[2];
             const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
             att = linearGain(d, cfg.ref, cfg.range);
-            if (att <= 0) return; // beyond audible range: do not even build it
+            if (att <= 0) return null; // beyond audible range: do not even build it
             occ = occluded(pos[0], pos[1] + cfg.occLift, pos[2]);
         }
         const priority = gain * att * (occ ? OCC_GAIN : 1) * weight;
@@ -816,7 +940,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
                 const p = liveness(voices[i], now);
                 if (p < worstP) { worstP = p; worst = voices[i]; }
             }
-            if (!worst || worstP >= priority) return; // the new sound is the least important one
+            if (!worst || worstP >= priority) return null; // the new sound is the least important one
             worst.kill(now);
             removeVoice(worst);
         }
@@ -848,6 +972,40 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
         }
         v.arm(removeVoice);
         voices.push(v);
+        return v;
+    }
+
+    // ---- reload sequences ---------------------------------------------------------------------
+    // Each reload is one voice holding the whole scheduled sequence; it is remembered per player so a reload that
+    // ends early (switch, death, round reset) can be cut off instead of playing to the end.
+
+    interface ReloadVoice { id: number; local: boolean; voice: Voice; start: number; dur: number; seen: boolean; }
+    const reloads: ReloadVoice[] = [];
+
+    /** Forgets reload `i`; when `cut`, silences what is left of it unless it was about to finish anyway. */
+    function endReload(i: number, now: number, cut: boolean): void {
+        const r = reloads[i];
+        if (cut && now - r.start < r.dur - RELOAD_TAIL) r.voice.kill(now);
+        reloads[i] = reloads[reloads.length - 1];
+        reloads.pop();
+    }
+
+    /** Cuts off reload sounds of remote defenders whose reload ended early. No allocation. */
+    function checkReloads(now: number, remotes: readonly RemoteView[]): void {
+        for (let i = reloads.length - 1; i >= 0; i--) {
+            const rv = reloads[i];
+            if (now - rv.start >= rv.dur) { endReload(i, now, false); continue; }
+            if (rv.local) continue;
+            let r: RemoteView | null = null;
+            for (let j = 0; j < remotes.length; j++) {
+                if (remotes[j].id === rv.id) { r = remotes[j]; break; }
+            }
+            if (!r) continue;
+            if (!r.alive) { endReload(i, now, true); continue; }
+            // Snapshots are interpolated behind the sound event: wait to see the reload before judging its end.
+            if (r.reloading) rv.seen = true;
+            else if (rv.seen || now - rv.start > RELOAD_SEEN_GRACE) endReload(i, now, true);
+        }
     }
 
     // ---- breathing --------------------------------------------------------------------------
@@ -876,18 +1034,23 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
         const fade = c.createGain();
         fade.gain.setValueAtTime(0, now);
         fade.gain.linearRampToValueAtTime(1, now + LOOP_FADE);
-        const panner = makePanner(c, true, 0.8, BREATH_RANGE);
+        // HRTF for direction only: rolloff 0, the level comes from `dist` (breathDistanceGain).
+        const panner = makePanner(c, true, BREATH_OLD_REF, BREATH_RANGE);
+        panner.rolloffFactor = 0;
+        const dist = c.createGain();
+        dist.gain.value = 0;
         src.connect(formant);
         formant.connect(band);
         band.connect(amp);
         amp.connect(occF);
         occF.connect(occG);
         occG.connect(fade);
-        fade.connect(panner);
+        fade.connect(dist);
+        dist.connect(panner);
         panner.connect(out);
         src.start(now, Math.random() * nb.pink.duration);
         const b: Breather = {
-            id, src, formant, band, amp, occF, occG, fade, panner,
+            id, src, formant, band, amp, occF, occG, fade, dist, panner,
             seen: frameNo, dying: false, exert: 0,
             // Random phase so several ghosts do not breathe in unison.
             nextBreath: now + Math.random() * 0.6,
@@ -895,7 +1058,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
         };
         src.onended = () => {
             src.disconnect(); formant.disconnect(); band.disconnect(); amp.disconnect();
-            occF.disconnect(); occG.disconnect(); fade.disconnect(); panner.disconnect();
+            occF.disconnect(); occG.disconnect(); fade.disconnect(); dist.disconnect(); panner.disconnect();
             const i = breathers.indexOf(b);
             if (i >= 0) { breathers[i] = breathers[breathers.length - 1]; breathers.pop(); }
         };
@@ -1031,6 +1194,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
             const now = ctx.currentTime;
             frameNo++;
             setListener(ctx, listener);
+            checkReloads(now, remotes);
 
             // Bomb beeper: first beep at once, then on an accumulator whose period shrinks with the clock.
             if (bomb) {
@@ -1075,6 +1239,10 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
                 if (b.seen !== frameNo) { releaseBreather(b, now); continue; }
                 const h = b.head;
                 setPannerPos(b.panner, h[0], h[1], h[2]);
+                const ddx = h[0] - lpos[0], ddy = h[1] - lpos[1], ddz = h[2] - lpos[2];
+                const level = breathDistanceGain(Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz));
+                if (!b.occInit) b.dist.gain.value = level; // a new emitter starts at its level (the fade-in covers it)
+                else b.dist.gain.setTargetAtTime(level, now, BREATH_GAIN_SMOOTH);
 
                 b.occTimer -= dt;
                 if (b.occTimer <= 0 || !b.occInit) {
@@ -1109,24 +1277,41 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
             try { stepSound(pos, l, isLocal); } finally { stepMode = false; }
         },
 
-        gunshot(pos: Vec3, isLocal: boolean, weapon: number): void {
-            oneShot(isLocal ? null : pos, GUN_CFG, isLocal ? 0.7 : 1, SLOT_SOUNDS[slotOf(weapon)].shot, 0, false);
+        gunshot(pos: Vec3, isLocal: boolean, weapon: number, suppressed: boolean): void {
+            const snd = SLOT_SOUNDS[slotOf(weapon)];
+            if (suppressed) oneShot(isLocal ? null : pos, GUN_CFG, isLocal ? 0.7 : 1, snd.shot, 0, false);
+            else oneShot(isLocal ? null : pos, LOUD_GUN_CFG, isLocal ? 0.7 : 1, snd.loud, 0, false, 2);
         },
 
         weaponSwitch(weapon: number): void {
+            // The knife: the light holster sound, over its own draw time.
+            if (weapon === SLOT_KNIFE) {
+                oneShot(null, CUE_CFG, 0.4, synthSwitch, DEFENDER_KNIFE.drawTicks / TICK_RATE, true);
+                return;
+            }
             const s = slotOf(weapon);
             oneShot(null, CUE_CFG, 0.4, synthSwitch, WEAPONS[s].drawTicks / TICK_RATE, WEAPONS[s].id === 'pistol');
         },
 
-        reload(pos: Vec3, isLocal: boolean, weapon: number): void {
-            const synth = SLOT_SOUNDS[slotOf(weapon)].reload;
-            if (isLocal) {
-                oneShot(null, RELOAD_CFG, 0.45, synth, 0, false);
-                return;
+        reload(pos: Vec3, isLocal: boolean, weapon: number, id: number): void {
+            if (!ctx) return;
+            const slot = slotOf(weapon);
+            const synth = SLOT_SOUNDS[slot].reload;
+            // A new reload by the same player means the old one ended: cut whatever is left of it.
+            for (let i = reloads.length - 1; i >= 0; i--) if (reloads[i].id === id) endReload(i, ctx.currentTime, true);
+            let v: Voice | null;
+            if (isLocal) v = oneShot(null, RELOAD_CFG, 0.45, synth, 0, false);
+            else {
+                // The event carries the feet position: the magazine is worked at about hand height.
+                reloadPos[0] = pos[0]; reloadPos[1] = pos[1] + RELOAD_LIFT; reloadPos[2] = pos[2];
+                v = oneShot(reloadPos, RELOAD_CFG, 1, synth, 0, false);
             }
-            // The event carries the feet position: the magazine is worked at about hand height.
-            reloadPos[0] = pos[0]; reloadPos[1] = pos[1] + RELOAD_LIFT; reloadPos[2] = pos[2];
-            oneShot(reloadPos, RELOAD_CFG, 1, synth, 0, false);
+            if (v) reloads.push({ id, local: isLocal, voice: v, start: v.start, dur: WEAPONS[slot].reloadTicks / TICK_RATE, seen: false });
+        },
+
+        cancelReload(id: number): void {
+            if (!ctx) return;
+            for (let i = reloads.length - 1; i >= 0; i--) if (reloads[i].id === id) endReload(i, ctx.currentTime, true);
         },
 
         dryFire(): void {
@@ -1158,6 +1343,10 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
 
         hurt(): void {
             oneShot(null, STEP_CFG, 0.9, synthHurt, 0, false);
+        },
+
+        bomb(kind: 'drop' | 'pickup', pos: Vec3, isLocal: boolean): void {
+            oneShot(isLocal ? null : pos, BOMB_HANDLE_CFG, isLocal ? 0.5 : 1, kind === 'drop' ? synthBombDrop : synthBombPickup, 0, false);
         },
 
         cue(kind: CueKind): void {

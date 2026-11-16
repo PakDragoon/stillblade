@@ -23,6 +23,7 @@ The owner has no game development experience and expects the game to have every 
 | Audience | As many players as possible, in a browser. Must run on laptops with integrated graphics (Intel i5 8th to 10th gen); a "High" tier for machines with a GPU. |
 | Loadout | Defenders spawn with rifle, pistol and (to build) a knife. No buy menu, no money, no pickups. Ghosts carry only the knife. |
 | Defender knife | Slot 3, weaker than the ghost's: 35 from the front, 70 from behind (ghost: 55 and 100). |
+| Body-part damage | Multipliers on the gun's body damage: head 2x, torso 1x, arms and legs 0.5x (owner, 2026-11-16: "2x on head, 1x on body and 0.5x on arms/legs"); no one-shot headshots. Knife hits ignore zones. Untuned. |
 | Suppressors | Removed by default. The room creator can switch "suppressed weapons" on when creating the room. |
 | Recoil | Fixed learnable pattern per weapon plus deterministic spread. |
 | Not wanted now | Slower movement while aiming, and bullets passing through thin cover. The owner will think about them. |
@@ -35,12 +36,12 @@ The owner has no game development experience and expects the game to have every 
 
 | Wave | Package | Model | Depends on |
 |---|---|---|---|
-| 1 | A. Combat core: defender knife, body-part damage, suppressor option | Opus 5.5 | nothing |
-| 1 | B. Client utilities: key bindings, phone notice, feedback button, error reports | Sonnet 5.5 | nothing |
-| 2 | C. Bomb carrier | Opus 5.5 | A merged |
-| 2 | D. Rooms and community: room list, room options, vote kick, name filter, map vote | Sonnet 5.5 | A merged |
-| 3 | E. Bots that fight, and a practice range | Opus 5.5 | C merged |
-| 3 | F. Hands and animations: first-person hands, real reloads, pistol pose, knife | Opus 5.5 | A merged |
+| 1 | A. Combat core: defender knife, body-part damage, suppressor option (**built and reviewed; merged into branch `wave-1`, protocol 9; not yet on `main`**) | Opus 5.5 | nothing |
+| 1 | B. Client utilities: key bindings, phone notice, feedback button, error reports (**built and reviewed; merged into branch `wave-1`, protocol 10; not yet on `main`**) | Sonnet 5.5 | nothing |
+| 2 | C. Bomb carrier (**built and reviewed; merged into branch `wave-2`, protocol 11; not yet on `main`; checked in a browser by its build session**) | Opus 5.5 | A merged |
+| 2 | D. Rooms and community: room list, room options, vote kick, name filter, map vote (**built and reviewed; merged into branch `wave-2`, protocol 12; not yet on `main`; checked in a browser by its build session**) | Sonnet 5.5 | A merged |
+| 3 | E. Bots that fight, and a practice range (**built and reviewed; merged into branch `wave-3`, protocol 13; not yet on `main`; never seen in a browser**) | Opus 5.5 | C merged |
+| 3 | F. Hands and animations: first-person hands, real reloads, pistol pose, knife (**built and reviewed; merged into branch `wave-3`, no protocol change; not yet on `main`; seen only in Blender renders, never in the game**) | Opus 5.5 | A merged |
 | 4 | G. Graphics tiers and effects | Opus 5.5 | F merged |
 | 4 | H. Recorded sounds | Sonnet 5.5 | A merged |
 | 5 | I. Grenades | Opus 5.5 | friends' feedback, G merged |
@@ -49,20 +50,22 @@ The owner has no game development experience and expects the game to have every 
 
 The owner's first friends test can happen at any point; after wave 2 is best, because the feedback button and error reports are in. Its results should adjust waves 4 and 5.
 
-Housekeeping to fold into package A: delete the unused `IDLE_MS` in `shared/rules.ts`. Before package J: move the project to Node 22 (the Docker image already uses it; local Node is 20.11, which is why Vite and Vitest are pinned to old majors).
+Housekeeping folded into package A: the unused `IDLE_MS` is deleted on its branch. Before package J: move the project to Node 22 (the Docker image already uses it; local Node is 20.11, which is why Vite and Vitest are pinned to old majors).
 
 ---
 
 ## A. Combat core (Opus 5.5)
+
+**Status (2026-11-16): built, reviewed and merged into branch `wave-1` (protocol 9); not yet on `main`. What was built, every decision taken, and what was not verified are in `HANDOFF.md` ("Package A (combat core) in detail"). Open point for the reviewer: the existing shot-event position leak and its suggested fix (`HANDOFF.md`, Known problems). Package B merges after it.** The specification below is kept as written.
 
 Three changes to the same combat code, so one package. Shared simulation and binary format: read the rules in `HANDOFF.md` first, and keep `server/src/prediction.test.ts` passing.
 
 **Defender knife.** Slot 3 in the loadout (key 3, included in Q and mouse-wheel cycling). Melee, no ammunition. Reuse the timing model of `shared/knife.ts` (windup, cooldown counted in processed commands) with its own numbers: same 0.2 s windup and 2 m reach, 35 from the front, 70 from behind, draw time about 0.3 s. It lives in the loadout state so the client predicts it and it travels in the snapshot. `WEAPONS` in `shared/weapons.ts` is currently guns only: either add a `kind: 'gun' | 'melee'` to the definition or keep melee beside it, but every consumer (`stepLoadout`, the wire format, the HUD, `characters.ts`, `tools/bot.ts`) must handle three slots. A defender's swing makes the same windup sound as a ghost's. Model: the existing knife from `weapons.glb`.
 
 **Body-part damage.** Today a player is one axis-aligned box (0.6 m wide, 1.8 m tall, 1.2 m crouched) and the top 0.28 m (`HEAD_ZONE`) is the head. Keep the box for movement and for the ray test, and classify the hit point into zones on the server:
-- Head: the top 0.28 m. Damage is the weapon's `headDamage` (100 for both guns), unchanged.
-- Legs: the bottom 45% of the current hull height. Multiplier 0.7.
-- Arms: in the remaining torso band, a hit whose horizontal distance from the hull's vertical centre line is more than 0.2 m. Multiplier 0.8.
+- Head: the top 0.28 m. Multiplier 2.0 (superseded on 2026-11-16 by the owner; this replaced "the weapon's `headDamage`, 100": see the decisions table).
+- Legs: the bottom 45% of the current hull height. Multiplier 0.5 (was 0.7 before the owner's 2026-11-16 decision).
+- Arms: in the remaining torso band, a hit whose horizontal distance from the hull's vertical centre line is more than 0.2 m. Multiplier 0.5 (was 0.8).
 - Torso: everything else. Multiplier 1.0 (the weapon's `bodyDamage`).
 Put the zone function and the multipliers in `shared/` (a table next to the weapons) so bots and tests share it. Damage is rounded to an integer. The shot event, the `dmg` message, `hitconfirm`, the death recap and the kill feed carry the zone; the hit marker gets a distinct look for limbs. Knife hits ignore zones. Add stats per zone only if cheap. Starting numbers are untuned: say so in the handoff.
 
@@ -75,6 +78,8 @@ Put the zone function and the multipliers in `shared/` (a table next to the weap
 
 ## B. Client utilities (Sonnet 5.5)
 
+**Status (2026-11-16): built, reviewed and merged into branch `wave-1` (protocol 10); not yet on `main`. `HANDOFF.md` ("Client utilities") describes what exists and what was not verified.**
+
 Client-side features plus two tiny server endpoints. Stays out of `shared/gun.ts`, `shared/knife.ts`, the binary format and the prediction loop.
 
 - **Custom key bindings.** Every action in `client/src/input.ts` becomes rebindable from the settings panel (`client/src/ui.ts`, `client/src/settings.ts`, stored in `localStorage`): click an action, press a key or mouse button, conflicts are flagged, a reset-to-defaults button. The controls page and every on-screen hint ("Ready (G)") read the current binding.
@@ -86,6 +91,8 @@ Client-side features plus two tiny server endpoints. Stays out of `shared/gun.ts
 **Done means:** server tests for the report rules (caps, rate limit, origin); browser checks of rebinding (including a mouse button), the phone notice under mobile emulation, a feedback line arriving in the log, and a forced error arriving; screenshots under `docs/review/utilities/`.
 
 ## C. Bomb carrier (Opus 5.5)
+
+**Status (2026-11-16): built, reviewed and merged into branch `wave-2` (protocol 11); not yet on `main`. The carrier is chosen by rotation, not at random (no `Math.random` in the simulation). No screenshots exist: the build froze at that step. See `HANDOFF.md` ("Wave 2").** The specification below is kept as written.
 
 Today any ghost can plant. Change to one bomb.
 
@@ -100,7 +107,9 @@ Today any ghost can plant. Change to one bomb.
 
 ## D. Rooms and community (Sonnet 5.5)
 
-JSON messages and UI only. Builds on the `RoomOptions` from package A.
+**Status (2026-11-16): built, reviewed and merged into branch `wave-2` (protocol 12); not yet on `main`. `fillBots` is stored and shown only, for package E. No screenshots exist: the build froze at that step. See `HANDOFF.md` ("Wave 2").** The specification below is kept as written.
+
+JSON messages and UI only. Builds on the `RoomOptions` from package A (`shared/room-options.ts`: add a field, a line in `parseRoomOptions`, and a row in the lobby panel; the create-room form in `client/src/ui.ts` sends them as query parameters).
 
 - **Public room list.** Rooms are public or private (creator's choice; private is the default for "Create room", public for "Quick play"). An HTTP endpoint on the game server (`GET /rooms`, origin-checked, cached for a second) lists public rooms: code, map, player count and capacity, phase, options. The menu shows the list with a refresh and a join button, and Quick play joins the fullest public room that has space, or creates one.
 - **Room options** set at creation and shown in the lobby: public or private, map, suppressed weapons (from A), maximum players (2 to 10), rounds to win (3, 6, 9), fill with bots (from E; show it disabled until E exists). Only the creator can change them, only in warmup.
@@ -111,6 +120,8 @@ JSON messages and UI only. Builds on the `RoomOptions` from package A.
 **Done means:** tests for list contents (private rooms never listed), option validation, vote thresholds and cooldowns, the rejoin ban, name filtering, vote counting and the map swap; browser checks of the list, a kick, and a map change between matches with bots; screenshots.
 
 ## E. Bots that fight, and a practice range (Opus 5.5)
+
+**Status (2026-11-16): built, reviewed and merged into branch `wave-3` (protocol 13); not yet on `main`; nothing seen in a browser. `HANDOFF.md` ("Package E (bots and practice range)") has what exists, the decisions taken, the bench and match numbers and what was not verified. Decisions taken beyond this text: fill keeps each team at half of `maxPlayers`; bot difficulty is a room option (`botLevel`, default normal); bots are named "BOT <name>" and flagged in the roster; practice targets are fully visible ghosts or defenders that never fire, placed in view of the person's spawn; damage per hit travels in `hitconfirm.damage` for everyone. Open point for the owner: ghost bots almost never win a round against defender bots on normal or hard (tuning, after he has played). The reviewer should read `server/src/bots.ts` against the information rule (the brain's inputs are listed at the top of the file).** The specification below is kept as written.
 
 A player who opens the game alone should have something to do.
 
@@ -125,6 +136,8 @@ A player who opens the game alone should have something to do.
 **Done means:** tests that a bot never acts on information `knowsAbout` withholds, reaches both sites on both maps, plants and defuses, and that fill adds and removes bots correctly; a full bot-versus-bot match completing on each map (run once each); the bench numbers; the old `tools/bot.ts` kept for scripted tests.
 
 ## F. Hands and animations (Opus 5.5)
+
+**Status (2026-11-16): built, reviewed and merged into branch `wave-3`; not yet on `main`; client and art only, `shared/` untouched, no protocol change. `HANDOFF.md` ("Package F (hands and animations) in detail") lists what was built, the decisions taken (one skinned mesh per weapon rig, clips sampled by reload progress, suppressor hidden by a bone, the swing driven by the windup and slash events, the body turned toward open floor), draw calls, and what was not verified. For the reviewer: nothing was seen in the game; check the hands at real screen sizes first.** The specification below is kept as written.
 
 Art pipeline plus presentation. CC0 sources already approved: Poly Haven, ambientCG, Quaternius, Kenney, KayKit; record every file in a `CREDITS.md`.
 

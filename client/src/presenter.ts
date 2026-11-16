@@ -4,12 +4,18 @@ import {
 } from '@shared/constants';
 import type { RosterEntry, Team } from '@shared/protocol';
 import { ROUNDS_TO_WIN, type Phase, type RoundReason } from '@shared/rules';
-import type { Vec3 } from '@shared/types';
+import type { Box, Vec3 } from '@shared/types';
+import { corpseYaw } from './corpse';
 import type { CreatePresenter, CrosshairConfig, KillKind, LocalView, MatchView, RemoteView } from './presenter-api';
 import { Character, CharLook, loadCharacterModel, makeSkinnedGhostMaterial, type CharacterModel } from './characters';
 import { TICK_RATE } from '@shared/constants';
-import { WEAPONS, type WeaponId } from '@shared/weapons';
-import { instantiateWeapon, loadWeaponModel, makeWeaponMaterial, WEAPON_MESH, type WeaponModel } from './weapons';
+import { bindings } from './bindings';
+import { SLOT_COUNT, SLOT_KNIFE, WEAPONS, slotLabel, type WeaponId } from '@shared/weapons';
+import type { HitZone } from '@shared/zones';
+import {
+    instantiateWeapon, loadWeaponModel, makeWeaponMaterial, WEAPON_MESH, type WeaponInstance, type WeaponModel
+} from './weapons';
+import { loadViewmodel, type VmRig } from './viewmodel';
 
 const DEG = 180 / Math.PI;
 const HEAD_WIDTH = 0.4;
@@ -20,6 +26,9 @@ const TRACER_THICKNESS = 0.02;
 const IMPACT_COUNT = 32;
 const IMPACT_LIFE = 4;
 const FLASH_TIME = 0.04;
+/** Unsuppressed guns (room option off): a bigger star-shaped flash, shown a little longer. */
+const LOUD_FLASH_TIME = 0.055;
+const LOUD_FLASH_SIZE = 0.2;
 const KILLFEED_MAX = 5;
 const KILLFEED_LIFE = 5;
 const KILLFEED_FADE = 0.5;
@@ -112,10 +121,54 @@ const SLOT_LOOKS: readonly SlotLook[] = WEAPONS.map(w => {
     };
 });
 
-/** Slot index clamped into the weapon table. */
+/** Clip names per gun slot, built once (no string building per frame). */
+const IDLE_CLIP: readonly string[] = WEAPONS.map(w => `${w.id}_idle`);
+const RELOAD_CLIP: readonly string[] = WEAPONS.map(w => `${w.id}_reload`);
+
+/** Gun slot index clamped into the weapon table (the knife slot is handled before this is used). */
 function slotOf(weapon: number): number {
     return weapon >= 0 && weapon < WEAPONS.length ? weapon | 0 : 0;
 }
+
+/**
+ * The unsuppressed muzzle flash: one mesh (one draw call) of crossed spikes along -Z and a ring of rays
+ * around the muzzle, unit size, drawn two-sided with the opaque flash material.
+ */
+function makeFlashMesh(device: pc.GraphicsDevice): pc.Mesh {
+    const pos: number[] = [];
+    const idx: number[] = [];
+    const quad = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, cx: number, cy: number, cz: number,
+        dx: number, dy: number, dz: number): void => {
+        const o = pos.length / 3;
+        pos.push(ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz);
+        idx.push(o, o + 1, o + 2, o, o + 2, o + 3);
+    };
+    // Forward cone: two crossed diamonds, widest a quarter of the way out.
+    quad(0, 0, 0.05, 0.28, 0, -0.25, 0, 0, -1, -0.28, 0, -0.25);
+    quad(0, 0, 0.05, 0, 0.28, -0.25, 0, 0, -1, 0, -0.28, -0.25);
+    // Side rays in the muzzle plane.
+    const RAYS = 6;
+    for (let i = 0; i < RAYS; i++) {
+        const a = (i / RAYS) * Math.PI * 2, c = Math.cos(a), s = Math.sin(a);
+        const w = 0.07, len = i % 2 === 0 ? 0.55 : 0.38;
+        quad(-s * w, c * w, -0.05, c * len * 0.4, s * len * 0.4, -0.12, c * len, s * len, -0.05, s * w, -c * w, -0.05);
+    }
+    const mesh = new pc.Mesh(device);
+    mesh.setPositions(pos);
+    mesh.setIndices(idx);
+    mesh.update(pc.PRIMITIVE_TRIANGLES);
+    return mesh;
+}
+
+/** Kill feed suffix for how a kill was made (the gun or knife name is shown separately). */
+function killSuffix(kind: KillKind, zone: HitZone | null): string {
+    if (kind === 'backstab') return ' (backstab)';
+    if (kind === 'shot' && zone === 'head') return ' (HS)';
+    return '';
+}
+
+/** Death recap wording for where the killing shot landed. */
+const ZONE_RECAP: Record<HitZone, string> = { head: ' (headshot)', torso: '', arms: ' (arm shot)', legs: ' (leg shot)' };
 
 /** A smooth 0..1..0 bump of half-width `w` centred on `c`. */
 function bump(x: number, c: number, w: number): number {
@@ -146,9 +199,6 @@ const BOMB_BLINK_MAX = 1.0;
 const BOMB_BLINK_FROM = 20;
 const BOMB_BLINK_DUTY = 0.35;
 
-const KILL_SUFFIX: Record<KillKind, string> = {
-    shot: '', headshot: ' (HS)', knife: ' (knife)', backstab: ' (backstab)'
-};
 
 const TEAM_LABEL: Record<Team, string> = { ghosts: 'GHOSTS', defenders: 'DEFENDERS' };
 const TEAM_PLURAL: Record<Team, string> = { ghosts: 'Ghosts', defenders: 'Defenders' };
@@ -320,8 +370,12 @@ const HUD_CSS = `
 #sb-vis.hidden .state { color: #8fe3a8; }
 #sb-vis.exposed .state { color: #ff5a4a; } #sb-vis.exposed .fill { background: #ff5a4a; }
 #sb-ammo { right: 22px; bottom: 14px; display: none; text-align: right; white-space: nowrap; }
-#sb-ammo .alt { margin-bottom: 7px; font: 600 12px/1.35 system-ui, sans-serif; opacity: .5;
+#sb-ammo .alt { margin-bottom: 7px; font: 600 12px/1.35 system-ui, sans-serif;
     font-variant-numeric: tabular-nums; }
+#sb-ammo .alt div { opacity: .45; }
+#sb-ammo .alt div.on { opacity: 1; font-weight: 800; color: #fff; }
+#sb-ammo .alt div.on::before { content: '▸ '; }
+#sb-ammo.melee .mag, #sb-ammo.melee .res, #sb-ammo.melee .rl, #sb-ammo.melee .bar { display: none; }
 #sb-ammo .wpn { margin-bottom: 3px; font: 800 12px/1 system-ui, sans-serif; letter-spacing: .3em; opacity: .85; }
 #sb-ammo .mag { font: 700 52px/1 system-ui, sans-serif; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
 #sb-ammo .res { margin-left: 6px; font: 600 20px/1 system-ui, sans-serif; opacity: .7; font-variant-numeric: tabular-nums; }
@@ -350,6 +404,8 @@ const HUD_CSS = `
 #sb-hit i:nth-child(3), #sb-hit i:nth-child(4) { width: 7px; height: 2px; margin: -1px 0 0 0; top: 0; }
 #sb-hit i:nth-child(3) { left: -13px; } #sb-hit i:nth-child(4) { left: 6px; }
 #sb-hit.head i { background: #ff3030; }
+#sb-hit.limb i { background: #9cc8ff; height: 5px; }
+#sb-hit.limb i:nth-child(3), #sb-hit.limb i:nth-child(4) { width: 5px; height: 2px; }
 #sb-hit.kill { transform: rotate(45deg) scale(1.6); }
 #sb-feed { top: 10px; right: 12px; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
 #sb-feed div { padding: 2px 8px; background: rgba(0,0,0,.45); }
@@ -416,6 +472,16 @@ body.sb-lowhp #sb-low { display: block; }
     font: 800 12px/1 system-ui, sans-serif; letter-spacing: .3em; }
 #sb-act .bar { height: 7px; margin-top: 6px; background: rgba(255,255,255,.18); box-shadow: 0 0 3px #000; }
 #sb-act .fill { height: 100%; width: 0; background: #ffd36b; }
+#sb-carrier { margin: 0 0 8px; display: none; width: max-content; padding: 4px 9px 4px 7px; background: rgba(255,211,107,.14);
+    border-left: 3px solid #ffd36b; color: #ffd36b; font: 700 12px/1 'Bahnschrift', system-ui, sans-serif; letter-spacing: .14em; }
+#sb-nobomb { left: 50%; top: 68%; transform: translateX(-50%); display: none; white-space: nowrap;
+    font: 600 15px/1 system-ui, sans-serif; letter-spacing: .05em; opacity: .85; }
+#sb-bombnote { left: 50%; top: 96px; transform: translateX(-50%); display: none; white-space: nowrap; padding: 5px 14px;
+    background: rgba(9,12,16,.6); color: #ffd36b; font: 600 15px/1.2 'Bahnschrift', system-ui, sans-serif; letter-spacing: .05em; }
+#sb-match .bombmark { display: none; font: 700 10px/1 'Bahnschrift', system-ui, sans-serif; letter-spacing: .14em; color: #ffd36b; }
+#sb-match .bombmark.down { color: #ff5a4a; animation: sb-pulse .6s ease-in-out infinite alternate; }
+#sb-scores .row.carrier span:first-child::after { content: '  BOMB'; white-space: pre; color: #ffd36b; font-size: 10px;
+    letter-spacing: .16em; font-weight: 700; }
 #sb-scores { left: 50%; top: 50%; transform: translate(-50%, -50%); display: none; box-sizing: border-box; z-index: 2;
     width: min(520px, calc(100vw - 32px)); padding: 14px 18px 16px; background: rgba(10,12,16,.84);
     box-shadow: 0 6px 28px rgba(0,0,0,.6); font: 500 15px/1.2 system-ui, sans-serif; text-shadow: none; }
@@ -489,10 +555,12 @@ interface Remote {
     z: number;
     crouched: boolean;
     alive: boolean;
+    /** Yaw (radians) the body lies along while dead: chosen once at death so it does not fall into a wall. */
+    corpseYaw: number;
 }
 
 interface Tracer { e: pc.Entity; mi: pc.MeshInstance; t: number; }
-interface Flash { e: pc.Entity; t: number; }
+interface Flash { e: pc.Entity; loud: pc.Entity; t: number; }
 interface Impact { e: pc.Entity; t: number; }
 interface FeedLine { el: HTMLDivElement; age: number; }
 
@@ -500,6 +568,16 @@ interface FeedLine { el: HTMLDivElement; age: number; }
 const KNIFE_REST = [0.16, -0.17, -0.36, 14, 8, -14];
 const KNIFE_BACK = [0.2, -0.1, -0.32, 65, -12, -35];
 const KNIFE_SLASH = [-0.08, -0.25, -0.48, -15, 45, 35];
+/** Defender drawing the knife (draw = 1): offset from rest, eased to zero like the guns' draw. */
+const KNIFE_DRAW = [0.02, -0.22, 0.06, -50, 10, 20];
+/** The knife rig (camera-space arms) drawing: the whole rig dips and tips down (m, degrees) at draw = 1. */
+const KNIFE_RIG_DRAW = [0, -0.2, 0.05, -25];
+/** Seconds of windup at the start of the rigs' knife swing clip (viewmodel.py); the rest plays in real time. */
+const RIG_KNIFE_WINDUP = 0.2;
+/** Viewmodel rig file per gun (tools/blender/viewmodel.py). */
+const RIG_FILE: Record<WeaponId, string> = { rifle: 'viewmodel_rifle.glb', pistol: 'viewmodel_pistol.glb' };
+
+
 
 export const createPresenter: CreatePresenter = (app, camera) => {
     // Materials (shared; per-instance opacity goes through mesh-instance parameters).
@@ -529,6 +607,24 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     const gunAccentMat = makeMaterial(0.28, 0.3, 0.33, false);
     // Opaque: the viewmodel layer only renders its opaque sub-layer (see below).
     const flashMat = makeMaterial(1, 0.9, 0.55, true);
+    // The unsuppressed flash: brighter, two-sided, star-shaped (makeFlashMesh), still one opaque draw call.
+    const loudFlashMat = makeMaterial(1, 0.82, 0.42, true);
+    loudFlashMat.cull = pc.CULLFACE_NONE;
+    loudFlashMat.update();
+    const loudFlashMesh = makeFlashMesh(app.graphicsDevice);
+    /** An entity drawing the star flash, disabled. */
+    const loudFlash = (parent: pc.Entity, layers?: number[]): pc.Entity => {
+        const e = new pc.Entity('flash-loud');
+        e.addComponent('render', {
+            meshInstances: [new pc.MeshInstance(loudFlashMesh, loudFlashMat)], castShadows: false, receiveShadows: false,
+            ...(layers ? { layers } : {})
+        });
+        e.enabled = false;
+        parent.addChild(e);
+        return e;
+    };
+    /** The room's suppressed-weapons option (setSuppressed); false until told. */
+    let suppressedLook = false;
     const tracerMat = makeMaterial(1, 0.95, 0.6, true, 0.9);
     const impactMat = makeMaterial(0.05, 0.05, 0.05, true);
     const bladeMat = makeMaterial(0.78, 0.8, 0.84, false);
@@ -580,7 +676,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         return {
             id: -1, team: null, look: Look.None, root, body, neck, head, visor,
             bodyMi: body.render!.meshInstances[0], headMi: head.render!.meshInstances[0],
-            char: null, height: HULL_HEIGHT, seen: 0, x: 0, y: 0, z: 0, crouched: false, alive: false
+            char: null, height: HULL_HEIGHT, seen: 0, x: 0, y: 0, z: 0, crouched: false, alive: false, corpseYaw: 0
         };
     };
 
@@ -615,6 +711,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         r.body.enabled = false;
         r.neck.enabled = false;
         if (weaponModel) r.char.setWeapons(weaponModel);
+        r.char.setSuppressed(suppressedLook);
         r.char.reset();
         if (r.look !== Look.None) applyCharLook(r);
     };
@@ -625,6 +722,10 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         r.body.setLocalPosition(0, bodyH / 2, 0);
         r.neck.setLocalPosition(0, bodyH, 0);
     };
+
+    // --- Bodies clear of walls (corpse.ts) ------------------------------------------------------
+    let world: readonly Box[] = [];
+    const fallYaw = (pos: Vec3, yaw: number): number => corpseYaw(world, pos, yaw);
 
     let followId = -1;
     const updateRemotes = (dt: number, remotes: readonly RemoteView[]): void => {
@@ -650,6 +751,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             r.team = v.team;
             r.x = v.pos[0]; r.y = v.pos[1]; r.z = v.pos[2];
             r.crouched = v.crouched;
+            if (r.alive && !v.alive) r.corpseYaw = fallYaw(v.pos, v.yaw);
+            else if (v.alive) r.corpseYaw = v.yaw;
             r.alive = v.alive;
             const look = v.team === 'defenders' ? Look.Defender
                 : localTeam === 'ghosts' ? Look.AllyGhost : Look.EnemyGhost;
@@ -673,7 +776,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             r.root.enabled = visible;
             if (!visible) continue;
             r.root.setPosition(v.pos[0], v.pos[1], v.pos[2]);
-            r.root.setEulerAngles(0, v.yaw * DEG, 0);
+            r.root.setEulerAngles(0, (v.alive ? v.yaw : r.corpseYaw) * DEG, 0);
             if (ch) continue;
             r.neck.setLocalEulerAngles(v.pitch * DEG, 0, 0);
             layoutRemote(r);
@@ -695,7 +798,16 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     // enabled: 1 draw call + the flash. Knife = 1.
     const gun = new pc.Entity('viewmodel-gun');
     camera.addChild(gun);
-    interface VmGun { root: pc.Entity; boxes: pc.Entity; muzzle: pc.Entity; flash: pc.Entity; }
+    interface VmGun {
+        root: pc.Entity; boxes: pc.Entity; muzzle: pc.Entity;
+        /** Today's small box flash (suppressed) and the star flash (unsuppressed); one is used per room. */
+        flash: pc.Entity; loud: pc.Entity;
+        /** The pistol box stand-in's suppressor (shown only when suppressed). */
+        boxSup: pc.Entity | null;
+        model: WeaponInstance | null;
+        /** Arms holding this gun (viewmodel_<id>.glb), once loaded: replaces the box and the bare model. */
+        rig: VmRig | null;
+    }
     /** A slot's viewmodel with its box stand-in; box positions are relative to the grip, like the models. */
     const makeVmGun = (slot: number): VmGun => {
         const root = new pc.Entity(`viewmodel-${WEAPONS[slot].id}`);
@@ -704,9 +816,10 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         const boxes = new pc.Entity('boxes');
         root.addChild(boxes);
         const muzzle = new pc.Entity('muzzle');
+        let boxSup: pc.Entity | null = null;
         if (WEAPONS[slot].id === 'pistol') {
             box(boxes, gunMat, 0.03, 0.032, 0.17, 0, 0.045, -0.06, VM);              // slide
-            box(boxes, gunAccentMat, 0.026, 0.026, 0.11, 0, 0.05, -0.2, VM);         // suppressor
+            boxSup = box(boxes, gunAccentMat, 0.026, 0.026, 0.11, 0, 0.05, -0.2, VM); // suppressor
             box(boxes, gunAccentMat, 0.028, 0.075, 0.035, 0, -0.005, 0, VM).setLocalEulerAngles(-15, 0, 0); // grip
             muzzle.setLocalPosition(0, 0.05, -0.26);
         } else {
@@ -722,7 +835,10 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         const fx = SLOT_LOOKS[slot].fx;
         const flash = box(muzzle, flashMat, 0.045 * fx, 0.045 * fx, 0.07 * fx, 0, 0, -0.03 * fx, VM);
         flash.enabled = false;
-        return { root, boxes, muzzle, flash };
+        const loud = loudFlash(muzzle, VM);
+        loud.setLocalScale(LOUD_FLASH_SIZE * fx, LOUD_FLASH_SIZE * fx, LOUD_FLASH_SIZE * 1.6 * fx);
+        if (boxSup) boxSup.enabled = suppressedLook;
+        return { root, boxes, muzzle, flash, loud, boxSup, model: null, rig: null };
     };
     const vmGuns: VmGun[] = [];
     for (let i = 0; i < WEAPONS.length; i++) vmGuns.push(makeVmGun(i));
@@ -743,8 +859,11 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         for (let i = 0; i < vmGuns.length; i++) {
             const v = vmGuns[i];
             const g = instantiateWeapon(m, WEAPON_MESH[WEAPONS[i].id], vmMat, VM);
+            g.setSuppressed(suppressedLook);
+            v.model = g;
             v.root.addChild(g.entity);
-            // Tracers and the flash start at the end of the suppressor.
+            if (v.rig) { g.entity.enabled = false; continue; } // the arms rig arrived first and carries the gun
+            // Tracers and the flash start at the muzzle of the variant in use (the suppressor's end, or the bare barrel).
             v.muzzle.reparent(g.muzzle!);
             v.muzzle.setLocalPosition(0, 0, 0);
             v.muzzle.setLocalEulerAngles(0, 0, 0);
@@ -755,10 +874,76 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         }
         const k = instantiateWeapon(m, 'knife', vmMat, VM);
         knife.addChild(k.entity);
+        if (knifeRig) k.entity.enabled = false;
         k.entity.setLocalPosition(0, 0, KNIFE_MODEL_BACK);
         knifeBoxes.enabled = false;
         for (let i = 0; i < active.length; i++) active[i].char?.setWeapons(m);
         for (let i = 0; i < free.length; i++) free[i].char?.setWeapons(m);
+    };
+
+    // Arms rigs (tools/blender/viewmodel.py): one skinned mesh each, the same single draw call as the bare gun. They
+    // load on their own; until then (or if one fails) the bare model or the boxes stand in.
+    const rigMat = makeWeaponMaterial(0.4);
+    /** Muzzle entity (flash, tracer start) onto the rig's muzzle for the current look. */
+    const rigMuzzle = (v: VmGun): void => {
+        const m = v.rig?.activeMuzzle();
+        if (!m) return;
+        v.muzzle.reparent(m);
+        v.muzzle.setLocalPosition(0, 0, 0);
+        v.muzzle.setLocalEulerAngles(0, 0, 0);
+    };
+    for (let i = 0; i < vmGuns.length; i++) {
+        const id = WEAPONS[i].id, file = RIG_FILE[id];
+        loadViewmodel(app, `${import.meta.env.BASE_URL}models/${file}`, file, VM, rigMat, [`${id}_idle`, `${id}_reload`])
+            .then(rig => {
+                const v = vmGuns[i];
+                v.rig = rig;
+                v.root.addChild(rig.root);
+                rig.setSuppressed(suppressedLook);
+                rigMuzzle(v);
+                const fx = SLOT_LOOKS[i].fx;
+                v.flash.setLocalScale(0.05 * fx, 0.05 * fx, 0.085 * fx);
+                v.flash.setLocalPosition(0, 0, -0.04 * fx);
+                v.boxes.enabled = false;
+                if (v.model) v.model.entity.enabled = false;
+            })
+            .catch((err: unknown) => console.warn(`[stillblade] ${file} failed to load; the gun is drawn without hands.`, err));
+    }
+    // The knife rig hangs from the camera directly (its clips carry the whole swing).
+    const knifeRigRoot = new pc.Entity('viewmodel-knife-rig');
+    camera.addChild(knifeRigRoot);
+    knifeRigRoot.enabled = false;
+    let knifeRig: VmRig | null = null;
+    loadViewmodel(app, `${import.meta.env.BASE_URL}models/viewmodel_knife.glb`, 'viewmodel_knife.glb', VM, rigMat,
+        ['knife_idle', 'knife_swing'])
+        .then(rig => {
+            knifeRig = rig;
+            knifeRigRoot.addChild(rig.root);
+            knife.enabled = false;
+        })
+        .catch((err: unknown) => console.warn('[stillblade] viewmodel_knife.glb failed to load; the knife is drawn without hands.', err));
+
+    /** Suppressors on or off for every gun drawn (first person, every character) and the flash in use. */
+    const applySuppressed = (): void => {
+        for (const v of vmGuns) {
+            if (v.boxSup) v.boxSup.enabled = suppressedLook;
+            if (v.rig) {
+                v.rig.setSuppressed(suppressedLook);
+                rigMuzzle(v);
+                v.model?.setSuppressed(suppressedLook);
+                v.flash.enabled = v.loud.enabled = false;
+                continue;
+            }
+            if (!v.model) continue;
+            v.model.setSuppressed(suppressedLook);
+            v.muzzle.reparent(v.model.muzzle!);
+            v.muzzle.setLocalPosition(0, 0, 0);
+            v.muzzle.setLocalEulerAngles(0, 0, 0);
+            v.flash.enabled = v.loud.enabled = false;
+        }
+        for (let i = 0; i < active.length; i++) active[i].char?.setSuppressed(suppressedLook);
+        for (let i = 0; i < free.length; i++) free[i].char?.setSuppressed(suppressedLook);
+        for (const f of remoteFlashes) { f.e.enabled = f.loud.enabled = false; f.t = 0; }
     };
 
     let recoilT = 0;
@@ -773,11 +958,15 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     /** Slot drawn in first person (-1 before the first defender frame), and the slot whose kick is playing. */
     let vmSlot = -1;
     let kickSlot = 0;
+    /** A defender has the knife drawn (slot SLOT_KNIFE): the knife viewmodel instead of a gun. */
+    let vmKnifeHeld = false;
 
+    /** Draw offset weight 0..1 for the defender knife (0 for ghosts and once drawn). */
+    let knifeDraw = 0;
     const setKnifePose = (a: number[], b: number[], t: number): void => {
-        const u = 1 - t;
-        knife.setLocalPosition(a[0] * u + b[0] * t, a[1] * u + b[1] * t, a[2] * u + b[2] * t);
-        knife.setLocalEulerAngles(a[3] * u + b[3] * t, a[4] * u + b[4] * t, a[5] * u + b[5] * t);
+        const u = 1 - t, d = knifeDraw, k = KNIFE_DRAW;
+        knife.setLocalPosition(a[0] * u + b[0] * t + k[0] * d, a[1] * u + b[1] * t + k[1] * d, a[2] * u + b[2] * t + k[2] * d);
+        knife.setLocalEulerAngles(a[3] * u + b[3] * t + k[3] * d, a[4] * u + b[4] * t + k[4] * d, a[5] * u + b[5] * t + k[5] * d);
     };
 
     const updateViewmodel = (dt: number, local: LocalView): void => {
@@ -790,15 +979,20 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             reloadW = 0;
         }
         const defender = team === 'defenders';
-        gun.enabled = localAlive && defender;
-        knife.enabled = localAlive && !defender;
-        if (defender) {
+        const knifeHeld = defender && local.weapon === SLOT_KNIFE;
+        if (knifeHeld !== vmKnifeHeld) {
+            vmKnifeHeld = knifeHeld;
+            swingT = -1; // a switch cancels a swing in progress (the rule cancels its windup too)
+        }
+        gun.enabled = localAlive && defender && !knifeHeld;
+        knife.enabled = localAlive && (!defender || knifeHeld);
+        if (defender && !knifeHeld) {
             // The weapon in hand changes the moment a switch starts: the old one simply disappears.
             const slot = slotOf(local.weapon);
             if (slot !== vmSlot) {
                 if (vmSlot >= 0) {
                     vmGuns[vmSlot].root.enabled = false;
-                    vmGuns[vmSlot].flash.enabled = false;
+                    vmGuns[vmSlot].flash.enabled = vmGuns[vmSlot].loud.enabled = false;
                 }
                 vmSlot = slot;
                 vmGuns[slot].root.enabled = true;
@@ -809,7 +1003,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             const kick = SLOT_LOOKS[kickSlot];
             recoilT = Math.max(0, recoilT - dt);
             flashT = Math.max(0, flashT - dt);
-            vmGuns[slot].flash.enabled = flashT > 0;
+            vmGuns[slot].flash.enabled = flashT > 0 && suppressedLook;
+            vmGuns[slot].loud.enabled = flashT > 0 && !suppressedLook;
             const k = recoilT / kick.kickTime;
             const e = k * k;
             // Reload: state-driven from the progress alone. Dip and cant in, hold, come back up; a
@@ -824,8 +1019,15 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             const w = reloadW;
             // Small jolts as the magazine goes in and the bolt or slide closes (zero when not reloading).
             let jolt = 0;
-            if (p > 0) {
+            const rig = vmGuns[slot].rig;
+            if (p > 0 && !rig) {
                 for (let i = 0; i < look.joltAt.length; i++) jolt += look.joltSize[i] * bump(p, look.joltAt[i], look.joltW[i]);
+            }
+            // With arms, the reload clip moves the gun and hands inside the rig: no procedural reload pose on top.
+            const rw = rig ? 0 : w;
+            if (rig) {
+                const clip = p > 0 ? rig.clips.get(RELOAD_CLIP[slot]) : rig.clips.get(IDLE_CLIP[slot]);
+                rig.pose(clip, clip ? p * clip.duration : 0);
             }
             // Aim: blend from the hip pose to the sight line; the reload pose takes over from it.
             const a0 = local.aim > 0 ? Math.min(1, local.aim) : 0;
@@ -840,13 +1042,37 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             const sx = Math.sin(time * SWAY_RATE) * SWAY_POS * s;
             const sy = Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6 * s;
             gun.setLocalPosition(
-                hip[0] * ha + aim[0] * a + sx + rl[0] * w + dr[0] * d,
-                hip[1] * ha + aim[1] * a + sy + kick.kick[0] * e + rl[1] * w + 0.012 * jolt + dr[1] * d,
-                hip[2] * ha + aim[2] * a + kick.kick[1] * e + rl[2] * w + dr[2] * d);
+                hip[0] * ha + aim[0] * a + sx + rl[0] * rw + dr[0] * d,
+                hip[1] * ha + aim[1] * a + sy + kick.kick[0] * e + rl[1] * rw + 0.012 * jolt + dr[1] * d,
+                hip[2] * ha + aim[2] * a + kick.kick[1] * e + rl[2] * rw + dr[2] * d);
             gun.setLocalEulerAngles(
-                hip[3] * ha + aim[3] * a + kick.kick[2] * e + sy * 120 + rl[3] * w + 5 * jolt + dr[3] * d,
-                hip[4] * ha + aim[4] * a + Math.sin(time * SWAY_RATE * 0.7) * SWAY_ROT * s + rl[4] * w + dr[4] * d,
-                hip[5] * ha + aim[5] * a + sx * 160 + rl[5] * w + dr[5] * d);
+                hip[3] * ha + aim[3] * a + kick.kick[2] * e + sy * 120 + rl[3] * rw + 5 * jolt + dr[3] * d,
+                hip[4] * ha + aim[4] * a + Math.sin(time * SWAY_RATE * 0.7) * SWAY_ROT * s + rl[4] * rw + dr[4] * d,
+                hip[5] * ha + aim[5] * a + sx * 160 + rl[5] * rw + dr[5] * d);
+            knifeRigRoot.enabled = false;
+            return;
+        }
+        // A defender drawing the knife: it rises from below, like the guns.
+        const kd0 = knifeHeld && local.draw > 0 ? Math.min(1, local.draw) : 0;
+        knifeDraw = kd0 * kd0;
+        if (knifeRig) {
+            // Arms rig: the clip carries the swing; its windup is stretched to the rule's, the rest plays in real time.
+            knife.enabled = false;
+            knifeRigRoot.enabled = localAlive && (!defender || knifeHeld);
+            knifeRig.setVariant(defender ? 'vm_knife' : 'vm_ghost');
+            const kd = knifeDraw, rd = KNIFE_RIG_DRAW;
+            knifeRigRoot.setLocalPosition(rd[0] * kd + Math.sin(time * SWAY_RATE) * SWAY_POS,
+                rd[1] * kd + Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6, rd[2] * kd);
+            knifeRigRoot.setLocalEulerAngles(rd[3] * kd, 0, 0);
+            const swing = knifeRig.clips.get('knife_swing')!;
+            let ct = -1;
+            if (swingT >= 0) {
+                swingT += dt;
+                ct = swingT < windup ? (swingT / windup) * RIG_KNIFE_WINDUP : RIG_KNIFE_WINDUP + (swingT - windup);
+                if (ct >= swing.duration) { swingT = -1; ct = -1; }
+            }
+            if (ct >= 0) knifeRig.pose(swing, ct);
+            else knifeRig.pose(knifeRig.clips.get('knife_idle'), 0);
             return;
         }
         if (swingT < 0) {
@@ -892,7 +1118,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     for (let i = 0; i < REMOTE_FLASH_COUNT; i++) {
         const e = box(app.root, flashMat, 0.06, 0.06, 0.1);
         e.enabled = false;
-        remoteFlashes.push({ e, t: 0 });
+        remoteFlashes.push({ e, loud: loudFlash(app.root), t: 0 });
     }
     let nextFlash = 0;
 
@@ -917,7 +1143,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             const f = remoteFlashes[i];
             if (f.t <= 0) continue;
             f.t -= dt;
-            if (f.t <= 0) f.e.enabled = false;
+            if (f.t <= 0) f.e.enabled = f.loud.enabled = false;
         }
         for (let i = 0; i < TRACER_COUNT; i++) {
             const tr = tracers[i];
@@ -952,8 +1178,9 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     let blinkPhase = 0;
     let bombX = NaN, bombY = NaN, bombZ = NaN;
 
+    // A dropped bomb uses the same model, unlit (only the planted bomb blinks).
     const updateBomb = (dt: number, match: MatchView): void => {
-        const p = match.bombPos;
+        const p = match.bombPos ?? match.droppedBomb;
         if (!p) {
             if (bomb.enabled) bomb.enabled = false;
             return;
@@ -981,6 +1208,10 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     const crosshair = document.getElementById('crosshair');
     const vignette = div('sb-vignette');
     const stats = div('sb-stats');
+    // "You have the bomb", above the visibility meter (ghost carriers only).
+    const carrierEl = div('sb-carrier', stats, '');
+    carrierEl.textContent = 'YOU HAVE THE BOMB';
+    let shownCarrier = false;
     const visEl = div('sb-vis', stats, '');
     const visRow = div('', visEl, 'row');
     div('', visRow, '').textContent = 'VISIBILITY';
@@ -999,13 +1230,17 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     const altRows: HTMLDivElement[] = [];
     const altMag: number[] = [];
     const altRes: number[] = [];
-    for (let i = 0; i < WEAPONS.length; i++) {
-        altRows.push(div('', altEl, ''));
+    // Every slot, the one in hand highlighted ("1 Rifle 30/90", "2 Pistol 12/36", "3 Knife").
+    for (let i = 0; i < SLOT_COUNT; i++) {
+        const row = div('', altEl, '');
+        if (i === SLOT_KNIFE) row.textContent = `${i + 1} ${slotLabel(i)}`;
+        altRows.push(row);
         altMag.push(-1);
         altRes.push(-1);
     }
     const wpnSlot = new Slot(div('', ammoEl, 'wpn'));
-    const WPN_LABEL = WEAPONS.map((w, i) => `${i + 1} ${w.label.toUpperCase()}`);
+    const WPN_LABEL: string[] = [];
+    for (let i = 0; i < SLOT_COUNT; i++) WPN_LABEL.push(`${i + 1} ${slotLabel(i).toUpperCase()}`);
     const magEl = span(ammoEl, 'mag');
     const resEl = span(ammoEl, 'res');
     const reloadLabel = new Slot(div('', ammoEl, 'rl'));
@@ -1057,6 +1292,10 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         return { box, score, pips };
     };
     const tG = makeTeam('ghosts');
+    // Under the ghosts' pips, for ghosts only: who has the bomb, or that it is lying on the floor.
+    const bombMarkEl = div('', tG.box, 'bombmark');
+    const bombMark = new Slot(bombMarkEl);
+    let shownBombMark = '';
     const mid = div('', matchEl, 'mid');
     matchEl.insertBefore(mid, tG.box.nextSibling);
     div('', mid, 'tag').textContent = 'BOMB PLANTED';
@@ -1076,11 +1315,19 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     // Use prompt and plant/defuse progress (lower centre).
     const useEl = div('sb-use');
     useEl.appendChild(document.createTextNode('Hold'));
-    useEl.appendChild(document.createElement('b')).textContent = 'E';
+    const useKey = new Slot(useEl.appendChild(document.createElement('b')));
     const useVerb = new Slot(span(useEl));
     const actEl = div('sb-act');
     const actLabel = new Slot(div('', actEl, ''));
     const actFill = div('', div('', actEl, 'bar'), 'fill');
+    // A ghost without the bomb standing in a site.
+    const noBombEl = div('sb-nobomb');
+    noBombEl.textContent = 'Only the bomb carrier can plant';
+    let shownNoBomb = false;
+    // Short bomb notices for ghosts (who has it, dropped, picked up).
+    const bombNoteEl = div('sb-bombnote');
+    const bombNote = new Slot(bombNoteEl);
+    let bombNoteLeft = 0;
 
     // Scoreboard.
     const scoresEl = div('sb-scores');
@@ -1114,7 +1361,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     let shownActPct = -1;
     let shownScores = false;
     let scoresRosterV = -1, scoresLocalId = -1, scoresTeam: Team | null = null;
-    let scoresG = -1, scoresD = -1, scoresRound = -1;
+    let scoresG = -1, scoresD = -1, scoresRound = -1, scoresCarrier = -1;
     let shownDeadKey = NaN;
     let shownDeadEl = false;
 
@@ -1140,6 +1387,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     let shownFov = 0;
     let shownSlot = -1;
     let shownXhairOp = -1;
+    let shownTicks = false;
     measureXhair();
 
     const updateHud = (dt: number, local: LocalView, phase: Phase): void => {
@@ -1240,24 +1488,32 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     const updateAmmo = (local: LocalView): void => {
         if (cam.fov !== shownFov) { shownFov = cam.fov; measureXhair(); }
         const armed = local.alive && local.team === 'defenders';
+        const melee = local.weapon === SLOT_KNIFE;
         if (armed !== shownArmed) {
             shownArmed = armed;
             ammoEl.style.display = armed ? 'block' : 'none';
-            xhairEl.style.display = armed ? 'block' : 'none';
         }
+        // Spread ticks only for a gun: the knife has no spread.
+        const ticks = armed && !melee;
+        if (ticks !== shownTicks) { shownTicks = ticks; xhairEl.style.display = ticks ? 'block' : 'none'; }
         if (!armed) return;
-        const slot = slotOf(local.weapon);
+        const slot = melee ? SLOT_KNIFE : slotOf(local.weapon);
         if (slot !== shownSlot) {
             shownSlot = slot;
             wpnSlot.set(WPN_LABEL[slot]);
-            for (let i = 0; i < altRows.length; i++) altRows[i].style.display = i === slot ? 'none' : '';
+            for (let i = 0; i < altRows.length; i++) altRows[i].className = i === slot ? 'on' : '';
         }
-        for (let i = 0; i < altRows.length; i++) {
+        for (let i = 0; i < WEAPONS.length; i++) {
             const w = local.weapons[i];
-            if (i === slot || !w || (w.mag === altMag[i] && w.reserve === altRes[i])) continue;
+            if (!w || (w.mag === altMag[i] && w.reserve === altRes[i])) continue;
             altMag[i] = w.mag;
             altRes[i] = w.reserve;
             altRows[i].textContent = `${i + 1} ${WEAPONS[i].label} ${w.mag}/${w.reserve}`;
+        }
+        if (melee) {
+            // No magazine, reserve, reload line or bar: just the name.
+            if (shownAmmoKey !== -2) { shownAmmoKey = -2; ammoEl.className = 'sb-ui melee'; }
+            return;
         }
         const mag = local.mag, reserve = local.reserve;
         if (mag !== shownMag) { shownMag = mag; magEl.textContent = String(mag); }
@@ -1265,11 +1521,11 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         const reloading = local.reload > 0;
         const level = mag <= 0 ? 2 : mag <= local.magSize / 4 ? 1 : 0;
         const state = reloading ? 1 : level > 0 && reserve > 0 ? 2 : mag <= 0 ? 3 : 0;
-        const key = level + 3 * state;
+        const key = level + 3 * state + 16 * bindings().version;
         if (key !== shownAmmoKey) {
             shownAmmoKey = key;
             ammoEl.className = `sb-ui ${AMMO_CLS[level]}${AMMO_STATE_CLS[state]}`;
-            reloadLabel.set(AMMO_LABEL[state]);
+            reloadLabel.set(state === 2 ? `${bindings().hint('reload')}  RELOAD` : AMMO_LABEL[state]);
             shownReloadPct = -1;
         }
         if (reloading) {
@@ -1318,6 +1574,16 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             }
         }
         if (match.round !== shownRound) { shownRound = match.round; roundSlot.set(`ROUND ${shownRound}`); }
+        // The bomb's state, for ghosts (a defender's carrierId is always 0 and it only knows a dropped bomb in sight).
+        const ghost = local.team === 'ghosts';
+        const live = match.phase === 'freeze' || match.phase === 'live';
+        const mark = !ghost || !live ? '' : match.droppedBomb ? '\u0001' : match.carrierId > 0 ? playerName(match.carrierId) : '';
+        if (mark !== shownBombMark) {
+            shownBombMark = mark;
+            bombMarkEl.style.display = mark ? 'block' : 'none';
+            bombMarkEl.className = mark === '\u0001' ? 'bombmark down' : 'bombmark';
+            if (mark) bombMark.set(mark === '\u0001' ? 'BOMB DROPPED' : `BOMB · ${mark.toUpperCase()}`);
+        }
     };
 
     const showBanner = (cls: string, seconds: number): void => {
@@ -1389,11 +1655,20 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         if (op !== shownBannerOpacity) { shownBannerOpacity = op; bannerEl.style.opacity = op; }
     };
 
-    const updateUse = (local: LocalView): void => {
+    const updateUse = (dt: number, local: LocalView): void => {
+        const carrier = local.alive && local.carrier;
+        if (carrier !== shownCarrier) { shownCarrier = carrier; carrierEl.style.display = carrier ? 'block' : 'none'; }
+        const noBomb = local.alive && local.siteNoBomb;
+        if (noBomb !== shownNoBomb) { shownNoBomb = noBomb; noBombEl.style.display = noBomb ? 'block' : 'none'; }
+        if (bombNoteLeft > 0) {
+            bombNoteLeft -= dt;
+            if (bombNoteLeft <= 0) bombNoteEl.style.display = 'none';
+            else if (bombNoteLeft < 0.5) bombNoteEl.style.opacity = (bombNoteLeft / 0.5).toFixed(2);
+        }
         const acting = local.alive && local.action > 0;
         const prompt = local.alive && local.canAct && !acting;
         if (prompt !== shownUse) { shownUse = prompt; useEl.style.display = prompt ? 'block' : 'none'; }
-        if (prompt) useVerb.set(USE_VERB[local.team]);
+        if (prompt) { useVerb.set(USE_VERB[local.team]); useKey.set(bindings().hint('use')); }
         if (acting !== shownAct) { shownAct = acting; actEl.style.display = acting ? 'block' : 'none'; }
         if (acting) {
             actLabel.set(ACT_LABEL[local.team]);
@@ -1416,7 +1691,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                 .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths || a.id - b.id);
             if (members.length === 0) div('', scoresEl, 'empty').textContent = 'No players';
             for (const p of members) {
-                const row = div('', scoresEl, `row${p.alive ? '' : ' dead'}${p.id === local.id ? ' me' : ''}`);
+                const carrier = p.id === match.carrierId && team === 'ghosts';
+                const row = div('', scoresEl, `row${p.alive ? '' : ' dead'}${p.id === local.id ? ' me' : ''}${carrier ? ' carrier' : ''}`);
                 span(row, '', p.name || `Player ${p.id}`);
                 span(row, '', String(p.kills));
                 span(row, '', String(p.deaths));
@@ -1432,9 +1708,10 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         }
         if (!shownScores) return;
         if (rosterVersion === scoresRosterV && local.id === scoresLocalId && local.team === scoresTeam &&
-            match.scoreGhosts === scoresG && match.scoreDefenders === scoresD && match.round === scoresRound) return;
+            match.scoreGhosts === scoresG && match.scoreDefenders === scoresD && match.round === scoresRound &&
+            match.carrierId === scoresCarrier) return;
         scoresRosterV = rosterVersion; scoresLocalId = local.id; scoresTeam = local.team;
-        scoresG = match.scoreGhosts; scoresD = match.scoreDefenders; scoresRound = match.round;
+        scoresG = match.scoreGhosts; scoresD = match.scoreDefenders; scoresRound = match.round; scoresCarrier = match.carrierId;
         renderScores(local, match);
     };
 
@@ -1455,7 +1732,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             updateAmmo(local);
             updateMatchBar(local, match);
             updateBanner(dt, local, match);
-            updateUse(local);
+            updateUse(dt, local);
             updateScores(local, match);
         },
 
@@ -1485,9 +1762,9 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                 // one, except a shot predicted on the very frame of a switch).
                 kickSlot = slot;
                 recoilT = SLOT_LOOKS[slot].kickTime;
-                flashT = FLASH_TIME;
+                flashT = suppressedLook ? FLASH_TIME : LOUD_FLASH_TIME;
                 const v = vmGuns[vmSlot];
-                v.flash.setLocalEulerAngles(0, 0, Math.random() * 90);
+                (suppressedLook ? v.flash : v.loud).setLocalEulerAngles(0, 0, Math.random() * 90);
                 tmpA.copy(v.muzzle.getPosition());
             } else {
                 tmpA.set(from[0], from[1], from[2]);
@@ -1500,13 +1777,20 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                         tmpA.copy(mp);
                         const f = remoteFlashes[nextFlash];
                         nextFlash = (nextFlash + 1) % REMOTE_FLASH_COUNT;
-                        f.e.setRotation(rot);
-                        f.e.setPosition(mp);
-                        f.e.setLocalScale(0.06 * fx, 0.06 * fx, 0.1 * fx);
-                        f.e.translateLocal(0, 0, -0.04 * fx);
-                        f.e.rotateLocal(0, 0, Math.random() * 90);
-                        f.e.enabled = true;
-                        f.t = REMOTE_FLASH_TIME;
+                        const e = suppressedLook ? f.e : f.loud;
+                        (suppressedLook ? f.loud : f.e).enabled = false;
+                        e.setRotation(rot);
+                        e.setPosition(mp);
+                        if (suppressedLook) {
+                            e.setLocalScale(0.06 * fx, 0.06 * fx, 0.1 * fx);
+                            e.translateLocal(0, 0, -0.04 * fx);
+                        } else {
+                            // Bigger than first person: it is seen from metres away.
+                            e.setLocalScale(LOUD_FLASH_SIZE * 1.3 * fx, LOUD_FLASH_SIZE * 1.3 * fx, LOUD_FLASH_SIZE * 2 * fx);
+                        }
+                        e.rotateLocal(0, 0, Math.random() * 90);
+                        e.enabled = true;
+                        f.t = suppressedLook ? REMOTE_FLASH_TIME : LOUD_FLASH_TIME;
                     }
                 }
             }
@@ -1531,15 +1815,40 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             tr.t = TRACER_LIFE;
         },
 
+        setSuppressed(on: boolean): void {
+            if (on === suppressedLook) return;
+            suppressedLook = on;
+            applySuppressed();
+        },
+
         knifeSwing(windupSeconds: number): void {
             windup = Math.max(0.01, windupSeconds);
             swingT = 0;
         },
 
-        hitConfirm(head: boolean, killed: boolean): void {
+        remoteSwing(id: number): void {
+            for (let i = 0; i < active.length; i++) {
+                const r = active[i];
+                if (r.id === id) { r.char?.swing(); return; }
+            }
+        },
+
+        remoteSlash(id: number): void {
+            for (let i = 0; i < active.length; i++) {
+                const r = active[i];
+                if (r.id === id) { r.char?.slash(); return; }
+            }
+        },
+
+        setWorld(boxes: readonly Box[]): void {
+            world = boxes;
+        },
+
+        hitConfirm(zone: HitZone | null, killed: boolean): void {
             hitDur = killed ? 0.25 : 0.12;
             hitT = hitDur;
-            hitEl.classList.toggle('head', head);
+            hitEl.classList.toggle('head', zone === 'head');
+            hitEl.classList.toggle('limb', zone === 'arms' || zone === 'legs');
             hitEl.classList.toggle('kill', killed);
             hitEl.style.opacity = '1';
         },
@@ -1556,9 +1865,9 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             m.el.style.transform = `rotate(${(-(bearing - lastYaw) * DEG).toFixed(1)}deg)`;
         },
 
-        died(killerName: string, kind: KillKind, distance: number, weapon?: string): void {
+        died(killerName: string, kind: KillKind, zone: HitZone | null, distance: number, weapon?: string): void {
             const gun = weapon ? `the ${weapon.toLowerCase()}` : 'a gun';
-            const how = kind === 'headshot' ? `${gun} (headshot)` : kind === 'shot' ? gun : kind === 'backstab' ? 'a backstab' : 'the knife';
+            const how = kind === 'shot' ? `${gun}${zone ? ZONE_RECAP[zone] : ''}` : kind === 'backstab' ? 'a backstab' : 'the knife';
             recapEl.textContent = `${killerName} killed you with ${how} from ${distance.toFixed(0)} m`;
             recapEl.style.display = 'block';
             shownRecap = true;
@@ -1572,10 +1881,17 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             xhairEl.style.setProperty('--c', c.color);
         },
 
-        killFeed(killerId: number, victimId: number, kind: KillKind, weapon?: string): void {
+        bombNotice(text: string): void {
+            bombNote.set(text);
+            bombNoteLeft = 3.5;
+            bombNoteEl.style.opacity = '1';
+            bombNoteEl.style.display = 'block';
+        },
+
+        killFeed(killerId: number, victimId: number, kind: KillKind, zone: HitZone | null, weapon?: string): void {
             const reuse = feed.length >= KILLFEED_MAX ? feed.pop()! : null;
             const el = reuse ? reuse.el : document.createElement('div');
-            el.textContent = `${playerName(killerId)}${weapon ? ` [${weapon}]` : ''} ▸ ${playerName(victimId)}${KILL_SUFFIX[kind]}`;
+            el.textContent = `${playerName(killerId)}${weapon ? ` [${weapon}]` : ''} ▸ ${playerName(victimId)}${killSuffix(kind, zone)}`;
             el.className = killerId === localId || victimId === localId ? 'me' : '';
             el.style.opacity = '';
             feedEl.insertBefore(el, feedEl.firstChild);

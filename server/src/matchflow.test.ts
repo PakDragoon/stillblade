@@ -11,6 +11,12 @@ import { Game } from './game';
 
 const TICK_MS = 1000 / TICK_RATE;
 const ticks = (ms: number): number => Math.ceil(ms / TICK_MS);
+/**
+ * No gun kills with one shot (a headshot is twice the body damage). Aimed slightly down from 20 m and held for
+ * KILL_TICKS, the rifle (a shot every 6 commands) puts three shots into the torso as the recoil climbs: 102.
+ */
+const KILL = { fire: true, pitch: -0.03 };
+const KILL_TICKS = 2 * 6 + 1;
 
 /** Ghost spawns at z = ghostZ facing -Z; defender at z = defenderZ facing +Z. A bomb site covers the ghost spawn. */
 function makeMap(ghostZ = 10, defenderZ = -10, extra: Box[] = []): MapData {
@@ -39,7 +45,7 @@ class Client {
     cmd(over: Partial<NetCmd> = {}): void {
         this.game.handleCmd(this.id, {
             seq: this.seq++, forward: 0, right: 0, yaw: this.yaw, pitch: 0, jump: false, walk: false, crouch: false,
-            fire: false, use: false, reload: false, slot: 0, swap: false, aim: false, viewTime: this.game.now, ...over
+            fire: false, use: false, reload: false, slot: 0, swap: false, aim: false, drop: false, viewTime: this.game.now, ...over
         });
     }
     ready(ready = true): void { this.game.handleMessage(this.id, { type: 'ready', ready }); }
@@ -259,12 +265,12 @@ describe('stats', () => {
 });
 
 describe('match end and rematch', () => {
-    /** The defender headshots the ghost at the start of each round until someone has the win target. */
+    /** The defender shoots the ghost down at the start of each round until someone has the win target. */
     function playMatch(r: ReturnType<typeof room>): void {
         while (r.game.phase !== 'over' || !r.game.players.size || !r.game.score.some(s => s >= ROUNDS_TO_WIN)) {
             if (r.game.phase === 'over') r.run(ticks(OVER_MS) + 2);
             while (r.game.phase !== 'live') r.run(1);
-            r.run(2, c => (r.P(c).team === 'defenders' ? { fire: true } : { pitch: (c.seq % 2) * 0.001 }));
+            r.run(KILL_TICKS + 1, c => (r.P(c).team === 'defenders' ? KILL : { pitch: (c.seq % 2) * 0.001 }));
         }
     }
 
@@ -350,14 +356,14 @@ describe('chat', () => {
         const [g1, d1, g2, d2] = r.clients;
         r.live();
         r.run(ticks(300)); // d1 will kill g1 below: aim
-        r.run(1, c => (c === d1 ? { fire: true } : null));
+        r.run(KILL_TICKS, c => (c === d1 ? KILL : null));
         expect(r.P(g1).alive).toBe(false);
         // Dead ghost speaks: all-chat and team chat both stay away from the living.
         g1.say('d1 is at the stairs');
         g1.say('d1 is at the stairs', true);
         for (const c of [d1, g2, d2]) expect(c.texts()).not.toContain('d1 is at the stairs');
         // Kill g2 too: the two dead can talk to each other.
-        r.run(ticks(1500), c => (c === d2 ? { fire: true } : null));
+        r.run(KILL_TICKS, c => (c === d2 ? KILL : null));
         expect(r.P(g2).alive).toBe(false);
         g2.say('hi dead', true);
         expect(g1.texts()).toContain('hi dead');
@@ -371,7 +377,7 @@ describe('chat', () => {
         const r = room();
         const [a, b] = r.clients;
         r.live();
-        r.run(2, c => (c === b ? { fire: true } : null));
+        r.run(KILL_TICKS + 1, c => (c === b ? KILL : null));
         expect(r.game.phase).toBe('over');
         a.say('gg wp');
         expect(b.texts()).toContain('gg wp');
@@ -403,7 +409,7 @@ describe('idle handling', () => {
         const quiet = except(g1);
         const winRound = (): void => {
             while (r.game.phase !== 'live') r.run(1, quiet);
-            r.run(2, c => (c === d1 || c === d2 ? { fire: true } : quiet(c)));
+            r.run(KILL_TICKS + 2, c => (c === d1 || c === d2 ? KILL : quiet(c)));
             r.run(1, quiet);
         };
         r.live(); // round 1: everyone, g1 included, moved during the freeze
@@ -448,7 +454,7 @@ describe('holding a match when a team empties', () => {
         const r = room(makeMap(), ['G', 'D', 'G2']);
         const [, d, g2] = r.clients;
         r.live();
-        r.run(14, c => (c === d ? { fire: true } : wiggle(c))); // round 1 to the defenders
+        r.run(6 * 6 + 1, c => (c === d ? KILL : wiggle(c))); // round 1 to the defenders: both ghosts down
         expect(r.game.score[1]).toBe(1);
         const kills = r.P(d).stats.kills;
         expect(kills).toBeGreaterThanOrEqual(1);
@@ -473,7 +479,7 @@ describe('holding a match when a team empties', () => {
         const r = room(makeMap(), ['G', 'D', 'G2']);
         const [g, d] = r.clients;
         r.live();
-        r.run(2, c => (c === d ? { fire: true } : wiggle(c)));
+        r.run(KILL_TICKS + 1, c => (c === d ? KILL : wiggle(c)));
         r.run(ticks(OVER_MS) + 2);
         r.game.leave(g.id);
         r.game.leave(r.clients[2].id);
@@ -486,7 +492,7 @@ describe('holding a match when a team empties', () => {
         const r = room(makeMap(), ['G', 'D']);
         const [g, d] = r.clients;
         r.live();
-        r.run(2, c => (c === d ? { fire: true } : wiggle(c)));
+        r.run(KILL_TICKS + 1, c => (c === d ? KILL : wiggle(c)));
         expect(r.game.score[1]).toBe(1);
         r.game.leave(d.id);
         r.run(ticks(OVER_MS + GRACE_MS) + 30, wiggle); // the hold starts when the round-over pause ends
@@ -554,22 +560,23 @@ describe('damage events', () => {
         expect(d.dir).toBeCloseTo(0, 5);
         expect(d).toMatchObject({ amount: 34, kind: 'shot', weapon: 0 }); // the rifle's slot
         expect(d.killed).toBeUndefined();
-        expect(defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'body' });
+        expect(defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'shot', zone: 'torso', kill: false, damage: 34 });
         r.run(ticks(3000)); // recoil recovers in commands, so keep sending them
         r.run(1, c => (c === defender ? { fire: true } : null));
         const k = dmgs(ghost).at(-1)!;
-        expect(k).toMatchObject({ killed: true, by: defender.id, kind: 'headshot', amount: 66 });
+        expect(k).toMatchObject({ killed: true, by: defender.id, kind: 'shot', zone: 'head', amount: 66 });
         expect(k.dist).toBeCloseTo(20, 0);
-        expect(defender.last('hitconfirm').kind).toBe('kill');
+        expect(defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'shot', zone: 'head', kill: true, damage: 68 });
     });
 
-    it('uses "head" for a non-lethal headshot is impossible, so head only appears on a killing blow; knife hits say body', () => {
+    it('confirms a knife hit with its kind and no zone', () => {
         const r = room(makeMap(-8.5, -10));
         const [ghost, defender] = r.clients;
         r.live();
         r.run(14, c => (c === ghost ? { fire: true } : {}));
-        expect(ghost.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'body' });
+        expect(ghost.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'knife', kill: false, damage: 55 });
         expect(defender.all('dmg')[0]).toMatchObject({ amount: 55, kind: 'knife' });
+        expect(defender.all('dmg')[0].zone).toBeUndefined();
     });
 
     it('gives a defender hit by a knife only a bearing and amount, never a position', () => {

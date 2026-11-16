@@ -1,8 +1,9 @@
 import { DRY_FIRE_TICKS, RUN_SPEED } from './constants';
 import { horizontalSpeed } from './movement';
 import { viewDir } from './raycast';
+import { KNIFE_SLASH, KNIFE_SWING, copyKnifeState, createKnifeState, resetKnife, sameKnifeState, stepKnife, type KnifeState } from './knife';
 import type { PlayerState, Vec3 } from './types';
-import { WEAPONS, WEAPON_COUNT, type WeaponDef } from './weapons';
+import { GUN_COUNT, SLOT_COUNT, SLOT_KNIFE, WEAPONS, drawTicksOf, isGunSlot, type WeaponDef } from './weapons';
 
 /**
  * One defender weapon's state. Every field is a small integer counted in the shooter's own
@@ -30,27 +31,33 @@ export interface GunState {
 }
 
 /**
- * Everything a defender carries: one `GunState` per slot of `WEAPONS`, which one is in hand, the
- * switch and aim timers, and the trigger edge. Small integers only, sent exactly in the snapshot,
- * stepped once per processed command by `stepLoadout` on the server and in the client's prediction
- * and replay.
+ * Everything a defender carries: one `GunState` per gun of `WEAPONS`, the knife's timing (slot
+ * `SLOT_KNIFE`), which slot is in hand, the switch and aim timers, and the trigger edge. Small
+ * integers only, sent exactly in the snapshot, stepped once per processed command by `stepLoadout`
+ * on the server and in the client's prediction and replay.
  */
 export interface LoadoutState {
-    /** Slot in hand (index into `WEAPONS`); changes the moment a switch starts. */
+    /** Slot in hand: a gun (index into `WEAPONS`) or `SLOT_KNIFE`; changes the moment a switch starts. */
     slot: number;
     /** The slot held before the last switch: where Q goes. */
     prev: number;
     /** Commands left until the weapon in hand can fire or reload; 0 when ready. */
     draw: number;
-    /** Aim-down-sights progress in commands, 0 (hip) to the weapon's `adsTicks` (fully aimed). */
+    /** Aim-down-sights progress in commands, 0 (hip) to the weapon's `adsTicks` (fully aimed); 0 with the knife. */
     aim: number;
     /**
-     * 1 once the trigger has done something (a shot, a dry click, a reload on empty) and is still
-     * held; 0 once released. A semi-automatic weapon fires only while this is 0, so every shot needs
+     * 1 once the trigger has done something (a shot, a dry click, a reload on empty, a knife swing)
+     * and is still held; 0 once released. A semi-automatic weapon fires only while this is 0, so every shot needs
      * a new press. Part of the stepped state, never of wall-clock input.
      */
     trigger: number;
     readonly guns: GunState[];
+    /**
+     * The defender knife's windup and cooldown, the same rule as the ghosts' knife (`stepKnife`).
+     * Timers run every command; a swing starts and lands only while the knife is drawn, and
+     * switching away cancels a windup in progress (its cooldown keeps running).
+     */
+    readonly knife: KnifeState;
 }
 
 /** The fields of a command `stepLoadout` reads. `NetCmd` has them all. */
@@ -69,6 +76,9 @@ export interface LoadoutInput {
 export const GUN_IDLE = -1;
 export const GUN_RELOAD = -2;
 export const GUN_DRY = -3;
+/** What `stepLoadout` returns for the knife in hand: a swing started (the windup), or it landed. */
+export const MELEE_SWING = -4;
+export const MELEE_SLASH = -5;
 
 const SINCE_SHOT_CAP = 255;
 
@@ -155,10 +165,13 @@ export function stepGun(g: GunState, def: WeaponDef, fire: boolean, reload: bool
 }
 
 /** Where Q goes before any switch: the second slot. */
-const FIRST_PREV = WEAPON_COUNT > 1 ? 1 : 0;
+const FIRST_PREV = SLOT_COUNT > 1 ? 1 : 0;
 
 export function createLoadout(): LoadoutState {
-    return { slot: 0, prev: FIRST_PREV, draw: 0, aim: 0, trigger: 0, guns: WEAPONS.map(d => createGunState(d)) };
+    return {
+        slot: 0, prev: FIRST_PREV, draw: 0, aim: 0, trigger: 0, guns: WEAPONS.map(d => createGunState(d)),
+        knife: createKnifeState()
+    };
 }
 
 /** Every weapon full, the first slot in hand and ready: every spawn (so every round start). */
@@ -168,12 +181,23 @@ export function resetLoadout(l: LoadoutState): void {
     l.draw = 0;
     l.aim = 0;
     l.trigger = 0;
-    for (let i = 0; i < WEAPON_COUNT; i++) resetGun(l.guns[i], WEAPONS[i]);
+    for (let i = 0; i < GUN_COUNT; i++) resetGun(l.guns[i], WEAPONS[i]);
+    resetKnife(l.knife);
 }
 
-/** Death: reloads in progress give nothing. */
+/**
+ * Practice range: every gun's spare rounds back to full. Called after `stepLoadout` for every command
+ * a defender simulates in a practice room, by the server and by the client's prediction and replay
+ * alike (the client knows from `welcome.practice`), so reloading never runs out and both sides agree.
+ */
+export function fillReserves(l: LoadoutState): void {
+    for (let i = 0; i < GUN_COUNT; i++) l.guns[i].reserve = WEAPONS[i].reserve;
+}
+
+/** Death: reloads in progress give nothing, and a knife swing in progress never lands. */
 export function cancelReloads(l: LoadoutState): void {
-    for (let i = 0; i < WEAPON_COUNT; i++) l.guns[i].reload = 0;
+    for (let i = 0; i < GUN_COUNT; i++) l.guns[i].reload = 0;
+    resetKnife(l.knife);
 }
 
 export function copyLoadout(dst: LoadoutState, src: LoadoutState): void {
@@ -182,68 +206,79 @@ export function copyLoadout(dst: LoadoutState, src: LoadoutState): void {
     dst.draw = src.draw;
     dst.aim = src.aim;
     dst.trigger = src.trigger;
-    for (let i = 0; i < WEAPON_COUNT; i++) copyGunState(dst.guns[i], src.guns[i]);
+    for (let i = 0; i < GUN_COUNT; i++) copyGunState(dst.guns[i], src.guns[i]);
+    copyKnifeState(dst.knife, src.knife);
 }
 
 export function sameLoadout(a: LoadoutState, b: LoadoutState): boolean {
     if (a.slot !== b.slot || a.prev !== b.prev || a.draw !== b.draw || a.aim !== b.aim || a.trigger !== b.trigger) return false;
-    for (let i = 0; i < WEAPON_COUNT; i++) if (!sameGunState(a.guns[i], b.guns[i])) return false;
-    return true;
+    for (let i = 0; i < GUN_COUNT; i++) if (!sameGunState(a.guns[i], b.guns[i])) return false;
+    return sameKnifeState(a.knife, b.knife);
 }
 
-/** The weapon in hand. */
-export const heldWeapon = (l: LoadoutState): WeaponDef => WEAPONS[l.slot];
-export const heldGun = (l: LoadoutState): GunState => l.guns[l.slot];
+/** The gun in hand, or null while the knife is drawn. */
+export const heldWeapon = (l: LoadoutState): WeaponDef | null => (isGunSlot(l.slot) ? WEAPONS[l.slot] : null);
+export const heldGun = (l: LoadoutState): GunState | null => (isGunSlot(l.slot) ? l.guns[l.slot] : null);
+/** The knife is the weapon in hand. */
+export const holdingKnife = (l: LoadoutState): boolean => l.slot === SLOT_KNIFE;
 
 /** True only on the command a switch started (for its sound and motion). */
-export const justSwitched = (l: LoadoutState): boolean => l.draw > 0 && l.draw === WEAPONS[l.slot].drawTicks;
+export const justSwitched = (l: LoadoutState): boolean => l.draw > 0 && l.draw === drawTicksOf(l.slot);
 
 /**
  * Advances everything a defender carries by one processed command: weapon selection, the switch,
- * aim down sights, the trigger edge, then every weapon. Run for every command a living defender
- * simulates, by the server and by the client's prediction and replay alike, with the same inputs.
- * `armed` is false during the freeze and while defusing. Returns what the weapon in hand did (see
- * `stepGun`); after a shot, `shotDirectionFor` gives where it went.
+ * aim down sights, the trigger edge, then every gun and the knife. Run for every command a living
+ * defender simulates, by the server and by the client's prediction and replay alike, with the same
+ * inputs. `armed` is false during the freeze and while defusing. Returns what the weapon in hand did:
+ * for a gun see `stepGun` (after a shot, `shotDirectionFor` gives where it went); for the knife
+ * MELEE_SWING (a windup started), MELEE_SLASH (the swing landed: resolve the hit) or GUN_IDLE.
  */
 export function stepLoadout(l: LoadoutState, c: LoadoutInput, armed: boolean): number {
     let want = l.slot;
-    if (c.slot > 0 && c.slot <= WEAPON_COUNT) want = c.slot - 1;
+    if (c.slot > 0 && c.slot <= SLOT_COUNT) want = c.slot - 1;
     else if (c.swap) want = l.prev;
     if (want !== l.slot) {
-        l.guns[l.slot].reload = 0; // switching cancels a reload, and a cancelled reload gives nothing
+        // Switching cancels a reload (a cancelled reload gives nothing) or a knife windup (it never lands).
+        if (isGunSlot(l.slot)) l.guns[l.slot].reload = 0;
+        else l.knife.windup = 0;
         l.prev = l.slot;
         l.slot = want;
-        l.draw = WEAPONS[want].drawTicks;
-        // Aim keeps easing out at the usual rate, measured in the new weapon's steps.
-        if (l.aim > WEAPONS[want].adsTicks) l.aim = WEAPONS[want].adsTicks;
+        l.draw = drawTicksOf(want);
+        // Aim keeps easing out at the usual rate, measured in the new gun's steps; the knife has no aim.
+        if (!isGunSlot(want)) l.aim = 0;
+        else if (l.aim > WEAPONS[want].adsTicks) l.aim = WEAPONS[want].adsTicks;
     } else if (l.draw > 0) l.draw--;
 
-    const def = WEAPONS[l.slot];
-    const gun = l.guns[l.slot];
     const ready = l.draw === 0;
-    if (c.aim && ready && gun.reload === 0) {
+    const knifeInHand = l.slot === SLOT_KNIFE;
+    const def = knifeInHand ? null : WEAPONS[l.slot];
+    const gun = knifeInHand ? null : l.guns[l.slot];
+    if (def && gun && c.aim && ready && gun.reload === 0) {
         if (l.aim < def.adsTicks) l.aim++;
     } else if (l.aim > 0) l.aim--;
 
-    const fire = c.fire && (def.auto || l.trigger === 0);
+    // A semi-automatic gun needs a fresh press per shot; the knife swings while held, like the ghosts'.
+    const fire = c.fire && (!def || def.auto || l.trigger === 0);
     let result = GUN_IDLE;
-    for (let i = 0; i < WEAPON_COUNT; i++) {
-        if (i === l.slot) result = stepGun(gun, def, fire, c.reload, armed && ready);
+    for (let i = 0; i < GUN_COUNT; i++) {
+        if (i === l.slot) result = stepGun(gun!, def!, fire, c.reload, armed && ready);
         else stepGun(l.guns[i], WEAPONS[i], false, false, false);
     }
+    const k = stepKnife(l.knife, knifeInHand && fire, knifeInHand && armed && ready);
+    if (knifeInHand) result = k === KNIFE_SWING ? MELEE_SWING : k === KNIFE_SLASH ? MELEE_SLASH : GUN_IDLE;
     if (!c.fire) l.trigger = 0;
     else if (fire && result !== GUN_IDLE) l.trigger = 1;
     return result;
 }
 
-/** Aim-down-sights progress 0..1 of the weapon in hand. */
+/** Aim-down-sights progress 0..1 of the weapon in hand (always 0 with the knife). */
 export function aimFraction(l: LoadoutState): number {
-    return l.aim / WEAPONS[l.slot].adsTicks;
+    return isGunSlot(l.slot) ? l.aim / WEAPONS[l.slot].adsTicks : 0;
 }
 
-/** Recoil multiplier for the weapon in hand: 1 from the hip, `adsRecoil` fully aimed. */
+/** Recoil multiplier for the gun in hand: 1 from the hip, `adsRecoil` fully aimed; 1 with the knife. */
 export function recoilScale(l: LoadoutState): number {
-    return 1 - aimFraction(l) * (1 - WEAPONS[l.slot].adsRecoil);
+    return isGunSlot(l.slot) ? 1 - aimFraction(l) * (1 - WEAPONS[l.slot].adsRecoil) : 1;
 }
 
 const DEG = Math.PI / 180;
@@ -287,10 +322,10 @@ function hash32(x: number): number {
 
 /**
  * Spread seed of the shot `stepLoadout` just fired: the weapon's shot count, which the server
- * keeps, plus the slot so the two weapons do not repeat each other.
+ * keeps, plus the slot so the two weapons do not repeat each other. Only meaningful for a gun.
  */
 export function spreadSeed(l: LoadoutState): number {
-    return l.guns[l.slot].shots + l.slot * 256;
+    return isGunSlot(l.slot) ? l.guns[l.slot].shots + l.slot * 256 : 0;
 }
 
 /**
@@ -330,6 +365,7 @@ export function shotDirection(
 /**
  * Where the shot `stepLoadout` just fired (pattern index `index`) went, for a shooter in state `s`
  * looking along `yaw`/`pitch`. The server traces this; the client draws its predicted tracer along it.
+ * Call it only after a shot (`stepLoadout` returned 0 or more), so a gun is in hand.
  */
 export function shotDirectionFor(
     l: LoadoutState, s: PlayerState, yaw: number, pitch: number, index: number, shooter: number, out: Vec3

@@ -119,15 +119,23 @@ interface TextureOptions {
     anisotropy: number;
 }
 
-function loadTexture(app: pc.Application, url: string, opt: TextureOptions): Promise<pc.Texture> {
+/**
+ * Maps share texture files (the same URL is one cached resource), so unloading one map's texture would blank
+ * the next map's. Each loaded texture counts its holders by URL and is unloaded only when the last one lets go.
+ */
+const textureHolders = new Map<string, number>();
+
+function loadTexture(app: pc.Application, url: string, opt: TextureOptions, loaded: pc.Asset[]): Promise<pc.Texture> {
     return new Promise((resolve, reject) => {
         const asset = new pc.Asset(url, 'texture', { url }, { srgb: true, mipmaps: opt.mipmaps });
+        loaded.push(asset);
         asset.once('load', () => {
             const texture = asset.resource as pc.Texture | undefined;
             if (!texture) {
                 reject(new Error(`Texture ${url} loaded without a resource`));
                 return;
             }
+            textureHolders.set(url, (textureHolders.get(url) ?? 0) + 1);
             // Enforce settings regardless of how the asset system interpreted the data block.
             texture.minFilter = opt.mipmaps ? pc.FILTER_LINEAR_MIPMAP_LINEAR : pc.FILTER_LINEAR;
             texture.magFilter = pc.FILTER_LINEAR;
@@ -169,7 +177,7 @@ function worldMaterial(name: string, albedo: pc.Texture, light: pc.Texture, tile
     return material;
 }
 
-function addSky(camera: pc.Entity, sky: pc.Texture, elevMin: number): void {
+function addSky(camera: pc.Entity, sky: pc.Texture, elevMin: number): pc.Entity {
     const material = new pc.ShaderMaterial({
         uniqueName: 'map_sky',
         attributes: { aPosition: pc.SEMANTIC_POSITION },
@@ -195,22 +203,26 @@ function addSky(camera: pc.Entity, sky: pc.Texture, elevMin: number): void {
     entity.setLocalScale(10, 10, 10);
     camera.addChild(entity);
     for (const mi of entity.render!.meshInstances) mi.cull = false;
+    return entity;
 }
 
 /**
  * Loads the lightmap, albedo textures and sky named in `mapData.look`, gives every mesh
  * instance under `mapRoot` its baked-light material and adds the sky to `camera`.
  * Rejects if anything fails to load (the map then keeps its plain GLB materials).
+ * Returns a function that takes it all away again (the sky, the materials and the textures), for a
+ * map change: call it when the map is unloaded.
  */
 export async function applyMapLook(app: pc.Application, mapRoot: pc.Entity, camera: pc.Entity,
-    mapData: MapData, baseUrl: string): Promise<void> {
+    mapData: MapData, baseUrl: string): Promise<() => void> {
     const look: MapLook | undefined = mapData.look;
     if (!look) throw new Error('applyMapLook: map has no look data');
+    const loaded: pc.Asset[] = [];
     const albedoFiles = [...new Set(Object.values(look.materials).map(m => m.albedo))];
     const [light, sky, ...albedos] = await Promise.all([
-        loadTexture(app, baseUrl + look.lightmap, { mipmaps: true, repeat: false, anisotropy: MAX_ANISOTROPY }),
-        loadTexture(app, baseUrl + look.sky.texture, { mipmaps: false, repeat: true, clampV: true, anisotropy: 1 }),
-        ...albedoFiles.map(f => loadTexture(app, baseUrl + f, { mipmaps: true, repeat: true, anisotropy: MAX_ANISOTROPY }))
+        loadTexture(app, baseUrl + look.lightmap, { mipmaps: true, repeat: false, anisotropy: MAX_ANISOTROPY }, loaded),
+        loadTexture(app, baseUrl + look.sky.texture, { mipmaps: false, repeat: true, clampV: true, anisotropy: 1 }, loaded),
+        ...albedoFiles.map(f => loadTexture(app, baseUrl + f, { mipmaps: true, repeat: true, anisotropy: MAX_ANISOTROPY }, loaded))
     ]);
     const albedoByFile = new Map(albedoFiles.map((f, i) => [f, albedos[i]]));
 
@@ -232,5 +244,16 @@ export async function applyMapLook(app: pc.Application, mapRoot: pc.Entity, came
         }
     }
     if (count === 0) throw new Error('applyMapLook: no mesh instances found under the map root');
-    addSky(camera, sky, look.sky.elevMin);
+    const skyEntity = addSky(camera, sky, look.sky.elevMin);
+    return () => {
+        skyEntity.destroy();
+        for (const m of materials.values()) m.destroy();
+        for (const a of loaded) {
+            const url = a.name; // the asset was named by its URL
+            const left = (textureHolders.get(url) ?? 1) - 1;
+            if (left > 0) textureHolders.set(url, left);
+            else { textureHolders.delete(url); a.unload(); }
+            app.assets.remove(a);
+        }
+    };
 }

@@ -1,7 +1,8 @@
 import type * as pc from 'playcanvas';
-import type { RosterEntry, Team } from '@shared/protocol';
+import type { DamageKind, RosterEntry, Team } from '@shared/protocol';
 import type { Phase, RoundReason } from '@shared/rules';
-import type { Vec3 } from '@shared/types';
+import type { Box, Vec3 } from '@shared/types';
+import type { HitZone } from '@shared/zones';
 
 /** Another player, already interpolated for this frame. `pos` is the feet position. */
 export interface RemoteView {
@@ -21,7 +22,10 @@ export interface RemoteView {
     vis: number;
     /** A defender in the middle of a reload (rifle 2.2 s, pistol 1.4 s); always false for ghosts. */
     reloading: boolean;
-    /** Slot of the weapon a defender holds: an index into WEAPONS (shared/weapons.ts). 0 for ghosts. */
+    /**
+     * Slot of the weapon a defender holds: an index into WEAPONS (shared/weapons.ts) for a gun, or
+     * SLOT_KNIFE (2) for the defender knife. 0 for ghosts.
+     */
     weapon: number;
     /** A defender drawing a weapon it just switched to (0.25 to 0.4 s). */
     switching: boolean;
@@ -29,7 +33,7 @@ export interface RemoteView {
     aiming: boolean;
 }
 
-/** One carried weapon's ammunition, for the HUD's indicator of the other slots. */
+/** One carried weapon's ammunition, for the HUD's slot indicator. The knife slot has none (both 0). */
 export interface WeaponSlotView {
     mag: number;
     reserve: number;
@@ -49,20 +53,31 @@ export interface LocalView {
     firing: boolean;
     /** The local player's own visibility, same scale as RemoteView.vis. Only meaningful for ghosts. */
     vis: number;
-    /** True when holding the use key (E) would plant (ghosts) or defuse (defenders) right now. */
+    /**
+     * True when holding the use key (E) would plant (ghosts) or defuse (defenders) right now. For ghosts
+     * only the bomb carrier can plant, so this is never true for a ghost without the bomb.
+     */
     canAct: boolean;
+    /** A living ghost carrying the bomb (show "You have the bomb"). Always false for defenders. */
+    carrier: boolean;
+    /**
+     * A living ghost standing where the carrier could plant (in a site, on the ground, live round) without
+     * the bomb: show "Only the bomb carrier can plant" instead of the plant prompt.
+     */
+    siteNoBomb: boolean;
     /** Plant or defuse progress 0..1; 0 when not doing either. */
     action: number;
     /** True while the scoreboard key (Tab) is held. */
     showScores: boolean;
     /**
-     * Slot in hand (index into WEAPONS, shared/weapons.ts, which has each weapon's id, label, magazine
-     * size and timings). Defenders only; changes the moment a switch starts. Ignore for ghosts.
+     * Slot in hand: a gun (index into WEAPONS, shared/weapons.ts, which has each gun's id, label, magazine
+     * size and timings) or SLOT_KNIFE (the defender knife, DEFENDER_KNIFE; `slotLabel` names any slot).
+     * Defenders only; changes the moment a switch starts. Ignore for ghosts.
      */
     weapon: number;
-    /** Every carried weapon by slot, including the one in hand. Reused between frames. */
+    /** Every carried slot (SLOT_COUNT of them: the guns, then the knife), including the one in hand. Reused between frames. */
     weapons: readonly WeaponSlotView[];
-    /** Weapon in hand (ignore for ghosts): rounds in the magazine, magazine capacity, spare rounds. */
+    /** Gun in hand (ignore for ghosts and with the knife: all 0): rounds in the magazine, magazine capacity, spare rounds. */
     mag: number;
     magSize: number;
     reserve: number;
@@ -113,6 +128,17 @@ export interface MatchView {
     scoreDefenders: number;
     /** World position of the planted bomb (on the floor), or null. Stays set through `over` if it was planted. */
     bombPos: Vec3 | null;
+    /**
+     * World position (on the floor) of a dropped bomb the local player knows about, or null: ghosts always
+     * know where it lies; defenders only while it is in their line of sight. Never set together with a
+     * planted `bombPos`. Drawn with the same model as the planted bomb, unlit.
+     */
+    droppedBomb: Vec3 | null;
+    /**
+     * Player id of the ghost carrying the bomb, for the scoreboard mark and the match bar; 0 when nobody
+     * carries it or the local player is a defender (defenders are never told).
+     */
+    carrierId: number;
     /** Who won the round; only during `over`. */
     winner: Team | null;
     reason: RoundReason | null;
@@ -120,7 +146,8 @@ export interface MatchView {
     matchOver: boolean;
 }
 
-export type KillKind = 'shot' | 'headshot' | 'knife' | 'backstab';
+/** How a hit or kill was made (shared/protocol.ts); shots also come with the body zone they hit. */
+export type KillKind = DamageKind;
 
 /**
  * Everything visual and on-screen that is not the map or the camera transform.
@@ -136,20 +163,54 @@ export interface Presenter {
      * (index into WEAPONS). Vectors are only valid during the call.
      */
     shot(from: Vec3, to: Vec3, isLocal: boolean, weapon: number): void;
-    /** The local player (a ghost) started a knife swing; it lands `windupSeconds` later. */
+    /**
+     * The room's suppressed-weapons option (welcome): true draws suppressors on both guns (first and third
+     * person) and today's small muzzle flash; false draws bare muzzles and a large, bright flash. Called once
+     * after joining, before any shot; may be called again.
+     */
+    setSuppressed(on: boolean): void;
+    /** The local player (a ghost, or a defender holding the knife) started a knife swing; it lands `windupSeconds` later. */
     knifeSwing(windupSeconds: number): void;
-    /** The local player's attack hit someone. */
-    hitConfirm(head: boolean, killed: boolean): void;
+    /**
+     * Another player (by id) started a knife swing (the windup sound the server sends within earshot): a defender
+     * holding the knife, or a ghost, starts its third-person swing. Players the presenter is not drawing are ignored.
+     */
+    remoteSwing(id: number): void;
+    /**
+     * Another player's knife swing landed (the server's slash event, hit or miss): its third-person swing strikes
+     * now, whether or not its windup was seen. Ignored for players not drawn.
+     */
+    remoteSlash(id: number): void;
+    /**
+     * The map's solid boxes, the array the game simulates against (refilled in place when the room changes map).
+     * Called once after creation. Used only for looks: a dead player's body is laid down where it does not go into
+     * a wall.
+     */
+    setWorld(boxes: readonly Box[]): void;
+    /**
+     * The local player's attack hit someone. `zone` is where a shot landed (head, torso, arms or legs); null
+     * for a knife hit. The marker looks different for a headshot, a limb (arms or legs) and a kill.
+     */
+    hitConfirm(zone: HitZone | null, killed: boolean): void;
     /**
      * The local player took damage. `bearing` is the world direction toward the attacker in radians
      * (yaw convention: 0 faces -Z), or NaN if unknown; it is drawn around the crosshair, turning with the view.
      */
     damaged(amount: number, bearing: number): void;
-    /** The local player was killed: shown as a recap line under the death message. `distance` in metres. */
-    died(killerName: string, kind: KillKind, distance: number, weapon?: string): void;
+    /**
+     * The local player was killed: shown as a recap line under the death message. `distance` in metres;
+     * `zone` where the killing shot landed (null for the knife); `weapon` the gun's or knife's name if known.
+     */
+    died(killerName: string, kind: KillKind, zone: HitZone | null, distance: number, weapon?: string): void;
     /** Player crosshair choice (settings). */
     setCrosshair(c: CrosshairConfig): void;
-    killFeed(killerId: number, victimId: number, kind: KillKind, weapon?: string): void;
+    /**
+     * A short line about the bomb for a ghost ("Ana has the bomb", "Bomb dropped", "Picked up by Ana"),
+     * shown under the crosshair area for a few seconds. A newer one replaces it.
+     */
+    bombNotice(text: string): void;
+    /** A kill anywhere in the room. `zone` as in `died`. */
+    killFeed(killerId: number, victimId: number, kind: KillKind, zone: HitZone | null, weapon?: string): void;
 }
 
 export type CreatePresenter = (app: pc.Application, camera: pc.Entity) => Presenter;

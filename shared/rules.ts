@@ -22,7 +22,6 @@ export const MATCH_OVER_MS = 20_000;
 export const IDLE_ROUNDS = 2;
 /** A match that lost a whole team is held this long, waiting for players to return, before the room resets. */
 export const GRACE_MS = 60_000;
-export const IDLE_MS = 90_000;
 /** Hold times, counted in the player's own commands (60 per second). */
 export const PLANT_TICKS = 180;
 export const DEFUSE_TICKS = 300;
@@ -40,10 +39,13 @@ export function insideSite(pos: Vec3, map: MapData): boolean {
     return false;
 }
 
-/** Whether holding the use key does something for this player right now (plant or defuse). */
-export function canAct(team: Team, phase: Phase, state: PlayerState, map: MapData, bomb: Vec3 | null): boolean {
+/**
+ * Whether holding the use key does something for this player right now: plant (only the ghost carrying
+ * the bomb, `carrier`, in a site during a live round) or defuse. `carrier` is ignored for defenders.
+ */
+export function canAct(team: Team, phase: Phase, state: PlayerState, map: MapData, bomb: Vec3 | null, carrier: boolean): boolean {
     if (!state.onGround) return false;
-    if (team === 'ghosts') return phase === 'live' && insideSite(state.pos, map);
+    if (team === 'ghosts') return carrier && phase === 'live' && insideSite(state.pos, map);
     return phase === 'planted' && bomb !== null &&
         Math.hypot(state.pos[0] - bomb[0], state.pos[2] - bomb[2]) <= DEFUSE_RANGE &&
         Math.abs(state.pos[1] - bomb[1]) < 1.5;
@@ -54,7 +56,7 @@ export function canAct(team: Team, phase: Phase, state: PlayerState, map: MapDat
  * Client and server both apply this before simulating, so prediction matches.
  */
 export function movementLocked(
-    use: boolean, team: Team, phase: Phase, state: PlayerState, map: MapData, bomb: Vec3 | null
+    use: boolean, team: Team, phase: Phase, state: PlayerState, map: MapData, bomb: Vec3 | null, carrier: boolean
 ): boolean {
-    return phase === 'freeze' || (use && canAct(team, phase, state, map, bomb));
+    return phase === 'freeze' || (use && canAct(team, phase, state, map, bomb, carrier));
 }

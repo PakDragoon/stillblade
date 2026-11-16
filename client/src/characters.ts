@@ -1,7 +1,8 @@
 import * as pc from 'playcanvas';
-import { WEAPONS } from '@shared/weapons';
+import { TICK_RATE } from '@shared/constants';
+import { SLOT_COUNT, SLOT_KNIFE, WEAPONS } from '@shared/weapons';
 import type { RemoteView } from './presenter-api';
-import { instantiateWeapon, WEAPON_MESH, type WeaponModel } from './weapons';
+import { instantiateWeapon, WEAPON_MESH, type WeaponInstance, type WeaponModel } from './weapons';
 
 /**
  * Animated remote-player characters.
@@ -14,8 +15,10 @@ import { instantiateWeapon, WEAPON_MESH, type WeaponModel } from './weapons';
  * Animation runs on PlayCanvas's `anim` component:
  *   - "Base" layer: idle / walk / run / crouch_idle / crouch_walk / death, switched with
  *     `layer.transition(name, 0.15)` only when the state changes (no per-frame allocation).
- *   - "Upper" layer: masked to the spine and arms, weight 0 at rest; plays the one-shot
- *     slash / hit clips over whatever the legs are doing, then fades out.
+ *   - "Upper" layer: masked to the spine and arms. Defenders hold their weapon on it at full weight (rifle "aim",
+ *     one-handed "pistol", "knife_hold"); ghosts leave it at weight 0 and fade in only for a swing or a flinch.
+ *     Reloads and knife swings are time-synced one-shots: the layer's clip time is set every frame from real seconds
+ *     (`activeStateCurrentTime`), so they keep the rule's timing whatever speed the legs play at.
  * The state comes from RemoteView only: horizontal speed estimated from the frame-to-frame
  * change of `pos` (exponentially smoothed), `crouched`, and `alive`. Locomotion playback is
  * scaled by speed / (clip's own ground speed) so feet slide as little as possible.
@@ -26,14 +29,21 @@ import { instantiateWeapon, WEAPON_MESH, type WeaponModel } from './weapons';
  *   - Ally ghost: the same shader, steady violet, fixed opacity.
  *
  * Weapons (weapons.ts) hang from the "socket_gun" / "socket_knife" nodes on the right wrist bone:
- *   - Defenders carry every weapon in the table (shared/weapons.ts; same vertex-colour material as the body),
- *     all in socket_gun with only the one in hand (RemoteView.weapon) enabled, and hold it with the "aim" pose
- *     on the upper layer at full weight; a remote shot plays "shoot" (a recoil that ends on the aim pose).
- *     After the animation is applied, the spine is bent by the aim pitch; the same bones also dip the gun to a
- *     low hold while RemoteView.reloading, dip it briefly while switching, and bring the head down to the gun
- *     while aiming (procedural, no clips).
+ *   - Defenders carry every gun in the table (shared/weapons.ts; same vertex-colour material as the body),
+ *     all in socket_gun with only the one in hand (RemoteView.weapon) enabled, held with the rifle's two-handed
+ *     "aim" pose or the pistol's one-handed "pistol" pose; a remote shot plays "shoot" / "pistol_shoot" (a recoil
+ *     that ends on the hold). RemoteView.reloading plays "reload_rifle" (2.2 s) or "reload_pistol" (1.4 s) from
+ *     its start, cut back to the hold if the reload ends early. With the knife (slot SLOT_KNIFE) they hold it in
+ *     socket_knife ("knife_hold") and swing with "knife_swing": started by the windup sound (`swing`) and brought
+ *     to its strike by the server's slash event (`slash`), so the blade lands when the hit does.
+ *     Guns are drawn bare or suppressed by the room option (`setSuppressed`, weapons.ts): one mesh either way.
+ *     After the animation is applied, the spine is bent by the aim pitch; the same bones also dip the weapon
+ *     briefly while switching, bring the head down to the gun while aiming, and lean the back forward while
+ *     crouched (the hold clips are upright; the arms and head turn back so the weapon stays level).
  *   - Ghosts carry the knife, drawn with the body's own material and per-instance parameters, so it is
- *     exactly as visible as the body (and disabled with it when the player is culled).
+ *     exactly as visible as the body (and disabled with it when the player is culled). Their swing is the same
+ *     "knife_swing", driven by the same two events (not guessed from visibility); a flinch ("hit") is still
+ *     inferred from the visibility spike a hit causes, the only signal there is for it.
  * Each character is therefore at most two draw calls: the skinned body and one weapon.
  */
 
@@ -60,9 +70,9 @@ const FADE = 0.15;
 /** A corpse lies this long after the death clip ends, then is hidden. */
 const CORPSE_TIME = 2.5;
 
-// Upper-body one-shots for enemy ghosts, inferred from server visibility spikes: a knife swing
-// forces vis to 0.6, damage to 0.8. A rise past SPIKE_START opens a short window; its peak
-// decides which clip plays. (Defenders carry no signal for either in RemoteView.)
+// Flinch for enemy ghosts, inferred from server visibility spikes: damage forces vis to 0.8 (a knife swing to 0.6,
+// which is ignored: swings come from their own events). A rise past SPIKE_START opens a short window; a peak at or
+// above SPIKE_HURT plays "hit".
 const SPIKE_START = 0.5;
 const SPIKE_WINDOW = 0.1;
 const SPIKE_HURT = 0.7;
@@ -75,13 +85,26 @@ const S_RUN = 'run';
 const S_CIDLE = 'crouch_idle';
 const S_CWALK = 'crouch_walk';
 const S_DEATH = 'death';
-const U_SLASH = 'slash';
 const U_HIT = 'hit';
-/** Defenders: static two-handed gun hold, and a short recoil that ends exactly on it (characters.py). */
+/** Defenders: static two-handed rifle hold, and a short recoil that ends exactly on it (characters.py). */
 const U_AIM = 'aim';
 const U_SHOOT = 'shoot';
+/** One-handed pistol hold and its recoil; reloads per gun; the knife hold and the knife swing (characters.py). */
+const U_PISTOL = 'pistol';
+const U_PISTOL_SHOOT = 'pistol_shoot';
+const U_KNIFE = 'knife_hold';
+const U_SWING = 'knife_swing';
+/** Clip seconds of the swing's windup (characters.py): the slash event brings the swing to this point. */
+const SWING_WINDUP = 0.2;
 const BASE_STATES = [S_IDLE, S_WALK, S_RUN, S_CIDLE, S_CWALK, S_DEATH];
-const UPPER_STATES = [U_SLASH, U_HIT, U_AIM, U_SHOOT];
+/** Per gun in the weapon table (shared/weapons.ts): hold, recoil and reload clips. */
+const GUN_HOLD: readonly string[] = WEAPONS.map(w => w.id === 'pistol' ? U_PISTOL : U_AIM);
+const GUN_SHOOT: readonly string[] = WEAPONS.map(w => w.id === 'pistol' ? U_PISTOL_SHOOT : U_SHOOT);
+const GUN_RELOAD: readonly string[] = WEAPONS.map(w => `reload_${w.id}`);
+const GUN_RELOAD_SECONDS: readonly number[] = WEAPONS.map(w => w.reloadTicks / TICK_RATE);
+const UPPER_STATES = [U_HIT, U_AIM, U_SHOOT, U_PISTOL, U_PISTOL_SHOOT, U_KNIFE, U_SWING, ...GUN_RELOAD];
+/** Fade into and out of the synced one-shots and between holds (s). */
+const HOLD_FADE = 0.12;
 const UPPER_ROOT_BONE = 'Abdomen';
 
 // Aim pitch (defenders): after the animation is applied, bones turn about the character's right axis so
@@ -92,10 +115,12 @@ const UPPER_ROOT_BONE = 'Abdomen';
 const PITCH_BONES = ['Abdomen', 'Chest', 'Neck', 'UpperArm.R', 'UpperArm.L'];
 const PITCH_SHARE = [0.2, 0.25, 0.3, 0.55, 0.55];
 const PITCH_LIMIT = 1.1;
-// Reload (defenders, RemoteView.reloading): the same bones dip the gun to a low, canted-in hold. Radians
-// per bone (negative tips forward/down), blended in and out over RELOAD_BLEND seconds. No clip, no asset.
-const RELOAD_DIP = [-0.05, -0.12, -0.15, -0.45, -0.45];
-const RELOAD_BLEND = 0.2;
+// Crouched with a weapon held: the hold clips keep the back upright, so lean it forward here (negative tips
+// forward) and turn the head and both upper arms back by the same amount, so the weapon and the eyes stay level.
+// Abdomen + Chest = -0.44, cancelled by +0.44 on the arms; the neck leaves the head 0.08 down. tools/blender/review.py
+// applies the same numbers to its crouch frames.
+const CROUCH_LEAN = [-0.32, -0.12, 0.36, 0.44, 0.44];
+const CROUCH_BLEND = 0.15;
 // Switching (RemoteView.switching, 0.25 to 0.4 s): a shorter, shallower dip, quick in and out.
 const SWITCH_DIP = [-0.03, -0.06, -0.05, -0.3, -0.3];
 const SWITCH_BLEND = 0.08;
@@ -283,22 +308,34 @@ export class Character {
     private armed = false;
     private tint: Float32Array | null = null;
     private fixedVis = 1;
-    /** One instance per weapon slot (only the held one enabled), and their muzzles. */
+    /** One instance per gun (only the held one enabled), each with its muzzle for the current look. */
     private readonly guns: pc.Entity[] = [];
-    private readonly gunMuzzles: (pc.GraphNode | null)[] = [];
-    /** Slot in hand. */
+    private readonly gunInstances: WeaponInstance[] = [];
+    /** Slot in hand (a gun, or SLOT_KNIFE). */
     private slot = 0;
+    /** The ghost's knife (ghost material) and the defender's (defender material), both in socket_knife. */
     private knife: pc.Entity | null = null;
     private knifeMi: pc.MeshInstance | null = null;
+    private defenderKnife: pc.Entity | null = null;
+    private suppressed = false;
     private readonly pitchBones: pc.GraphNode[] = [];
     private readonly pitchShare: number[] = [];
-    private readonly reloadDip: number[] = [];
+    private readonly crouchLean: number[] = [];
     private readonly switchDip: number[] = [];
     private readonly aimRaise: number[] = [];
-    /** Weights 0..1 of the reload dip, the switch dip and the aim raise. */
-    private reloadW = 0;
+    /** Weights 0..1 of the crouch lean, the switch dip and the aim raise. */
+    private crouchW = 0;
     private switchW = 0;
     private aimW = 0;
+    /**
+     * Time-synced one-shot on the upper layer (a reload or a knife swing): its clip, seconds since it started, clip
+     * seconds per real second, and its length in clip seconds. `syncClip` is null when none plays.
+     */
+    private syncClip: string | null = null;
+    private syncT = 0;
+    private syncRate = 1;
+    private syncDur = 0;
+    private wasReloading = false;
     private readonly qa = new pc.Quat();
     private readonly qb = new pc.Quat();
 
@@ -344,7 +381,7 @@ export class Character {
             if (!b) continue;
             this.pitchBones.push(b);
             this.pitchShare.push(PITCH_SHARE[i]);
-            this.reloadDip.push(RELOAD_DIP[i]);
+            this.crouchLean.push(CROUCH_LEAN[i]);
             this.switchDip.push(SWITCH_DIP[i]);
             this.aimRaise.push(AIM_RAISE[i]);
         }
@@ -360,9 +397,10 @@ export class Character {
             // Every gun's origin is its grip, so all share the socket; still one draw call, as only one is enabled.
             for (let i = 0; i < WEAPONS.length; i++) {
                 const g = instantiateWeapon(w, WEAPON_MESH[WEAPONS[i].id], this.model.defenderMat);
+                g.setSuppressed(this.suppressed);
                 gs.addChild(g.entity);
                 this.guns.push(g.entity);
-                this.gunMuzzles.push(g.muzzle);
+                this.gunInstances.push(g);
             }
         }
         if (ks) {
@@ -370,8 +408,60 @@ export class Character {
             ks.addChild(k.entity);
             this.knife = k.entity;
             this.knifeMi = k.meshInstance;
+            const dk = instantiateWeapon(w, 'knife', this.model.defenderMat);
+            ks.addChild(dk.entity);
+            this.defenderKnife = dk.entity;
         }
         this.applyWeaponLook();
+    }
+
+    /** The room's suppressed-weapons option: suppressors on both guns, or bare muzzles. */
+    setSuppressed(on: boolean): void {
+        this.suppressed = on;
+        for (const g of this.gunInstances) g.setSuppressed(on);
+    }
+
+    /** This player started a knife swing (its windup sound): a defender holding the knife, or a ghost. */
+    swing(): void {
+        if (!this.canSwing()) return;
+        this.startSync(U_SWING, 1, 0);
+    }
+
+    /** This player's swing landed (the slash event): strike now, from the end of the windup at the latest. */
+    slash(): void {
+        if (!this.canSwing()) return;
+        if (this.syncClip === U_SWING) {
+            if (this.syncT < SWING_WINDUP) this.syncT = SWING_WINDUP;
+        } else {
+            this.startSync(U_SWING, 1, SWING_WINDUP);
+        }
+    }
+
+    private canSwing(): boolean {
+        if (!this.alive || !this.upper) return false;
+        return this.armed ? this.slot === SLOT_KNIFE : this.look === CharLook.EnemyGhost || this.look === CharLook.AllyGhost;
+    }
+
+    /** Starts a time-synced one-shot at `from` real seconds in, `rate` clip seconds per second. */
+    private startSync(clip: string, rate: number, from: number): void {
+        if (!this.upper) return;
+        this.upperT = -1;
+        this.syncClip = clip;
+        this.syncRate = rate;
+        this.syncT = from;
+        this.syncDur = this.model.tracks.get(clip)!.duration;
+        this.upper.transition(clip, this.armed ? HOLD_FADE : 0);
+        this.upper.activeStateCurrentTime = from * rate;
+        if (!this.armed) this.upper.blendToWeight(1, UPPER_IN);
+        else this.upper.weight = 1;
+    }
+
+    /** Ends the synced one-shot: back to the weapon hold (defenders) or fade the layer out (ghosts). */
+    private endSync(): void {
+        this.syncClip = null;
+        if (!this.upper) return;
+        if (this.armed && this.alive) this.upper.transition(this.holdClip(), HOLD_FADE);
+        else this.upper.blendToWeight(0, UPPER_OUT);
     }
 
     setLook(look: CharLook, tint: Float32Array | null, fixedVis: number): void {
@@ -394,6 +484,7 @@ export class Character {
     private applyWeaponLook(): void {
         const ghost = this.look === CharLook.EnemyGhost || this.look === CharLook.AllyGhost;
         for (let i = 0; i < this.guns.length; i++) this.guns[i].enabled = this.look === CharLook.Defender && i === this.slot;
+        if (this.defenderKnife) this.defenderKnife.enabled = this.look === CharLook.Defender && this.slot === SLOT_KNIFE;
         if (this.knife && this.knifeMi) {
             this.knife.enabled = ghost;
             // Same material and parameters as the body: the knife is never more visible than its owner.
@@ -410,12 +501,18 @@ export class Character {
         this.holdPose();
     }
 
-    /** Upper layer at rest: the gun hold for defenders, nothing for ghosts. */
+    /** The hold clip for the slot in hand. */
+    private holdClip(): string {
+        return this.slot === SLOT_KNIFE ? U_KNIFE : GUN_HOLD[this.slot] ?? U_AIM;
+    }
+
+    /** Upper layer at rest: the weapon hold for defenders (gun or knife), nothing for ghosts. */
     private holdPose(): void {
         if (!this.upper) return;
         this.upperT = -1;
+        this.syncClip = null;
         if (this.armed && this.alive) {
-            this.upper.play(U_AIM);
+            this.upper.play(this.holdClip());
             this.upper.weight = 1;
         } else {
             this.upper.weight = 0;
@@ -424,14 +521,15 @@ export class Character {
 
     /** A remote shot by this player: recoil on the upper body. False if it cannot be shown. */
     shoot(): boolean {
-        if (!this.armed || !this.alive || !this.upper) return false;
-        this.upper.play(U_SHOOT);
+        if (!this.armed || !this.alive || !this.upper || this.slot === SLOT_KNIFE) return false;
+        if (this.syncClip) return true; // mid-reload: the flash and tracer still show, the reload keeps playing
+        this.upper.play(GUN_SHOOT[this.slot] ?? U_SHOOT);
         return true;
     }
 
     /** World position of the held gun's muzzle, or null without a gun in hand. Valid until the next change. */
     muzzle(): pc.Vec3 | null {
-        const m = this.armed ? this.gunMuzzles[this.slot] : null;
+        const m = this.armed ? this.gunInstances[this.slot]?.muzzle ?? null : null;
         return m ? m.getPosition() : null;
     }
 
@@ -442,16 +540,16 @@ export class Character {
     }
 
     /**
-     * Bend the spine by the aim pitch, plus the reload dip, switch dip and aim raise at weights `rw`, `sw`,
+     * Bend the spine by the aim pitch, plus the crouch lean, switch dip and aim raise at weights `cw`, `sw`,
      * `aw`. Must run after the animation has been applied this frame.
      */
-    private applyPitch(pitch: number, rw: number, sw: number, aw: number): void {
+    private applyPitch(pitch: number, cw: number, sw: number, aw: number): void {
         const p = pitch > PITCH_LIMIT ? PITCH_LIMIT : pitch < -PITCH_LIMIT ? -PITCH_LIMIT : pitch;
-        if (p > -1e-3 && p < 1e-3 && rw <= 0 && sw <= 0 && aw <= 0) return;
+        if (p > -1e-3 && p < 1e-3 && cw <= 0 && sw <= 0 && aw <= 0) return;
         const right = this.entity.parent ? this.entity.parent.right : this.entity.right;
         for (let i = 0; i < this.pitchBones.length; i++) {
             const b = this.pitchBones[i];
-            const a = p * this.pitchShare[i] + rw * this.reloadDip[i] + sw * this.switchDip[i] + aw * this.aimRaise[i];
+            const a = p * this.pitchShare[i] + cw * this.crouchLean[i] + sw * this.switchDip[i] + aw * this.aimRaise[i];
             // Positive angle about +right tips -Z (forward) up: positive pitch looks up.
             this.qa.setFromAxisAngle(right, a * DEG_PER_RAD);
             this.qb.copy(b.getRotation());
@@ -469,9 +567,10 @@ export class Character {
         this.upperT = -1;
         this.spikeT = -1;
         this.prevVis = 0;
-        this.reloadW = 0;
+        this.crouchW = 0;
         this.switchW = 0;
         this.aimW = 0;
+        this.wasReloading = false;
         this.holdPose();
         this.go(S_IDLE, 0);
     }
@@ -519,7 +618,9 @@ export class Character {
                 this.alive = false;
                 this.deadT = 0;
                 if (this.upper) { this.upper.weight = 0; this.upperT = -1; }
-                this.reloadW = 0;
+                this.syncClip = null;
+                this.wasReloading = false;
+                this.crouchW = 0;
                 this.switchW = 0;
                 this.aimW = 0;
                 this.anim.speed = 1;
@@ -566,7 +667,7 @@ export class Character {
                 if (vis > this.spikePeak) this.spikePeak = vis;
                 if (this.spikeT >= SPIKE_WINDOW) {
                     this.spikeT = -1;
-                    this.playUpper(this.spikePeak >= SPIKE_HURT ? U_HIT : U_SLASH);
+                    if (this.spikePeak >= SPIKE_HURT && !this.syncClip) this.playUpper(U_HIT);
                 }
             }
             this.prevVis = vis;
@@ -579,16 +680,35 @@ export class Character {
             }
         }
         if (this.armed) {
-            const slot = v.weapon >= 0 && v.weapon < this.guns.length ? v.weapon : 0;
+            const slot = v.weapon >= 0 && v.weapon < SLOT_COUNT ? v.weapon : 0;
             if (slot !== this.slot) {
                 this.slot = slot;
                 this.applyWeaponLook();
+                this.syncClip = null;
+                if (this.upper) this.upper.transition(this.holdClip(), HOLD_FADE);
             }
-            this.reloadW = blendTo(this.reloadW, v.reloading, dt / RELOAD_BLEND);
+            // Reload: from its first frame, timed to the rule; back to the hold if it ends early.
+            const reloading = v.reloading && slot !== SLOT_KNIFE;
+            if (reloading && !this.wasReloading) {
+                const clip = GUN_RELOAD[slot];
+                this.startSync(clip, this.model.tracks.get(clip)!.duration / GUN_RELOAD_SECONDS[slot], 0);
+            } else if (!reloading && this.wasReloading && this.syncClip === GUN_RELOAD[slot]) {
+                this.endSync();
+            }
+            this.wasReloading = reloading;
             this.switchW = blendTo(this.switchW, v.switching, dt / SWITCH_BLEND);
             this.aimW = blendTo(this.aimW, v.aiming && !v.reloading, dt / AIM_BLEND);
+            this.crouchW = blendTo(this.crouchW, v.crouched, dt / CROUCH_BLEND);
+        }
+        if (this.syncClip && this.upper) {
+            this.syncT += dt;
+            const t = this.syncT * this.syncRate;
+            if (t >= this.syncDur) this.endSync();
+            else this.upper.activeStateCurrentTime = t;
+        }
+        if (this.armed) {
             // Smoothstep so each starts and ends gently.
-            this.applyPitch(v.pitch, smooth(this.reloadW), smooth(this.switchW), smooth(this.aimW));
+            this.applyPitch(v.pitch, smooth(this.crouchW), smooth(this.switchW), smooth(this.aimW));
         }
         return true;
     }
