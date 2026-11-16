@@ -1,7 +1,7 @@
 import type * as pc from 'playcanvas';
 import type { DamageKind, RosterEntry, Team } from '@shared/protocol';
 import type { Phase, RoundReason } from '@shared/rules';
-import type { Vec3 } from '@shared/types';
+import type { Box, Vec3 } from '@shared/types';
 import type { HitZone } from '@shared/zones';
 
 /** Another player, already interpolated for this frame. `pos` is the feet position. */
@@ -171,8 +171,22 @@ export interface Presenter {
     setSuppressed(on: boolean): void;
     /** The local player (a ghost, or a defender holding the knife) started a knife swing; it lands `windupSeconds` later. */
     knifeSwing(windupSeconds: number): void;
-    /** Another player (by id) started a knife swing: a defender holding the knife plays its swing in third person. */
+    /**
+     * Another player (by id) started a knife swing (the windup sound the server sends within earshot): a defender
+     * holding the knife, or a ghost, starts its third-person swing. Players the presenter is not drawing are ignored.
+     */
     remoteSwing(id: number): void;
+    /**
+     * Another player's knife swing landed (the server's slash event, hit or miss): its third-person swing strikes
+     * now, whether or not its windup was seen. Ignored for players not drawn.
+     */
+    remoteSlash(id: number): void;
+    /**
+     * The map's solid boxes, the array the game simulates against (refilled in place when the room changes map).
+     * Called once after creation. Used only for looks: a dead player's body is laid down where it does not go into
+     * a wall.
+     */
+    setWorld(boxes: readonly Box[]): void;
     /**
      * The local player's attack hit someone. `zone` is where a shot landed (head, torso, arms or legs); null
      * for a knife hit. The marker looks different for a headshot, a limb (arms or legs) and a kill.

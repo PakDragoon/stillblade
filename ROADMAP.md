@@ -41,7 +41,7 @@ The owner has no game development experience and expects the game to have every 
 | 2 | C. Bomb carrier (**built and reviewed; merged into branch `wave-2`, protocol 11; not yet on `main`; never seen in a browser**) | Opus 5.5 | A merged |
 | 2 | D. Rooms and community: room list, room options, vote kick, name filter, map vote (**built and reviewed; merged into branch `wave-2`, protocol 12; not yet on `main`; never seen in a browser**) | Sonnet 5.5 | A merged |
 | 3 | E. Bots that fight, and a practice range | Opus 5.5 | C merged |
-| 3 | F. Hands and animations: first-person hands, real reloads, pistol pose, knife | Opus 5.5 | A merged |
+| 3 | F. Hands and animations: first-person hands, real reloads, pistol pose, knife (**built on branch `claude/hands-animations-672638` from `wave-2`, no protocol change; not yet reviewed or merged; seen only in Blender renders, never in the game**) | Opus 5.5 | A merged |
 | 4 | G. Graphics tiers and effects | Opus 5.5 | F merged |
 | 4 | H. Recorded sounds | Sonnet 5.5 | A merged |
 | 5 | I. Grenades | Opus 5.5 | friends' feedback, G merged |
@@ -134,6 +134,8 @@ A player who opens the game alone should have something to do.
 **Done means:** tests that a bot never acts on information `knowsAbout` withholds, reaches both sites on both maps, plants and defuses, and that fill adds and removes bots correctly; a full bot-versus-bot match completing on each map (run once each); the bench numbers; the old `tools/bot.ts` kept for scripted tests.
 
 ## F. Hands and animations (Opus 5.5)
+
+**Status (2026-11-16): built on `claude/hands-animations-672638` (from `wave-2`); client and art only, `shared/` untouched, no protocol change. `HANDOFF.md` ("Package F (hands and animations) in detail") lists what was built, the decisions taken (one skinned mesh per weapon rig, clips sampled by reload progress, suppressor hidden by a bone, the swing driven by the windup and slash events, the body turned toward open floor), draw calls, and what was not verified. For the reviewer: nothing was seen in the game; check the hands at real screen sizes first.** The specification below is kept as written.
 
 Art pipeline plus presentation. CC0 sources already approved: Poly Haven, ambientCG, Quaternius, Kenney, KayKit; record every file in a `CREDITS.md`.
 

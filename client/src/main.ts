@@ -185,6 +185,7 @@ async function start(): Promise<void> {
     // Audio needs the map's boxes for occlusion; the array is filled once the room's map is known.
     const boxes: Box[] = [];
     const audio = createAudio(boxes);
+    presenter.setWorld(boxes);
     const radar = new Radar(document.body);
     /** `?auto=1` skips the menu and the lobby panel; `?quiet=1` also stops the pause menu opening (for scripted checks). */
     const auto = params.has('auto');
@@ -351,6 +352,8 @@ async function start(): Promise<void> {
     /** Snapshots whose replayed bomb carry or plant count differed from the prediction (should stay 0). */
     let bombMismatches = 0;
     let stepAccum = 0;
+    /** The local reload was shown last frame (to cut its sound off when it stops early). */
+    let reloadingShown = false;
     let vis = 0;
     let action = 0;
     /** Server time (ms) the current phase ends; 0 in warmup. */
@@ -519,8 +522,10 @@ async function start(): Promise<void> {
         slash(ev: SlashEvent): void {
             const hit = ev.victim !== undefined;
             // Our own swing already made its whoosh when it was predicted; only a confirmed hit adds to it.
-            if (ev.attacker !== net.id) audio.knifeSlash(ev.pos, hit, false);
-            else if (hit) audio.knifeSlash(ev.pos, true, true);
+            if (ev.attacker !== net.id) {
+                audio.knifeSlash(ev.pos, hit, false);
+                presenter.remoteSlash(ev.attacker);
+            } else if (hit) audio.knifeSlash(ev.pos, true, true);
         },
         kill(ev): void {
             presenter.killFeed(ev.killer, ev.victim, ev.kind, ev.zone ?? null,
@@ -528,7 +533,7 @@ async function start(): Promise<void> {
         },
         sound(ev: SoundEvent): void {
             if (ev.kind === 'step') audio.step(ev.pos, ev.loud, false);
-            else if (ev.kind === 'reload') audio.reload(ev.pos, false, ev.weapon ?? 0);
+            else if (ev.kind === 'reload') audio.reload(ev.pos, false, ev.weapon ?? 0, ev.id);
             else if (ev.kind === 'bombDrop') audio.bomb('drop', ev.pos, false);
             else if (ev.kind === 'bombPickup') audio.bomb('pickup', ev.pos, false);
             else {
@@ -600,7 +605,8 @@ async function start(): Promise<void> {
                     : me ? 'You lost the bomb' : `Bomb dropped: ${who} lost it`;
                 if (msg.event !== 'assign' || msg.by !== 0) presenter.bombNotice(text);
             }
-        },
+        }
+,
         options(o): void {
             suppressed = o.suppressed;
             presenter.setSuppressed(o.suppressed);
@@ -759,7 +765,7 @@ async function start(): Promise<void> {
                     presenter.shot(eyePos, shotEnd, true, loadout.slot);
                     audio.gunshot(eyePos, true, loadout.slot, suppressed);
                     audio.impact(shotEnd);
-                } else if (r === GUN_RELOAD) audio.reload(curr.pos, true, loadout.slot);
+                } else if (r === GUN_RELOAD) audio.reload(curr.pos, true, loadout.slot, net.id);
                 else if (r === GUN_DRY) audio.dryFire();
                 // The defender knife: the same windup and landing as the ghosts' (only the damage differs).
                 else if (r === MELEE_SWING) {
@@ -856,6 +862,10 @@ async function start(): Promise<void> {
         local.magSize = held ? held.magSize : 0;
         local.reserve = gun ? gun.reserve : 0;
         local.reload = gun && held && gun.reload > 0 ? 1 - gun.reload / held.reloadTicks : 0;
+        // A reload that stops early (switch, death, round reset) cuts its sound off; one that completes does not.
+        const reloadingNow = alive && local.reload > 0;
+        if (reloadingShown && !reloadingNow) audio.cancelReload(net.id);
+        reloadingShown = reloadingNow;
         local.spread = held ? spreadAngle(curr, held, aimFraction(loadout)) : 0;
         local.draw = loadout.draw / (held ? held.drawTicks : DEFENDER_KNIFE.drawTicks);
         local.aim = aimNow;

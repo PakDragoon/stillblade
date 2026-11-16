@@ -19,8 +19,16 @@ What it does, in order:
      It also measures a grip frame in each hand from the finger bones, used for the hand IK and for
      two empties on Wrist.R ("socket_gun", "socket_knife") that client/src/characters.ts hangs the
      weapon meshes from.
+  3c. Builds the rest of the held-weapon clips the same way (package F): pistol (a one-handed hold, arm out in
+     front of the shoulder) and pistol_shoot; reload_rifle (2.2 s) and reload_pistol (1.4 s) with the support hand
+     taking the magazine out to the belt and back and working the bolt or slide at the times of the reload sounds in
+     client/src/audio.ts; knife_hold and knife_swing (0.2 s windup, 0.12 s strike, recovery), the swing used by
+     defenders and ghosts alike.
+  3d. Death: the source clip falls straight back about 1.8 m (head 1.5 m behind the feet). The whole body is moved
+     forward as it falls (feet slide a little), so the body ends up centred on where the player stood: head about
+     1.3 m behind, feet 0.6 m in front. client/src/presenter.ts then turns the body toward open floor.
   4. Keeps only the clips the game uses, renamed: idle, walk, run, crouch_idle, crouch_walk,
-     death, slash, hit, aim, shoot.
+     death, hit, aim, shoot, pistol, pistol_shoot, reload_rifle, reload_pistol, knife_hold, knife_swing.
   5. Joins the meshes, bakes the material colours into a vertex-colour attribute (defender
      palette: orange body, charcoal gear, skin, black visor), welds, decimates to <= ~3,800
      triangles and leaves ONE material -> one draw call.
@@ -52,7 +60,6 @@ KEEP = {
     'Walk': 'walk',
     'Run': 'run',
     'Death': 'death',
-    'Sword_Slash': 'slash',
     'HitRecieve': 'hit',
 }
 
@@ -85,6 +92,18 @@ SHOOT_CHEST = 2.5           # degrees the chest rocks back at the peak
 # How far the grip sits off the palm (metres, along the palm normal) and how far along the hand from the wrist.
 GRIP_PALM_OFFSET = 0.028
 GRIP_ALONG_HAND = 0.55       # 0 = wrist joint, 1 = finger knuckles
+
+# Package F clips: placements in the character frame (right, forward, up) relative to the right shoulder, metres.
+PISTOL_FROM_SHOULDER = (-0.06, 0.4, -0.05)
+PISTOL_SHOOT_CLIMB = 14.0
+PISTOL_SHOOT_BACK = 0.035
+KNIFE_HOLD_FROM_SHOULDER = (0.0, 0.27, -0.27)
+KNIFE_BACK_FROM_SHOULDER = (0.12, 0.02, 0.1)
+KNIFE_STRIKE_FROM_SHOULDER = (-0.3, 0.3, -0.2)
+LEFT_GUARD_FROM_SHOULDER = (-0.36, 0.28, -0.28)
+BELT_FROM_SHOULDER = (-0.36, 0.04, -0.45)
+# Death: share of the hips' backward travel the body is moved forward again.
+DEATH_RECENTRE = 0.6
 
 FINGERS = ('Index', 'Middle', 'Ring', 'Pinky', 'Thumb')
 DROP_BONES = ('PT.L', 'PT.R')
@@ -233,6 +252,8 @@ def main():
     am = unit / arm.matrix_world.to_scale()[0]          # armature units per metre
     sockets = hand_sockets(arm, forward, am)
     aim, shoot = build_aim(arm, actions['Idle'], am, forward, sockets)
+    more = build_more(arm, actions['Idle'], am, forward, sockets)
+    death = recentre_death(arm, actions['Death'], forward)
 
     # Delete finger and pole bones (edit mode), then their curves.
     bpy.ops.object.mode_set(mode='EDIT')
@@ -245,10 +266,15 @@ def main():
     log('bones', len(bones))
 
     # --- 4. Keep and rename clips ---------------------------------------------------------------
-    keep = {crouch_idle.name: crouch_idle, crouch_walk.name: crouch_walk, aim.name: aim, shoot.name: shoot}
+    keep = {crouch_idle.name: crouch_idle, crouch_walk.name: crouch_walk, aim.name: aim, shoot.name: shoot,
+            'death': death}
+    keep.update({a.name: a for a in more})
     for a in list(bpy.data.actions):
         short = a.name.split('|')[-1]
         if a in keep.values():
+            continue
+        if short == 'Death':
+            bpy.data.actions.remove(a)
             continue
         if short in KEEP:
             a.name = KEEP[short]
@@ -769,6 +795,175 @@ def build_aim(arm, src_action, am, forward, sockets):
     shoot = write_action(arm, 'shoot', frames)
     log('built aim, shoot frames', len(frames))
     return aim, shoot
+
+
+def build_more(arm, src_action, am, forward, sockets):
+    """Package F upper-body clips (see the module docstring). Hands are rigid (no finger bones ship)."""
+    import sys as _sys
+    _sys.path.insert(0, HERE)
+    import rigkit as rk
+    data = arm.data
+    inv_w = arm.matrix_world.inverted()
+    up_a = (inv_w.to_3x3() @ Vector((0, 0, 1))).normalized()
+    fwd_a = (inv_w.to_3x3() @ forward).normalized()
+    fwd_a = (fwd_a - up_a * fwd_a.dot(up_a)).normalized()
+    side_a = fwd_a.cross(up_a)
+    char = lambda v: side_a * v[0] + fwd_a * v[1] + up_a * v[2]
+    for pb in arm.pose.bones:
+        pb.rotation_mode = 'QUATERNION'
+        pb.location = (0, 0, 0)
+        pb.rotation_quaternion = (1, 0, 0, 0)
+        pb.scale = (1, 1, 1)
+    set_action(arm, src_action)
+    a0 = int(round(src_action.frame_range[0]))
+    bpy.context.scene.frame_set(a0 + 1)
+    bpy.context.scene.frame_set(a0)
+    base = {pb.name: pb.matrix.copy() for pb in arm.pose.bones}
+    shoulder = base['UpperArm.R'].to_translation()
+    at = lambda v: shoulder + char(v) * am
+    s_gun_inv = sockets['socket_gun'].inverted()
+    s_knife_inv = sockets['socket_knife'].inverted()
+    s_left_inv = sockets['left_grip'].inverted()
+    chest_set = set(['Chest'] + descendants(data.bones['Chest']))
+    rest_left = base['Wrist.L'].copy()
+
+    def gun_frame(origin, pitch=0.0, yaw=0.0, roll=0.0):
+        r = (Matrix.Rotation(math.radians(yaw), 4, up_a) @ Matrix.Rotation(math.radians(pitch), 4, side_a)
+             @ Matrix.Rotation(math.radians(roll), 4, fwd_a))
+        m = frame_from(side_a, fwd_a, up_a, Vector())
+        m = r @ m
+        m.translation = origin
+        return m
+
+    def knife_frame(origin, blade, spine):
+        y = char(blade).normalized()
+        z = char(spine)
+        z = (z - y * z.dot(y)).normalized()
+        return frame_from(y.cross(z), y, z, origin)
+
+    def pose(right_socket_frame, right_inv, left_wrist, chest_yaw=0.0):
+        mats = {n: m.copy() for n, m in base.items()}
+        if chest_yaw:
+            pivot = mats['Chest'].to_translation()
+            rc = Matrix.Translation(pivot) @ Matrix.Rotation(math.radians(chest_yaw), 4, up_a) @ Matrix.Translation(-pivot)
+            for n in chest_set:
+                mats[n] = rc @ mats[n]
+        w_r = right_socket_frame @ right_inv
+        solve_arm(data, mats, 'R', w_r.to_translation(), char(AIM_POLE['R']))
+        mats['Wrist.R'] = w_r
+        solve_arm(data, mats, 'L', left_wrist.to_translation(), char(AIM_POLE['L']))
+        mats['Wrist.L'] = left_wrist
+        return mats
+
+    def clip(name, seconds, fn):
+        n = max(1, int(round(seconds * FPS)))
+        frames = [(i, fn(min(seconds, i / FPS))) for i in range(n + 1)]
+        act = write_action(arm, name, frames)
+        log('built', name, 'frames', n + 1, 'seconds', round(n / FPS, 3))
+        return act
+
+    out = []
+    # --- Pistol: one-handed hold, left arm hanging as in Idle ---------------------------------------
+    p0 = gun_frame(at(PISTOL_FROM_SHOULDER))
+    out.append(clip('pistol', 0.5, lambda t: pose(p0, s_gun_inv, rest_left)))
+
+    def pistol_kick(k):
+        g = p0 @ Matrix.Translation(Vector((0, -PISTOL_SHOOT_BACK * am * k, 0))) @ Matrix.Rotation(
+            math.radians(PISTOL_SHOOT_CLIMB) * k, 4, 'X')
+        return pose(g, s_gun_inv, rest_left)
+    curve = SHOOT_CURVE
+    out.append(write_action(arm, 'pistol_shoot', [(i, pistol_kick(k)) for i, k in enumerate(curve)]))
+
+    # --- Reloads --------------------------------------------------------------------------------------
+    g_rifle = gun_frame(shoulder + char(AIM_GUN_FROM_SHOULDER) * am)
+    support = Matrix.Translation(Vector(AIM_SUPPORT_ON_GUN) * am)
+    knob = Matrix.Translation(Vector((-0.04, 0.31, 0.15)) * am)
+    belt_w = Matrix.Translation(at(BELT_FROM_SHOULDER)) @ Matrix(rest_left.to_3x3()).to_4x4()
+
+    def keyed_frames(keys, t):
+        return rk.keyed(keys, t)
+
+    rifle_low = gun_frame(at((-0.14, 0.32, -0.2)), pitch=10, yaw=10, roll=35)
+    gk = [(0.0, lambda t: g_rifle), (0.25, lambda t: rifle_low), (1.9, lambda t: rifle_low),
+          (1.97, lambda t: rifle_low @ Matrix.Translation(Vector((0, -0.02 * am, 0)))),
+          (2.07, lambda t: rifle_low), (2.2, lambda t: g_rifle)]
+
+    def rifle_reload(t):
+        g = keyed_frames(gk, t)
+        on = lambda m, extra=Matrix(): (lambda tt: keyed_frames(gk, tt) @ extra @ m @ s_left_inv)
+        down = lambda d: Matrix.Translation(Vector((0, 0, -d * am)))
+        bolt = rk.keyed([(0.0, (0.0,)), (1.9, (0.0,)), (1.97, (-0.06,)), (2.07, (-0.06,)), (2.1, (0.0,))], t)[0]
+        lk = [(0.0, on(support)), (0.2, on(support)), (0.3, on(support)), (0.55, on(support, down(0.25))),
+              (0.75, lambda tt: belt_w), (1.0, lambda tt: belt_w), (1.25, on(support, down(0.1))),
+              (1.4, on(support)), (1.5, on(support)), (1.8, on(knob)), (1.9, on(knob)),
+              (1.97, on(knob, Matrix.Translation(Vector((0, bolt * am, 0))))),
+              (2.07, on(knob, Matrix.Translation(Vector((0, -0.06 * am, 0))))), (2.2, on(support))]
+        return pose(g, s_gun_inv, rk.keyed(lk, t))
+    out.append(clip('reload_rifle', 2.2, rifle_reload))
+
+    pistol_low = gun_frame(at((-0.14, 0.3, -0.18)), pitch=18, yaw=12, roll=30)
+    pk = [(0.0, lambda t: p0), (0.15, lambda t: pistol_low), (1.17, lambda t: pistol_low), (1.4, lambda t: p0)]
+    mag_hold = Matrix.Translation(Vector((0.0, -0.01, -0.09)) * am)
+    slide = Matrix.Translation(Vector((0.0, -0.015, 0.06)) * am)
+
+    def pistol_reload(t):
+        g = keyed_frames(pk, t)
+        on = lambda m, extra=Matrix(): (lambda tt: keyed_frames(pk, tt) @ extra @ m @ s_left_inv)
+        sl = rk.keyed([(0.0, (0.0,)), (1.0, (0.0,)), (1.07, (-0.035,)), (1.17, (-0.035,)), (1.19, (0.0,))], t)[0]
+        lk = [(0.0, lambda tt: rest_left), (0.12, lambda tt: rest_left), (0.35, lambda tt: belt_w),
+              (0.45, lambda tt: belt_w), (0.62, on(mag_hold, Matrix.Translation(Vector((0, 0, -0.06 * am))))),
+              (0.7, on(mag_hold)), (0.78, on(mag_hold)), (0.95, on(slide)), (1.0, on(slide)),
+              (1.07, on(slide, Matrix.Translation(Vector((0, sl * am, 0))))),
+              (1.17, on(slide, Matrix.Translation(Vector((0, -0.035 * am, 0))))), (1.4, lambda tt: rest_left)]
+        return pose(g, s_gun_inv, rk.keyed(lk, t))
+    out.append(clip('reload_pistol', 1.4, pistol_reload))
+
+    # --- Knife ---------------------------------------------------------------------------------------
+    hold = knife_frame(at(KNIFE_HOLD_FROM_SHOULDER), (0.0, 0.85, 0.5), (0.0, -0.5, 0.85))
+    back = knife_frame(at(KNIFE_BACK_FROM_SHOULDER), (-0.2, -0.3, 1.0), (0.3, -1.0, 0.0))
+    strike = knife_frame(at(KNIFE_STRIKE_FROM_SHOULDER), (-1.0, 0.5, -0.2), (0.0, 0.3, 1.0))
+    guard = Matrix.Translation(at(LEFT_GUARD_FROM_SHOULDER)) @ Matrix(rest_left.to_3x3()).to_4x4()
+    out.append(clip('knife_hold', 0.5, lambda t: pose(hold, s_knife_inv, guard)))
+    eases = [lambda x: 1 - (1 - x) * (1 - x), lambda x: x * x, rk.smooth]
+    kk = [(0.0, hold, 0.0), (0.2, back, 18.0), (0.32, strike, -22.0), (0.57, hold, 0.0)]
+
+    def swing(t):
+        for i in range(len(kk) - 1):
+            t0, a, ya = kk[i]
+            t1, b, yb = kk[i + 1]
+            if t <= t1:
+                w = eases[i](min(1.0, max(0.0, (t - t0) / (t1 - t0))))
+                return pose(rk.lerp_frame(a, b, w), s_knife_inv, guard, ya + (yb - ya) * w)
+        return pose(hold, s_knife_inv, guard)
+    out.append(clip('knife_swing', 0.57, swing))
+    return out
+
+
+def recentre_death(arm, action, forward):
+    """The death clip with the whole body moved forward by DEATH_RECENTRE of the hips' backward travel."""
+    inv_w = arm.matrix_world.inverted()
+    up_a = (inv_w.to_3x3() @ Vector((0, 0, 1))).normalized()
+    fwd_a = (inv_w.to_3x3() @ forward).normalized()
+    fwd_a = (fwd_a - up_a * fwd_a.dot(up_a)).normalized()
+    for pb in arm.pose.bones:
+        pb.rotation_mode = 'QUATERNION'
+        pb.location = (0, 0, 0)
+        pb.rotation_quaternion = (1, 0, 0, 0)
+        pb.scale = (1, 1, 1)
+    set_action(arm, action)
+    a, b = (int(round(x)) for x in action.frame_range)
+    bpy.context.scene.frame_set(a)
+    hips0 = arm.pose.bones['Hips'].matrix.to_translation()
+    frames = []
+    for f in range(a, b + 1):
+        bpy.context.scene.frame_set(f)
+        mats = {pb.name: pb.matrix.copy() for pb in arm.pose.bones}
+        back = -(mats['Hips'].to_translation() - hips0).dot(fwd_a)
+        T = Matrix.Translation(fwd_a * max(0.0, back) * DEATH_RECENTRE)
+        frames.append((f - a, {n: T @ m for n, m in mats.items()}))
+    new = write_action(arm, 'death', frames)
+    log('built death (recentred) frames', len(frames))
+    return new
 
 
 main()

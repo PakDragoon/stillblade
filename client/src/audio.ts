@@ -49,6 +49,10 @@ const HEAD_STAND = 1.5;
 const HEAD_CROUCH = 0.95;
 /** Small lead so scheduled envelopes never start in the past. */
 const LEAD = 0.005;
+/** A reload cut this close to its end is one completing normally: nothing is silenced (s). */
+const RELOAD_TAIL = 0.15;
+/** A remote reload whose `reloading` flag has not shown up this long after its sound is treated as already over (s). */
+const RELOAD_SEEN_GRACE = 0.35;
 /** Bomb beep: audible range, height of the emitter above the bomb's floor position, level. */
 const BOMB_RANGE = 35;
 const BOMB_LIFT = 0.15;
@@ -912,19 +916,20 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
         return v.priority * left;
     }
 
+    /** Builds and starts one sound; returns its voice, or null when nothing was started. */
     function oneShot(pos: Vec3 | null, cfg: ShotCfg, gain: number, synth: Synth, x: number, flag: boolean,
-        weight = 1): void {
-        if (!ctx || !master || !bank) return;
+        weight = 1): Voice | null {
+        if (!ctx || !master || !bank) return null;
         const now = ctx.currentTime;
         gain *= stepMode ? volSteps : volEffects;
-        if (gain <= 0) return;
+        if (gain <= 0) return null;
 
         let att = 1, occ = false;
         if (pos && haveListener) {
             const dx = pos[0] - lpos[0], dy = pos[1] - lpos[1], dz = pos[2] - lpos[2];
             const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
             att = linearGain(d, cfg.ref, cfg.range);
-            if (att <= 0) return; // beyond audible range: do not even build it
+            if (att <= 0) return null; // beyond audible range: do not even build it
             occ = occluded(pos[0], pos[1] + cfg.occLift, pos[2]);
         }
         const priority = gain * att * (occ ? OCC_GAIN : 1) * weight;
@@ -935,7 +940,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
                 const p = liveness(voices[i], now);
                 if (p < worstP) { worstP = p; worst = voices[i]; }
             }
-            if (!worst || worstP >= priority) return; // the new sound is the least important one
+            if (!worst || worstP >= priority) return null; // the new sound is the least important one
             worst.kill(now);
             removeVoice(worst);
         }
@@ -967,6 +972,40 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
         }
         v.arm(removeVoice);
         voices.push(v);
+        return v;
+    }
+
+    // ---- reload sequences ---------------------------------------------------------------------
+    // Each reload is one voice holding the whole scheduled sequence; it is remembered per player so a reload that
+    // ends early (switch, death, round reset) can be cut off instead of playing to the end.
+
+    interface ReloadVoice { id: number; local: boolean; voice: Voice; start: number; dur: number; seen: boolean; }
+    const reloads: ReloadVoice[] = [];
+
+    /** Forgets reload `i`; when `cut`, silences what is left of it unless it was about to finish anyway. */
+    function endReload(i: number, now: number, cut: boolean): void {
+        const r = reloads[i];
+        if (cut && now - r.start < r.dur - RELOAD_TAIL) r.voice.kill(now);
+        reloads[i] = reloads[reloads.length - 1];
+        reloads.pop();
+    }
+
+    /** Cuts off reload sounds of remote defenders whose reload ended early. No allocation. */
+    function checkReloads(now: number, remotes: readonly RemoteView[]): void {
+        for (let i = reloads.length - 1; i >= 0; i--) {
+            const rv = reloads[i];
+            if (now - rv.start >= rv.dur) { endReload(i, now, false); continue; }
+            if (rv.local) continue;
+            let r: RemoteView | null = null;
+            for (let j = 0; j < remotes.length; j++) {
+                if (remotes[j].id === rv.id) { r = remotes[j]; break; }
+            }
+            if (!r) continue;
+            if (!r.alive) { endReload(i, now, true); continue; }
+            // Snapshots are interpolated behind the sound event: wait to see the reload before judging its end.
+            if (r.reloading) rv.seen = true;
+            else if (rv.seen || now - rv.start > RELOAD_SEEN_GRACE) endReload(i, now, true);
+        }
     }
 
     // ---- breathing --------------------------------------------------------------------------
@@ -1155,6 +1194,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
             const now = ctx.currentTime;
             frameNo++;
             setListener(ctx, listener);
+            checkReloads(now, remotes);
 
             // Bomb beeper: first beep at once, then on an accumulator whose period shrinks with the clock.
             if (bomb) {
@@ -1253,15 +1293,25 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
             oneShot(null, CUE_CFG, 0.4, synthSwitch, WEAPONS[s].drawTicks / TICK_RATE, WEAPONS[s].id === 'pistol');
         },
 
-        reload(pos: Vec3, isLocal: boolean, weapon: number): void {
-            const synth = SLOT_SOUNDS[slotOf(weapon)].reload;
-            if (isLocal) {
-                oneShot(null, RELOAD_CFG, 0.45, synth, 0, false);
-                return;
+        reload(pos: Vec3, isLocal: boolean, weapon: number, id: number): void {
+            if (!ctx) return;
+            const slot = slotOf(weapon);
+            const synth = SLOT_SOUNDS[slot].reload;
+            // A new reload by the same player means the old one ended: cut whatever is left of it.
+            for (let i = reloads.length - 1; i >= 0; i--) if (reloads[i].id === id) endReload(i, ctx.currentTime, true);
+            let v: Voice | null;
+            if (isLocal) v = oneShot(null, RELOAD_CFG, 0.45, synth, 0, false);
+            else {
+                // The event carries the feet position: the magazine is worked at about hand height.
+                reloadPos[0] = pos[0]; reloadPos[1] = pos[1] + RELOAD_LIFT; reloadPos[2] = pos[2];
+                v = oneShot(reloadPos, RELOAD_CFG, 1, synth, 0, false);
             }
-            // The event carries the feet position: the magazine is worked at about hand height.
-            reloadPos[0] = pos[0]; reloadPos[1] = pos[1] + RELOAD_LIFT; reloadPos[2] = pos[2];
-            oneShot(reloadPos, RELOAD_CFG, 1, synth, 0, false);
+            if (v) reloads.push({ id, local: isLocal, voice: v, start: v.start, dur: WEAPONS[slot].reloadTicks / TICK_RATE, seen: false });
+        },
+
+        cancelReload(id: number): void {
+            if (!ctx) return;
+            for (let i = reloads.length - 1; i >= 0; i--) if (reloads[i].id === id) endReload(i, ctx.currentTime, true);
         },
 
         dryFire(): void {

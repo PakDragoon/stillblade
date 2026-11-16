@@ -4,7 +4,8 @@ import {
 } from '@shared/constants';
 import type { RosterEntry, Team } from '@shared/protocol';
 import { ROUNDS_TO_WIN, type Phase, type RoundReason } from '@shared/rules';
-import type { Vec3 } from '@shared/types';
+import type { Box, Vec3 } from '@shared/types';
+import { corpseYaw } from './corpse';
 import type { CreatePresenter, CrosshairConfig, KillKind, LocalView, MatchView, RemoteView } from './presenter-api';
 import { Character, CharLook, loadCharacterModel, makeSkinnedGhostMaterial, type CharacterModel } from './characters';
 import { TICK_RATE } from '@shared/constants';
@@ -14,6 +15,7 @@ import type { HitZone } from '@shared/zones';
 import {
     instantiateWeapon, loadWeaponModel, makeWeaponMaterial, WEAPON_MESH, type WeaponInstance, type WeaponModel
 } from './weapons';
+import { loadViewmodel, type VmRig } from './viewmodel';
 
 const DEG = 180 / Math.PI;
 const HEAD_WIDTH = 0.4;
@@ -118,6 +120,10 @@ const SLOT_LOOKS: readonly SlotLook[] = WEAPONS.map(w => {
         joltSize: look.jolts.map(j => j[2])
     };
 });
+
+/** Clip names per gun slot, built once (no string building per frame). */
+const IDLE_CLIP: readonly string[] = WEAPONS.map(w => `${w.id}_idle`);
+const RELOAD_CLIP: readonly string[] = WEAPONS.map(w => `${w.id}_reload`);
 
 /** Gun slot index clamped into the weapon table (the knife slot is handled before this is used). */
 function slotOf(weapon: number): number {
@@ -549,6 +555,8 @@ interface Remote {
     z: number;
     crouched: boolean;
     alive: boolean;
+    /** Yaw (radians) the body lies along while dead: chosen once at death so it does not fall into a wall. */
+    corpseYaw: number;
 }
 
 interface Tracer { e: pc.Entity; mi: pc.MeshInstance; t: number; }
@@ -562,6 +570,14 @@ const KNIFE_BACK = [0.2, -0.1, -0.32, 65, -12, -35];
 const KNIFE_SLASH = [-0.08, -0.25, -0.48, -15, 45, 35];
 /** Defender drawing the knife (draw = 1): offset from rest, eased to zero like the guns' draw. */
 const KNIFE_DRAW = [0.02, -0.22, 0.06, -50, 10, 20];
+/** The knife rig (camera-space arms) drawing: the whole rig dips and tips down (m, degrees) at draw = 1. */
+const KNIFE_RIG_DRAW = [0, -0.2, 0.05, -25];
+/** Seconds of windup at the start of the rigs' knife swing clip (viewmodel.py); the rest plays in real time. */
+const RIG_KNIFE_WINDUP = 0.2;
+/** Viewmodel rig file per gun (tools/blender/viewmodel.py). */
+const RIG_FILE: Record<WeaponId, string> = { rifle: 'viewmodel_rifle.glb', pistol: 'viewmodel_pistol.glb' };
+
+
 
 export const createPresenter: CreatePresenter = (app, camera) => {
     // Materials (shared; per-instance opacity goes through mesh-instance parameters).
@@ -660,7 +676,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         return {
             id: -1, team: null, look: Look.None, root, body, neck, head, visor,
             bodyMi: body.render!.meshInstances[0], headMi: head.render!.meshInstances[0],
-            char: null, height: HULL_HEIGHT, seen: 0, x: 0, y: 0, z: 0, crouched: false, alive: false
+            char: null, height: HULL_HEIGHT, seen: 0, x: 0, y: 0, z: 0, crouched: false, alive: false, corpseYaw: 0
         };
     };
 
@@ -707,6 +723,10 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         r.neck.setLocalPosition(0, bodyH, 0);
     };
 
+    // --- Bodies clear of walls (corpse.ts) ------------------------------------------------------
+    let world: readonly Box[] = [];
+    const fallYaw = (pos: Vec3, yaw: number): number => corpseYaw(world, pos, yaw);
+
     let followId = -1;
     const updateRemotes = (dt: number, remotes: readonly RemoteView[]): void => {
         stamp++;
@@ -731,6 +751,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             r.team = v.team;
             r.x = v.pos[0]; r.y = v.pos[1]; r.z = v.pos[2];
             r.crouched = v.crouched;
+            if (r.alive && !v.alive) r.corpseYaw = fallYaw(v.pos, v.yaw);
+            else if (v.alive) r.corpseYaw = v.yaw;
             r.alive = v.alive;
             const look = v.team === 'defenders' ? Look.Defender
                 : localTeam === 'ghosts' ? Look.AllyGhost : Look.EnemyGhost;
@@ -754,7 +776,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             r.root.enabled = visible;
             if (!visible) continue;
             r.root.setPosition(v.pos[0], v.pos[1], v.pos[2]);
-            r.root.setEulerAngles(0, v.yaw * DEG, 0);
+            r.root.setEulerAngles(0, (v.alive ? v.yaw : r.corpseYaw) * DEG, 0);
             if (ch) continue;
             r.neck.setLocalEulerAngles(v.pitch * DEG, 0, 0);
             layoutRemote(r);
@@ -783,6 +805,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         /** The pistol box stand-in's suppressor (shown only when suppressed). */
         boxSup: pc.Entity | null;
         model: WeaponInstance | null;
+        /** Arms holding this gun (viewmodel_<id>.glb), once loaded: replaces the box and the bare model. */
+        rig: VmRig | null;
     }
     /** A slot's viewmodel with its box stand-in; box positions are relative to the grip, like the models. */
     const makeVmGun = (slot: number): VmGun => {
@@ -814,7 +838,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         const loud = loudFlash(muzzle, VM);
         loud.setLocalScale(LOUD_FLASH_SIZE * fx, LOUD_FLASH_SIZE * fx, LOUD_FLASH_SIZE * 1.6 * fx);
         if (boxSup) boxSup.enabled = suppressedLook;
-        return { root, boxes, muzzle, flash, loud, boxSup, model: null };
+        return { root, boxes, muzzle, flash, loud, boxSup, model: null, rig: null };
     };
     const vmGuns: VmGun[] = [];
     for (let i = 0; i < WEAPONS.length; i++) vmGuns.push(makeVmGun(i));
@@ -838,6 +862,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             g.setSuppressed(suppressedLook);
             v.model = g;
             v.root.addChild(g.entity);
+            if (v.rig) { g.entity.enabled = false; continue; } // the arms rig arrived first and carries the gun
             // Tracers and the flash start at the muzzle of the variant in use (the suppressor's end, or the bare barrel).
             v.muzzle.reparent(g.muzzle!);
             v.muzzle.setLocalPosition(0, 0, 0);
@@ -849,16 +874,66 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         }
         const k = instantiateWeapon(m, 'knife', vmMat, VM);
         knife.addChild(k.entity);
+        if (knifeRig) k.entity.enabled = false;
         k.entity.setLocalPosition(0, 0, KNIFE_MODEL_BACK);
         knifeBoxes.enabled = false;
         for (let i = 0; i < active.length; i++) active[i].char?.setWeapons(m);
         for (let i = 0; i < free.length; i++) free[i].char?.setWeapons(m);
     };
 
+    // Arms rigs (tools/blender/viewmodel.py): one skinned mesh each, the same single draw call as the bare gun. They
+    // load on their own; until then (or if one fails) the bare model or the boxes stand in.
+    const rigMat = makeWeaponMaterial(0.4);
+    /** Muzzle entity (flash, tracer start) onto the rig's muzzle for the current look. */
+    const rigMuzzle = (v: VmGun): void => {
+        const m = v.rig?.activeMuzzle();
+        if (!m) return;
+        v.muzzle.reparent(m);
+        v.muzzle.setLocalPosition(0, 0, 0);
+        v.muzzle.setLocalEulerAngles(0, 0, 0);
+    };
+    for (let i = 0; i < vmGuns.length; i++) {
+        const id = WEAPONS[i].id, file = RIG_FILE[id];
+        loadViewmodel(app, `${import.meta.env.BASE_URL}models/${file}`, file, VM, rigMat, [`${id}_idle`, `${id}_reload`])
+            .then(rig => {
+                const v = vmGuns[i];
+                v.rig = rig;
+                v.root.addChild(rig.root);
+                rig.setSuppressed(suppressedLook);
+                rigMuzzle(v);
+                const fx = SLOT_LOOKS[i].fx;
+                v.flash.setLocalScale(0.05 * fx, 0.05 * fx, 0.085 * fx);
+                v.flash.setLocalPosition(0, 0, -0.04 * fx);
+                v.boxes.enabled = false;
+                if (v.model) v.model.entity.enabled = false;
+            })
+            .catch((err: unknown) => console.warn(`[stillblade] ${file} failed to load; the gun is drawn without hands.`, err));
+    }
+    // The knife rig hangs from the camera directly (its clips carry the whole swing).
+    const knifeRigRoot = new pc.Entity('viewmodel-knife-rig');
+    camera.addChild(knifeRigRoot);
+    knifeRigRoot.enabled = false;
+    let knifeRig: VmRig | null = null;
+    loadViewmodel(app, `${import.meta.env.BASE_URL}models/viewmodel_knife.glb`, 'viewmodel_knife.glb', VM, rigMat,
+        ['knife_idle', 'knife_swing'])
+        .then(rig => {
+            knifeRig = rig;
+            knifeRigRoot.addChild(rig.root);
+            knife.enabled = false;
+        })
+        .catch((err: unknown) => console.warn('[stillblade] viewmodel_knife.glb failed to load; the knife is drawn without hands.', err));
+
     /** Suppressors on or off for every gun drawn (first person, every character) and the flash in use. */
     const applySuppressed = (): void => {
         for (const v of vmGuns) {
             if (v.boxSup) v.boxSup.enabled = suppressedLook;
+            if (v.rig) {
+                v.rig.setSuppressed(suppressedLook);
+                rigMuzzle(v);
+                v.model?.setSuppressed(suppressedLook);
+                v.flash.enabled = v.loud.enabled = false;
+                continue;
+            }
             if (!v.model) continue;
             v.model.setSuppressed(suppressedLook);
             v.muzzle.reparent(v.model.muzzle!);
@@ -944,8 +1019,15 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             const w = reloadW;
             // Small jolts as the magazine goes in and the bolt or slide closes (zero when not reloading).
             let jolt = 0;
-            if (p > 0) {
+            const rig = vmGuns[slot].rig;
+            if (p > 0 && !rig) {
                 for (let i = 0; i < look.joltAt.length; i++) jolt += look.joltSize[i] * bump(p, look.joltAt[i], look.joltW[i]);
+            }
+            // With arms, the reload clip moves the gun and hands inside the rig: no procedural reload pose on top.
+            const rw = rig ? 0 : w;
+            if (rig) {
+                const clip = p > 0 ? rig.clips.get(RELOAD_CLIP[slot]) : rig.clips.get(IDLE_CLIP[slot]);
+                rig.pose(clip, clip ? p * clip.duration : 0);
             }
             // Aim: blend from the hip pose to the sight line; the reload pose takes over from it.
             const a0 = local.aim > 0 ? Math.min(1, local.aim) : 0;
@@ -960,18 +1042,39 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             const sx = Math.sin(time * SWAY_RATE) * SWAY_POS * s;
             const sy = Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6 * s;
             gun.setLocalPosition(
-                hip[0] * ha + aim[0] * a + sx + rl[0] * w + dr[0] * d,
-                hip[1] * ha + aim[1] * a + sy + kick.kick[0] * e + rl[1] * w + 0.012 * jolt + dr[1] * d,
-                hip[2] * ha + aim[2] * a + kick.kick[1] * e + rl[2] * w + dr[2] * d);
+                hip[0] * ha + aim[0] * a + sx + rl[0] * rw + dr[0] * d,
+                hip[1] * ha + aim[1] * a + sy + kick.kick[0] * e + rl[1] * rw + 0.012 * jolt + dr[1] * d,
+                hip[2] * ha + aim[2] * a + kick.kick[1] * e + rl[2] * rw + dr[2] * d);
             gun.setLocalEulerAngles(
-                hip[3] * ha + aim[3] * a + kick.kick[2] * e + sy * 120 + rl[3] * w + 5 * jolt + dr[3] * d,
-                hip[4] * ha + aim[4] * a + Math.sin(time * SWAY_RATE * 0.7) * SWAY_ROT * s + rl[4] * w + dr[4] * d,
-                hip[5] * ha + aim[5] * a + sx * 160 + rl[5] * w + dr[5] * d);
+                hip[3] * ha + aim[3] * a + kick.kick[2] * e + sy * 120 + rl[3] * rw + 5 * jolt + dr[3] * d,
+                hip[4] * ha + aim[4] * a + Math.sin(time * SWAY_RATE * 0.7) * SWAY_ROT * s + rl[4] * rw + dr[4] * d,
+                hip[5] * ha + aim[5] * a + sx * 160 + rl[5] * rw + dr[5] * d);
+            knifeRigRoot.enabled = false;
             return;
         }
         // A defender drawing the knife: it rises from below, like the guns.
         const kd0 = knifeHeld && local.draw > 0 ? Math.min(1, local.draw) : 0;
         knifeDraw = kd0 * kd0;
+        if (knifeRig) {
+            // Arms rig: the clip carries the swing; its windup is stretched to the rule's, the rest plays in real time.
+            knife.enabled = false;
+            knifeRigRoot.enabled = localAlive && (!defender || knifeHeld);
+            knifeRig.setVariant(defender ? 'vm_knife' : 'vm_ghost');
+            const kd = knifeDraw, rd = KNIFE_RIG_DRAW;
+            knifeRigRoot.setLocalPosition(rd[0] * kd + Math.sin(time * SWAY_RATE) * SWAY_POS,
+                rd[1] * kd + Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6, rd[2] * kd);
+            knifeRigRoot.setLocalEulerAngles(rd[3] * kd, 0, 0);
+            const swing = knifeRig.clips.get('knife_swing')!;
+            let ct = -1;
+            if (swingT >= 0) {
+                swingT += dt;
+                ct = swingT < windup ? (swingT / windup) * RIG_KNIFE_WINDUP : RIG_KNIFE_WINDUP + (swingT - windup);
+                if (ct >= swing.duration) { swingT = -1; ct = -1; }
+            }
+            if (ct >= 0) knifeRig.pose(swing, ct);
+            else knifeRig.pose(knifeRig.clips.get('knife_idle'), 0);
+            return;
+        }
         if (swingT < 0) {
             setKnifePose(KNIFE_REST, KNIFE_REST, 0);
             // Same idle sway as the gun, only while not swinging.
@@ -1726,8 +1829,19 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         remoteSwing(id: number): void {
             for (let i = 0; i < active.length; i++) {
                 const r = active[i];
-                if (r.id === id && r.team === 'defenders') { r.char?.swing(); return; }
+                if (r.id === id) { r.char?.swing(); return; }
             }
+        },
+
+        remoteSlash(id: number): void {
+            for (let i = 0; i < active.length; i++) {
+                const r = active[i];
+                if (r.id === id) { r.char?.slash(); return; }
+            }
+        },
+
+        setWorld(boxes: readonly Box[]): void {
+            world = boxes;
         },
 
         hitConfirm(zone: HitZone | null, killed: boolean): void {
