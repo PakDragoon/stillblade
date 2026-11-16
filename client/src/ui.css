@@ -172,7 +172,9 @@ body.no-stats #hud, body.no-stats #sb-info .ping { display: none; }
 #ui .tags .opt, #lobby-screen .tags .opt { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); border: 1px solid var(--line); padding: 2px 8px; }
 #ui .tags .opt.on { color: var(--bone); border-color: var(--go); }
 #ui button.mini { padding: 3px 8px; font-size: 11px; letter-spacing: .04em; margin-left: 6px; }
-#menu-screen .wrap { max-height: 100vh; overflow-y: auto; padding: 12px; }
+#menu-screen { overflow-y: auto; }
+#menu-screen .wrap { margin: auto; padding: 16px; }
+@media (max-width: 780px) { #menu-screen .wrap { grid-template-columns: minmax(0, 420px); } }
 #room-list .rooms { display: grid; gap: 8px; margin-top: 10px; max-height: 220px; overflow-y: auto; }
 #room-list .room { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px 10px; background: rgba(255,255,255,.04); border-left: 2px solid var(--go); }
 #room-list .room b { letter-spacing: .06em; }

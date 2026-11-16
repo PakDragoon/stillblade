@@ -119,6 +119,12 @@ interface TextureOptions {
     anisotropy: number;
 }
 
+/**
+ * Maps share texture files (the same URL is one cached resource), so unloading one map's texture would blank
+ * the next map's. Each loaded texture counts its holders by URL and is unloaded only when the last one lets go.
+ */
+const textureHolders = new Map<string, number>();
+
 function loadTexture(app: pc.Application, url: string, opt: TextureOptions, loaded: pc.Asset[]): Promise<pc.Texture> {
     return new Promise((resolve, reject) => {
         const asset = new pc.Asset(url, 'texture', { url }, { srgb: true, mipmaps: opt.mipmaps });
@@ -129,6 +135,7 @@ function loadTexture(app: pc.Application, url: string, opt: TextureOptions, load
                 reject(new Error(`Texture ${url} loaded without a resource`));
                 return;
             }
+            textureHolders.set(url, (textureHolders.get(url) ?? 0) + 1);
             // Enforce settings regardless of how the asset system interpreted the data block.
             texture.minFilter = opt.mipmaps ? pc.FILTER_LINEAR_MIPMAP_LINEAR : pc.FILTER_LINEAR;
             texture.magFilter = pc.FILTER_LINEAR;
@@ -241,6 +248,12 @@ export async function applyMapLook(app: pc.Application, mapRoot: pc.Entity, came
     return () => {
         skyEntity.destroy();
         for (const m of materials.values()) m.destroy();
-        for (const a of loaded) { a.unload(); app.assets.remove(a); }
+        for (const a of loaded) {
+            const url = a.name; // the asset was named by its URL
+            const left = (textureHolders.get(url) ?? 1) - 1;
+            if (left > 0) textureHolders.set(url, left);
+            else { textureHolders.delete(url); a.unload(); }
+            app.assets.remove(a);
+        }
     };
 }
