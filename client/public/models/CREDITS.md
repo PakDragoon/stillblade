@@ -5,6 +5,7 @@
 | File | Made from | Licence |
 |---|---|---|
 | `character.glb` (353 KB) | "SWAT" by Quaternius, processed by `tools/blender/characters.py` | CC0 1.0 (public domain) |
+| `viewmodel_rifle.glb` (336 KB), `viewmodel_pistol.glb` (325 KB), `viewmodel_knife.glb` (447 KB) | The arms, gloves and finger rig of "SWAT" by Quaternius (the same `SWAT.glb` as `character.glb`) with the shipped `weapons.glb` meshes, processed by `tools/blender/viewmodel.py` | CC0 1.0 (public domain) |
 | `weapons.glb` (100 KB) | The "SMG", "Pistol" and "Knife_1" props of "Character Soldier" by Quaternius, processed by `tools/blender/weapons.py` | CC0 1.0 (public domain) |
 
 What `characters.py` changed: folded the finger bones into the wrists and removed the IK pole
@@ -24,12 +25,23 @@ baked a dark tactical palette into vertex colours (1 shared material, no texture
 knife from 687 to 398 triangles (gun kept at 1,006, pistol 1,034 with the suppressor), and added
 `gun_muzzle` / `pistol_muzzle` nodes at the front of each suppressor.
 
+What `viewmodel.py` does (package F, first-person hands): cuts both arms (upper arm to fingertips, 2,426
+triangles, decimated to 1,500) out of the SWAT body with their skin weights, thins the sleeves toward the bone
+axis (the cartoon forearms filled the screen), recolours them (orange sleeves and coyote gloves for defenders, a dark
+suit for ghosts), rebuilds the arm and finger bones at the 1.8 m scale, and joins them with one weapon from
+`weapons.glb` into one skinned mesh per weapon. The guns are split into moving parts by their loose pieces (rifle
+magazine; pistol slide and base plate); a magazine body for the pistol and a cocking knob for the rifle are generated
+boxes. Hands are posed with two-bone IK and per-finger curls; clips are generated, not taken from the source.
+Characters (`characters.py`, package F): the "Sword_Slash" clip is no longer shipped; six upper-body clips (pistol,
+pistol_shoot, reload_rifle, reload_pistol, knife_hold, knife_swing) are generated, and the "Death" clip is recentred.
+
 ## Downloaded source files
 
 Both files were downloaded with a generic HTTP client, with no account. They are stored, git-ignored, under
 `tools/blender/source-art/characters/`. The licence is the one shown on each model's poly.pizza page.
 No further files were downloaded for the weapons (including the pistol): they come from the second
-file below, which was already on disk.
+file below, which was already on disk. Nothing was downloaded for the first-person hands either (package F): they
+come from the first file below.
 
 | File | URL | Size | Licence | Author | Used |
 |---|---|---|---|---|---|

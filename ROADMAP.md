@@ -40,8 +40,8 @@ The owner has no game development experience and expects the game to have every 
 | 1 | B. Client utilities: key bindings, phone notice, feedback button, error reports (**built and reviewed; merged into branch `wave-1`, protocol 10; not yet on `main`**) | Sonnet 5.5 | nothing |
 | 2 | C. Bomb carrier (**built and reviewed; merged into branch `wave-2`, protocol 11; not yet on `main`; never seen in a browser**) | Opus 5.5 | A merged |
 | 2 | D. Rooms and community: room list, room options, vote kick, name filter, map vote (**built and reviewed; merged into branch `wave-2`, protocol 12; not yet on `main`; never seen in a browser**) | Sonnet 5.5 | A merged |
-| 3 | E. Bots that fight, and a practice range (**built on branch `claude/bots-practice-046461` from `wave-2`, protocol 13, 364 tests; not yet reviewed or merged; never seen in a browser**) | Opus 5.5 | C merged |
-| 3 | F. Hands and animations: first-person hands, real reloads, pistol pose, knife | Opus 5.5 | A merged |
+| 3 | E. Bots that fight, and a practice range (**built and reviewed; merged into branch `wave-3`, protocol 13; not yet on `main`; never seen in a browser**) | Opus 5.5 | C merged |
+| 3 | F. Hands and animations: first-person hands, real reloads, pistol pose, knife (**built and reviewed; merged into branch `wave-3`, no protocol change; not yet on `main`; seen only in Blender renders, never in the game**) | Opus 5.5 | A merged |
 | 4 | G. Graphics tiers and effects | Opus 5.5 | F merged |
 | 4 | H. Recorded sounds | Sonnet 5.5 | A merged |
 | 5 | I. Grenades | Opus 5.5 | friends' feedback, G merged |
@@ -121,7 +121,7 @@ JSON messages and UI only. Builds on the `RoomOptions` from package A (`shared/r
 
 ## E. Bots that fight, and a practice range (Opus 5.5)
 
-**Status (2026-11-16): built on branch `claude/bots-practice-046461` (from `wave-2`), protocol 13, 364 tests; not reviewed, not merged, nothing seen in a browser. `HANDOFF.md` ("Package E (bots and practice range)") has what exists, the decisions taken, the bench and match numbers and what was not verified. Decisions taken beyond this text: fill keeps each team at half of `maxPlayers`; bot difficulty is a room option (`botLevel`, default normal); bots are named "BOT <name>" and flagged in the roster; practice targets are fully visible ghosts or defenders that never fire, placed in view of the person's spawn; damage per hit travels in `hitconfirm.damage` for everyone. Open point for the owner: ghost bots almost never win a round against defender bots on normal or hard (tuning, after he has played). The reviewer should read `server/src/bots.ts` against the information rule (the brain's inputs are listed at the top of the file).** The specification below is kept as written.
+**Status (2026-11-16): built, reviewed and merged into branch `wave-3` (protocol 13); not yet on `main`; nothing seen in a browser. `HANDOFF.md` ("Package E (bots and practice range)") has what exists, the decisions taken, the bench and match numbers and what was not verified. Decisions taken beyond this text: fill keeps each team at half of `maxPlayers`; bot difficulty is a room option (`botLevel`, default normal); bots are named "BOT <name>" and flagged in the roster; practice targets are fully visible ghosts or defenders that never fire, placed in view of the person's spawn; damage per hit travels in `hitconfirm.damage` for everyone. Open point for the owner: ghost bots almost never win a round against defender bots on normal or hard (tuning, after he has played). The reviewer should read `server/src/bots.ts` against the information rule (the brain's inputs are listed at the top of the file).** The specification below is kept as written.
 
 A player who opens the game alone should have something to do.
 
@@ -136,6 +136,8 @@ A player who opens the game alone should have something to do.
 **Done means:** tests that a bot never acts on information `knowsAbout` withholds, reaches both sites on both maps, plants and defuses, and that fill adds and removes bots correctly; a full bot-versus-bot match completing on each map (run once each); the bench numbers; the old `tools/bot.ts` kept for scripted tests.
 
 ## F. Hands and animations (Opus 5.5)
+
+**Status (2026-11-16): built, reviewed and merged into branch `wave-3`; not yet on `main`; client and art only, `shared/` untouched, no protocol change. `HANDOFF.md` ("Package F (hands and animations) in detail") lists what was built, the decisions taken (one skinned mesh per weapon rig, clips sampled by reload progress, suppressor hidden by a bone, the swing driven by the windup and slash events, the body turned toward open floor), draw calls, and what was not verified. For the reviewer: nothing was seen in the game; check the hands at real screen sizes first.** The specification below is kept as written.
 
 Art pipeline plus presentation. CC0 sources already approved: Poly Haven, ambientCG, Quaternius, Kenney, KayKit; record every file in a `CREDITS.md`.
 
