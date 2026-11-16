@@ -490,7 +490,7 @@ body.sb-lowhp #sb-low { display: block; }
     border-bottom: 2px solid currentColor; font: 800 16px/1 system-ui, sans-serif; letter-spacing: .15em; }
 #sb-scores .hdr.ghosts { color: #9d8cff; } #sb-scores .hdr.defenders { color: #ff9a3c; }
 #sb-scores .hdr.mine span:first-child::after { content: '  (YOU)'; white-space: pre; font-size: 10px; letter-spacing: .2em; opacity: .7; }
-#sb-scores .row { display: grid; grid-template-columns: 1fr 44px 44px 44px; padding: 4px 6px; }
+#sb-scores .row { display: grid; grid-template-columns: 1fr 44px 44px 44px 56px; padding: 4px 6px; }
 #sb-scores .row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #sb-scores .row span + span { text-align: right; font-variant-numeric: tabular-nums; }
 #sb-scores .row.cols { opacity: .5; font-size: 10px; letter-spacing: .2em; padding-bottom: 2px; }
@@ -1365,6 +1365,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     let scoresRosterV = -1, scoresLocalId = -1, scoresTeam: Team | null = null;
     let scoresG = -1, scoresD = -1, scoresRound = -1, scoresCarrier = -1, scoresWin = -1;
     let voteKick: ((playerId: number) => void) | null = null;
+    const pingOf = new Map<number, number>();
     let shownDeadKey = NaN;
     let shownDeadEl = false;
 
@@ -1689,7 +1690,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             span(hdr, '', TEAM_LABEL[team]);
             span(hdr, '', String(team === 'ghosts' ? match.scoreGhosts : match.scoreDefenders));
             const cols = div('', scoresEl, 'row cols');
-            span(cols, '', 'NAME'); span(cols, '', 'K'); span(cols, '', 'D'); span(cols, '', 'A');
+            span(cols, '', 'NAME'); span(cols, '', 'K'); span(cols, '', 'D'); span(cols, '', 'A'); span(cols, '', 'PING');
             const members = roster.filter(p => p.team === team)
                 .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths || a.id - b.id);
             if (members.length === 0) div('', scoresEl, 'empty').textContent = 'No players';
@@ -1700,6 +1701,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                 span(row, '', String(p.kills));
                 span(row, '', String(p.deaths));
                 span(row, '', String(p.assists));
+                span(row, 'ping', p.bot ? 'BOT' : pingOf.has(p.id) ? String(pingOf.get(p.id)) : '-');
                 if (voteKick && !p.bot && p.id !== local.id) {
                     const id = p.id, kick = voteKick;
                     const b = document.createElement('button');
@@ -1744,6 +1746,12 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             updateBanner(dt, local, match);
             updateUse(dt, local);
             updateScores(local, match);
+        },
+
+        setPings(pings: readonly [number, number][]): void {
+            pingOf.clear();
+            for (let i = 0; i < pings.length; i++) pingOf.set(pings[i][0], pings[i][1]);
+            rosterVersion++; // redraw the scoreboard if it is open
         },
 
         setVoteKick(kick: ((playerId: number) => void) | null): void {

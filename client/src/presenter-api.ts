@@ -217,6 +217,11 @@ export interface Presenter {
      * only while the mouse pointer is free.
      */
     setVoteKick(kick: ((playerId: number) => void) | null): void;
+    /**
+     * Every human player's round trip to the server in ms (`[player id, ms]`, measured by the server, sent every few
+     * seconds): shown as the scoreboard's Ping column. Bots and players not listed show a dash.
+     */
+    setPings(pings: readonly [number, number][]): void;
     /** A kill anywhere in the room. `zone` as in `died`. */
     killFeed(killerId: number, victimId: number, kind: KillKind, zone: HitZone | null, weapon?: string): void;
 }

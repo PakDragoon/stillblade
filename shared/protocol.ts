@@ -7,7 +7,7 @@ import type { InputCmd, Vec3 } from './types';
 import { GUN_COUNT } from './weapons';
 import type { HitZone } from './zones';
 
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 14;
 export const DEFAULT_PORT = 8080;
 /** Snapshots per second sent to each client. */
 export const SNAPSHOT_RATE = 30;
@@ -290,6 +290,8 @@ export type ServerMsg =
     | SoundEvent
     | RoundMsg
     | { type: 'roster'; players: RosterEntry[] }
+    /** Every few seconds: each human player's round trip to the server, measured by the server (never reported by a client). */
+    | PingsMsg
     | SummaryMsg
     | ChatMsg
     | DamageMsg
@@ -304,6 +306,15 @@ export type ServerMsg =
     | MapVoteMsg
     /** The room moved to another map between matches: unload the old one and load this before anything else arrives. */
     | { type: 'map'; map: string; mapName: string };
+
+/** Longest ping the server reports, in milliseconds (anything slower reads as this). */
+export const PING_MAX = 999;
+
+/** `[player id, milliseconds]` for every human player with a measurement; bots and unmeasured players are absent. */
+export interface PingsMsg {
+    type: 'pings';
+    pings: [number, number][];
+}
 
 /** A vote to remove a player, as everyone sees it. `vote` is null when none is running. */
 export interface KickVoteInfo {

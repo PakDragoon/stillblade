@@ -628,6 +628,7 @@ async function start(): Promise<void> {
             ui.setOptions(o);
         },
         kickVote(msg): void { ui.setKickVote(msg.vote, net.serverTime()); syncVoteKick(); },
+        pings(list): void { presenter.setPings(list); },
         mapVote(msg): void { ui.setMapVote(msg); },
         map(msg): Promise<void> { return swapMap(msg.map, msg.mapName); }
     });
