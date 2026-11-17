@@ -103,6 +103,51 @@ def log(*a):
 
 
 # ---------------------------------------------------------------------------------------------
+# Armature
+
+def tris(me):
+    return sum(len(p.vertices) - 2 for p in me.polygons)
+
+
+def make_armature(name, src, s, extra):
+    """New armature at the origin: the SWAT arm bones (metres) plus `extra` = [(name, parent, head)] (identity
+    orientation: Y forward, Z up)."""
+    data = bpy.data.armatures.new(name)
+    obj = bpy.data.objects.new(name, data)
+    bpy.context.scene.collection.objects.link(obj)
+    for o in bpy.context.scene.objects:
+        o.select_set(False)
+    bpy.context.view_layer.objects.active = obj
+    obj.select_set(True)
+    bpy.ops.object.mode_set(mode='EDIT')
+    eb = data.edit_bones
+    src_scale = src.matrix_world.to_scale()[0]
+    names = [b.name for b in src.data.bones if any(b.name == f'{a}.{sd}' for a in ARM_BONES for sd in 'LR')]
+    for n in names:
+        sb = src.data.bones[n]
+        M = src.matrix_world @ sb.matrix_local
+        loc = M.translation * s
+        rot = M.to_3x3().normalized().to_quaternion()
+        b = eb.new(n)
+        b.head = (0, 0, 0)
+        b.tail = (0, max(sb.length * src_scale * s, 0.012), 0)
+        b.matrix = Matrix.LocRotScale(loc, rot, None)
+    for n in names:
+        p = src.data.bones[n].parent
+        if p is not None and p.name in names:
+            eb[n].parent = eb[p.name]
+    for n, parent, head in extra:
+        b = eb.new(n)
+        b.head = Vector(head)
+        b.tail = Vector(head) + Vector((0, 0.05, 0))
+        b.roll = 0
+        if parent:
+            b.parent = eb[parent]
+    bpy.ops.object.mode_set(mode='OBJECT')
+    return obj
+
+
+# ---------------------------------------------------------------------------------------------
 # Weapon parts
 
 def axis_of(points):
