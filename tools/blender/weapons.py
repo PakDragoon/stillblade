@@ -444,8 +444,9 @@ def main():
     scope_maps = {}
     if scope_path:
         sobjs, scope_maps, sc_axis, sc_rear, sc_front = build_scope_downloaded(scope_path)
+        total = sum(rl.tris(o.data) for o in sobjs)
         for o in sobjs:
-            rl.decimate(o, FP_SCOPE_DL // max(1, len(sobjs)))
+            rl.decimate(o, max(60, FP_SCOPE_DL * rl.tris(o.data) // max(1, total)))
         scope = rl.join(sobjs, 'fp_gun_sight_scope2x')
         scope_source = 'downloaded'
     else:

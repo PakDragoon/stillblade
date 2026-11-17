@@ -375,6 +375,17 @@ def make_atlas(crops):
     return rl.Atlas('character', regions, SWATCHES)
 
 
+def smooth_normals(obj):
+    """Plain smooth vertex normals. The reduction's copied-back custom normals (realistic.decimate) are per face corner
+    from the nearest original face: right for hard-surface guns, but on reduced skin and cloth neighbouring corners of
+    one vertex get different normals and the surface looks faceted."""
+    me = obj.data
+    if me.has_custom_normals:
+        with bpy.context.temp_override(object=obj, active_object=obj):
+            bpy.ops.mesh.customdata_custom_splitnormals_clear()
+    me.shade_smooth()
+
+
 def balaclava(obj):
     """The ghost's head and feet: features smoothed and pushed out a few millimetres (a balaclava, boots)."""
     me = obj.data
@@ -413,7 +424,8 @@ def build_look(look, tier, sources, fold, atlas):
             obj = copy_part(src, f'{look}_{name}', set(drop), fold[fbx])
             if look == 'ghost' and name == 'Body_Full':
                 balaclava(obj)
-            rl.decimate(obj, BUDGET[tier][name], keep_normals=not (look == 'ghost' and name == 'Body_Full'))
+            rl.decimate(obj, BUDGET[tier][name], keep_normals=False)
+            smooth_normals(obj)
             if look == 'ghost':
                 atlas.remap(obj, swatch='polymer')
                 rl.set_colour(obj, GHOST_SUIT)
@@ -444,8 +456,8 @@ for _S in 'LR':
     ARM_BONES.update(f'Thumb{k}.{_S}' for k in (1, 2, 3))
 HAND_BONES = {b for b in ARM_BONES if not b.startswith(('UpperArm', 'LowerArm'))}
 # Look -> [(FBX, mesh, triangles)]: the defender's forearms, hands and rolled sleeves; the ghost's suit arms.
-FP_PARTS = {'defender': [('SKM_Character.fbx', 'Quantum_Arms', 2600), ('SKM_Character.fbx', 'Shirt_RolledUp', 700)],
-            'ghost': [('SKM_Body_Full.fbx', 'Body_Full', 3000)]}
+FP_PARTS = {'defender': [('SKM_Character.fbx', 'Quantum_Arms', 3800), ('SKM_Character.fbx', 'Shirt_RolledUp', 1200)],
+            'ghost': [('SKM_Body_Full.fbx', 'Body_Full', 4500)]}
 FP_REGION = {'M_Quantum_Arms': 'arms', 'M_Quantum_Head': 'arms', 'M_Quantum_Body': 'arms', 'M_Shirt_RolledUp': 'sleeve',
              'M_Body': 'ghostarms', 'M_Head': 'ghostarms'}
 FP_TEXTURES = {'arms': MATERIALS['M_Quantum_Arms'][1:], 'sleeve': MATERIALS['M_Shirt_RolledUp'][1:],
@@ -530,7 +542,17 @@ def grey_suit(rgb, s):
     lum = rgb[..., 0] * 0.3 + rgb[..., 1] * 0.55 + rgb[..., 2] * 0.15
     k = lum / max(float(lum.mean()), 1e-3)
     rgb[...] = np.clip(k * 0.75, 0, 1)[..., None]
-    s[...] = 0.12
+    s[...] = 0.08
+
+
+def matte(rgb, s):
+    """Skin and cloth in a gun atlas: the gun material reads the surface value as gloss AND metalness, so keep it low."""
+    s[...] = np.minimum(s, 0.1)
+
+
+def dye_matte(rgb, s):
+    dye_orange(rgb, s)
+    matte(rgb, s)
 
 
 def fp_regions(rects, crops):
@@ -538,7 +560,7 @@ def fp_regions(rects, crops):
     out = []
     for reg, rect in rects.items():
         stem_c, stem_r = FP_TEXTURES[reg]
-        post = dye_orange if reg == 'sleeve' else grey_suit if reg == 'ghostarms' else None
+        post = dye_matte if reg == 'sleeve' else grey_suit if reg == 'ghostarms' else matte
         out.append(rl.Region(reg, rect, texture_maps(stem_c, stem_r), crop=crops.get(reg), post=post))
     return out
 
@@ -547,7 +569,8 @@ def fp_arms(look, parts, atlas, material):
     """One arms object for `look`: parts reduced, UVs into `atlas`, vertex colours, `material`."""
     done = []
     for obj in parts:
-        rl.decimate(obj, obj['budget'])
+        rl.decimate(obj, obj['budget'], keep_normals=False)
+        smooth_normals(obj)
         atlas.remap(obj, material_region={m.name: FP_REGION.get(m.name.split('.')[0], 'arms')
                                           for m in obj.data.materials if m})
         if look == 'ghost':
