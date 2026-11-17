@@ -31,7 +31,7 @@ import { DEFAULT_ROOM_OPTIONS, botTeamSize, cleanRoomOptions, halftimeRound, typ
 import { NavGraph } from '../../shared/nav';
 import type { MapData, PlayerState, Vec3 } from '../../shared/types';
 import { ghostVisTarget, stepVis } from '../../shared/visibility';
-import { DEFENDER_KNIFE, WEAPONS } from '../../shared/weapons';
+import { DEFENDER_KNIFE, SIGHT_IRON, WEAPONS, cleanSight } from '../../shared/weapons';
 import { hitZone, zoneDamage, type HitZone } from '../../shared/zones';
 import { chooseName, cleanName, maskChat } from './namefilter';
 import { Bans, KickVote, MAP_VOTE_LEAD_MS, MapVote } from './votes';
@@ -75,6 +75,11 @@ export class Player {
     credits = MAX_CMD_CREDITS;
     /** The defender's weapons (shared/gun.ts, shared/weapons.ts); reset at every spawn. */
     readonly loadout = createLoadout();
+    /**
+     * The rifle sight this player last asked for (join query or `sight` message; bots never ask, so iron).
+     * Mounted at the next spawn as `loadout.sight`, the active one; never changes a life in progress.
+     */
+    sightPending = SIGHT_IRON;
     /** Ghost knife timing, counted in commands processed for this player (shared/knife.ts). Defenders use `loadout.knife`. */
     readonly knife = createKnifeState();
     /** Ghosts: carrying the bomb and the repick wait (shared/bomb.ts), stepped per processed command; reset at every spawn. */
@@ -319,7 +324,7 @@ export class Game implements BotWorld {
         for (const p of this.players.values()) {
             players.push({
                 id: p.id, name: p.name, team: p.team, alive: p.alive, ...p.stats,
-                ready: p.ready, creator: p.id === creator, idle: p.idle, bot: p.bot
+                ready: p.ready, creator: p.id === creator, idle: p.idle, bot: p.bot, sight: p.loadout.sight
             });
         }
         return players;
@@ -340,8 +345,12 @@ export class Game implements BotWorld {
     }
 
     private sendRoster(): void {
+        this.rosterDirty = false;
         this.broadcast({ type: 'roster', players: this.rosterEntries() });
     }
+
+    /** A spawn mounted a different sight than the roster shows: re-sent at the end of the tick (once, however many). */
+    private rosterDirty = false;
 
     private teamCounts(): Record<Team, number> {
         const n = { ghosts: 0, defenders: 0 };
@@ -353,7 +362,7 @@ export class Game implements BotWorld {
      * Adds a player. `as.team` puts them on a side (bots, and the practice range's chosen side); otherwise
      * a person joins the smaller team. `as.brain` makes the player a bot run by the server.
      */
-    join(conn: Connection, name = '', as: { team?: Team; brain?: BotBrain; spawnAt?: { pos: Vec3; yaw: number } } = {}): number {
+    join(conn: Connection, name = '', as: { team?: Team; brain?: BotBrain; spawnAt?: { pos: Vec3; yaw: number }; sight?: number } = {}): number {
         let ghosts = 0;
         for (const p of this.players.values()) if (p.team === 'ghosts') ghosts++;
         let team: Team = as.team ?? (ghosts <= this.players.size - ghosts ? 'ghosts' : 'defenders');
@@ -376,6 +385,8 @@ export class Game implements BotWorld {
         player.baseName = clean;
         if (as.brain) { player.bot = true; player.brain = as.brain; player.ready = true; }
         if (as.spawnAt) player.spawnAt = as.spawnAt;
+        // The join query's sight counts from the first spawn, which may come just below (warmup).
+        if (!as.brain && as.sight !== undefined) player.sightPending = cleanSight(as.sight);
         if (back) { player.stats = { ...back.stats }; this.departed.delete(shown); }
         player.joinedAt = player.chatTokensAt = this.now;
         this.players.set(id, player);
@@ -586,6 +597,8 @@ export class Game implements BotWorld {
             case 'votecast': if (this.kickVote.cast(p.id, msg.yes, this.presentIds())) this.stepKickVote(); break;
             case 'removeplayer': this.removePlayer(p, msg.target); break;
             case 'mapvote': this.castMapVote(p, msg.map); break;
+            // Stored only: it takes effect at the next spawn, so sending it often changes nothing and sends nothing.
+            case 'sight': if (!p.bot) p.sightPending = cleanSight(msg.sight); break;
         }
     }
 
@@ -731,7 +744,9 @@ export class Game implements BotWorld {
         p.health = MAX_HEALTH;
         p.alive = true;
         resetKnife(p.knife);
-        resetLoadout(p.loadout);
+        // The chosen sight becomes active here and only here; others see it through the roster.
+        if (p.loadout.sight !== p.sightPending) this.rosterDirty = true;
+        resetLoadout(p.loadout, p.sightPending);
         resetCarry(p.carry);
         if (p.id === this.carrierId) this.carrierId = 0;
         p.lastGround[0] = spawn.pos[0]; p.lastGround[1] = spawn.pos[1]; p.lastGround[2] = spawn.pos[2];
@@ -739,7 +754,7 @@ export class Game implements BotWorld {
         p.actionTicks = 0;
         p.respawnAt = 0;
         p.vis = p.team === 'ghosts' ? 0 : 1;
-        p.conn.send({ type: 'spawn', pos: spawn.pos, yaw: p.yaw });
+        p.conn.send({ type: 'spawn', pos: spawn.pos, yaw: p.yaw, sight: p.loadout.sight });
     }
 
     /** Simulates one client command. Called as commands arrive, so each client drives its own clock. */
@@ -1117,6 +1132,7 @@ export class Game implements BotWorld {
         }
         if (this.rounds) this.updateRound();
         this.stepKickVote();
+        if (this.rosterDirty) this.sendRoster();
         if (this.tickCount % SNAPSHOT_EVERY === 0) this.sendSnapshots();
     }
 

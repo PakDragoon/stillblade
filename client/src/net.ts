@@ -11,7 +11,8 @@ import type { RemoteView } from './presenter-api';
 export interface NetHandlers {
     /** A new authoritative state for the local player, with the last command the server simulated. */
     snapshot(me: SelfSnap, ack: number): void;
-    spawn(pos: Vec3, yaw: number): void;
+    /** `sight`: the rifle sight active for this life (shared/weapons.ts SIGHTS). */
+    spawn(pos: Vec3, yaw: number, sight: number): void;
     shot(ev: ShotEvent): void;
     slash(ev: SlashEvent): void;
     sound(ev: SoundEvent): void;
@@ -228,7 +229,7 @@ export class Net {
                 break;
             }
             case 'spawn':
-                handlers.spawn(msg.pos, msg.yaw);
+                handlers.spawn(msg.pos, msg.yaw, msg.sight ?? 0);
                 break;
             case 'shot':
                 handlers.shot(msg);

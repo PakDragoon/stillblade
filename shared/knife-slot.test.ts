@@ -4,7 +4,7 @@ import {
     GUN_IDLE, MELEE_SLASH, MELEE_SWING, aimFraction, cancelReloads, copyLoadout, createLoadout, heldGun, heldWeapon,
     holdingKnife, justSwitched, recoilScale, resetLoadout, sameLoadout, stepLoadout, type LoadoutInput, type LoadoutState
 } from './gun';
-import { DEFENDER_KNIFE, SLOT_COUNT, SLOT_KNIFE, SLOT_PISTOL, SLOT_RIFLE, WEAPONS, slotId, slotLabel } from './weapons';
+import { DEFENDER_KNIFE, SIGHT_IRON, SLOT_COUNT, SLOT_KNIFE, SLOT_PISTOL, SLOT_RIFLE, WEAPONS, slotId, slotLabel } from './weapons';
 
 const RIFLE = WEAPONS[SLOT_RIFLE];
 const PISTOL = WEAPONS[SLOT_PISTOL];
@@ -171,7 +171,7 @@ describe('defender knife: the slot', () => {
         expect(sameLoadout(copy, l)).toBe(false);
         cancelReloads(l);
         expect(l.knife).toEqual({ cooldown: 0, windup: 0 });
-        resetLoadout(l);
+        resetLoadout(l, SIGHT_IRON);
         expect(sameLoadout(l, createLoadout())).toBe(true);
         expect(l.slot).toBe(SLOT_RIFLE);
     });

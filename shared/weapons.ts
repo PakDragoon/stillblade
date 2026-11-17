@@ -38,10 +38,15 @@ export interface WeaponDef {
     readonly recoilDecayTicks: number;
     /** Recoil pattern in degrees, [pitch up, yaw left] per shot of an uninterrupted burst. */
     readonly patternDeg: readonly (readonly [number, number])[];
-    /** Aim down sights: commands to go fully in (and out). */
+    /**
+     * Aim down sights: commands to go fully in (and out). For a gun that `takesSights`, the sight in use
+     * decides (`SIGHTS`); the value here is then the default sight's, used where no loadout is known.
+     */
     readonly adsTicks: number;
-    /** Field-of-view magnification when fully aimed (1.5 = things look 1.5 times bigger). */
+    /** Field-of-view magnification when fully aimed (1.5 = things look 1.5 times bigger). Same rule as `adsTicks`. */
     readonly adsZoom: number;
+    /** The sight the player chose (`SIGHTS`) replaces this gun's aim time and zoom. Only the rifle. */
+    readonly takesSights: boolean;
     /** Spread and recoil multipliers when fully aimed (blended in by aim progress). */
     readonly adsSpread: number;
     readonly adsRecoil: number;
@@ -50,6 +55,50 @@ export interface WeaponDef {
 export type WeaponId = 'rifle' | 'pistol';
 
 const ticks = (ms: number): number => Math.round((ms / 1000) * TICK_RATE);
+
+/**
+ * A rifle sight (package M). The player picks one in the loadout page; the server makes the choice
+ * active at that player's next spawn (`resetLoadout`), and the active sight travels in the self snapshot
+ * (`LoadoutState.sight`, one byte) so the client predicts aim exactly. A sight changes only the aimed zoom
+ * and the aim-in time: spread, recoil and their aim multipliers stay the gun's (`WeaponDef`).
+ * `adsTicks` travels as `LoadoutState.aim`, one byte: keep it at or below 255 (a test checks).
+ */
+export interface SightDef {
+    /** Stable name used by the presentation (the sight mesh on the gun, the overlay) and the saved loadout. */
+    readonly id: SightId;
+    /** Shown in the loadout page. */
+    readonly label: string;
+    /** One line in the loadout page on what it does. */
+    readonly blurb: string;
+    /** Commands to aim fully in (and out). */
+    readonly adsTicks: number;
+    /** Field-of-view magnification when fully aimed. */
+    readonly adsZoom: number;
+}
+
+export type SightId = 'iron' | 'reddot' | 'scope2x';
+
+/**
+ * Every rifle sight, indexed by the number that travels (snapshot byte, roster, join query, `sight`
+ * message). Starting values, untuned: they need the owner's hands on a mouse.
+ */
+export const SIGHTS: readonly SightDef[] = [
+    { id: 'iron', label: 'Iron sights', blurb: "The rifle's own sights. Fastest to aim, slight zoom (1.3x).", adsTicks: 12, adsZoom: 1.3 },
+    { id: 'reddot', label: '1x red dot', blurb: 'A red dot on clear glass: quick to aim, easy to track targets (1.4x).', adsTicks: 12, adsZoom: 1.4 },
+    { id: 'scope2x', label: '2x scope', blurb: 'Twice the zoom for long lanes, but slower to aim and a narrow view (2.0x).', adsTicks: 16, adsZoom: 2.0 }
+];
+export const SIGHT_COUNT = SIGHTS.length;
+/** The sight everyone starts with, bots always use, and anything unreadable falls back to. */
+export const SIGHT_IRON = 0;
+
+/** A valid sight index from anything (a saved loadout, a query parameter, a message): unknown is `SIGHT_IRON`. */
+export function cleanSight(v: unknown): number {
+    const n = typeof v === 'string' && /^[0-9]{1,3}$/.test(v) ? Number(v) : v;
+    return typeof n === 'number' && Number.isInteger(n) && n >= 0 && n < SIGHT_COUNT ? n : SIGHT_IRON;
+}
+
+/** The sight with this index, or the iron sight for anything out of range. */
+export const sightDef = (sight: number): SightDef => SIGHTS[sight >= 0 && sight < SIGHT_COUNT ? sight : SIGHT_IRON];
 
 /** Slot 1: the original defender gun, automatic. */
 const RIFLE: WeaponDef = {
@@ -67,7 +116,8 @@ const RIFLE: WeaponDef = {
         [4.50, 0.90], [4.55, 1.20], [4.55, 1.35], [4.60, 1.25], [4.60, 0.95],
         [4.65, 0.55], [4.65, 0.15], [4.70, -0.20], [4.70, -0.45], [4.75, -0.60]
     ],
-    adsTicks: 12, adsZoom: 1.5, adsSpread: 0.5, adsRecoil: 0.8
+    // Aim time and zoom come from the sight (SIGHTS); these are the iron sight's, for code with no loadout.
+    adsTicks: SIGHTS[SIGHT_IRON].adsTicks, adsZoom: SIGHTS[SIGHT_IRON].adsZoom, takesSights: true, adsSpread: 0.5, adsRecoil: 0.8
 };
 
 /** Slot 2: semi-automatic sidearm. A sharp kick per shot that recovers quickly between taps. */
@@ -83,7 +133,7 @@ const PISTOL: WeaponDef = {
         [0.00, 0.00], [0.85, 0.10], [1.55, -0.12], [2.15, 0.18], [2.65, -0.15], [3.05, 0.22],
         [3.35, -0.20], [3.60, 0.25], [3.80, -0.20], [3.95, 0.25], [4.05, -0.15], [4.10, 0.20]
     ],
-    adsTicks: 8, adsZoom: 1.2, adsSpread: 0.6, adsRecoil: 0.85
+    adsTicks: 8, adsZoom: 1.2, takesSights: false, adsSpread: 0.6, adsRecoil: 0.85
 };
 
 /**
@@ -137,6 +187,19 @@ export function slotId(slot: number): SlotId {
 /** HUD and kill-feed name of a slot. */
 export function slotLabel(slot: number): string {
     return slot === SLOT_KNIFE ? DEFENDER_KNIFE.label : WEAPONS[isGunSlot(slot) ? slot : 0].label;
+}
+
+/** Aim-in commands of the gun in `slot` with `sight` mounted (the sight counts only on a gun that takes sights). */
+export function adsTicksOf(slot: number, sight: number): number {
+    const def = WEAPONS[isGunSlot(slot) ? slot : 0];
+    return def.takesSights ? sightDef(sight).adsTicks : def.adsTicks;
+}
+
+/** Fully aimed zoom of the gun in `slot` with `sight` mounted (1 for the knife). */
+export function adsZoomOf(slot: number, sight: number): number {
+    if (!isGunSlot(slot)) return 1;
+    const def = WEAPONS[slot];
+    return def.takesSights ? sightDef(sight).adsZoom : def.adsZoom;
 }
 
 /** Commands it takes to draw the weapon in a slot. */

@@ -616,7 +616,7 @@ async function start(): Promise<void> {
                 errorOffset[0] += ex; errorOffset[1] += ey; errorOffset[2] += ez;
             }
         },
-        spawn(pos: Vec3, yaw: number): void {
+        spawn(pos: Vec3, yaw: number, sight: number): void {
             copyPlayerState(curr, createPlayerState(pos));
             copyPlayerState(prev, curr);
             errorOffset[0] = errorOffset[1] = errorOffset[2] = 0;
@@ -626,7 +626,7 @@ async function start(): Promise<void> {
             alive = true;
             health = MAX_HEALTH;
             resetKnife(knife);
-            resetLoadout(loadout);
+            resetLoadout(loadout, sight); // the server mounted the sight it names here; the snapshot carries it too
             // The server resets the carry at every spawn and hands the bomb out just after (snapshot and `bomb`).
             resetCarry(carry);
             actionTicks = 0;

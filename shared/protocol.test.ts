@@ -2,19 +2,43 @@ import { describe, expect, it } from 'vitest';
 import { createLoadout } from './gun';
 import { createKnifeState } from './knife';
 import { PROTOCOL_VERSION, decodeClient, decodeServer, encodeClient, encodeServer, type NetCmd, type ServerMsg } from './protocol';
-import { GUN_COUNT, SLOT_COUNT, SLOT_KNIFE } from './weapons';
+import { GUN_COUNT, SIGHT_COUNT, SLOT_COUNT, SLOT_KNIFE } from './weapons';
 
 const cmd: NetCmd = {
     seq: 123456, forward: 1, right: -1, yaw: Math.fround(7.123456), pitch: Math.fround(-0.4321),
     jump: true, walk: false, crouch: true, fire: false, use: true, reload: true, slot: 2, swap: true, aim: true, drop: true,
     viewTime: 98765.4321
 };
-/** Self state, loadout (5 + 7 per gun + 2 for the defender knife), ghost knife (2), bomb repick wait (1), player count (1). */
-const SNAP_HEAD = 75 + 5 + 7 * GUN_COUNT + 2 + 2 + 1 + 1;
+/** Self state, loadout (6 with the sight + 7 per gun + 2 for the defender knife), ghost knife (2), bomb repick wait (1), player count (1). */
+const SNAP_HEAD = 75 + 6 + 7 * GUN_COUNT + 2 + 2 + 1 + 1;
 
 describe('wire format', () => {
-    it('is protocol version 14', () => {
-        expect(PROTOCOL_VERSION).toBe(14);
+    it('is protocol version 15', () => {
+        expect(PROTOCOL_VERSION).toBe(15);
+    });
+
+    it('carries the active sight in the self snapshot exactly, for every sight', () => {
+        for (let sight = 0; sight < SIGHT_COUNT; sight++) {
+            const loadout = createLoadout();
+            loadout.sight = sight;
+            const back = decodeServer(encodeServer({
+                type: 'snap', time: 0, ack: 1, players: [],
+                me: { team: 'defenders', actionTicks: 0, carry: { carrier: false, wait: 0 }, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, crouched: false, health: 100, alive: true, respawnAt: 0, loadout, knife: createKnifeState() }
+            }) as Uint8Array);
+            expect(back.type === 'snap' && back.me.loadout.sight).toBe(sight);
+        }
+    });
+
+    it('validates the sight choice message', () => {
+        for (let sight = 0; sight < SIGHT_COUNT; sight++) {
+            expect(decodeClient(encodeClient({ type: 'sight', sight }) as string)).toEqual({ type: 'sight', sight });
+        }
+        for (const bad of [-1, SIGHT_COUNT, 1.5, '1', null, true, 1e9]) {
+            expect(() => decodeClient(JSON.stringify({ type: 'sight', sight: bad }))).toThrow();
+        }
+        expect(() => decodeClient(JSON.stringify({ type: 'sight' }))).toThrow();
+        // Extra fields are dropped, not passed on.
+        expect(decodeClient(JSON.stringify({ type: 'sight', sight: 2, pos: [1, 2, 3] }))).toEqual({ type: 'sight', sight: 2 });
     });
 
     it('round-trips a command exactly, in 26 bytes', () => {
@@ -66,7 +90,7 @@ describe('wire format', () => {
                 vel: [5.2, -3.3333333333, 0.000001], onGround: true, crouched: false, health: 66, alive: true,
                 respawnAt: 0,
                 loadout: {
-                    slot: 1, prev: 0, draw: 24, aim: 12, trigger: 1,
+                    slot: 1, prev: 0, draw: 24, aim: 12, trigger: 1, sight: 2,
                     guns: [
                         { mag: 17, reserve: 90, reload: 132, cooldown: 6, burst: 29, sinceShot: 255, shots: 201 },
                         { mag: 11, reserve: 36, reload: 84, cooldown: 9, burst: 11, sinceShot: 3, shots: 255 }
@@ -164,7 +188,7 @@ describe('wire format', () => {
     });
 
     it('sends rare events as JSON text', () => {
-        const msg: ServerMsg = { type: 'spawn', pos: [1, 2, 3], yaw: 1.5 };
+        const msg: ServerMsg = { type: 'spawn', pos: [1, 2, 3], yaw: 1.5, sight: 1 };
         const wire = encodeServer(msg);
         expect(typeof wire).toBe('string');
         expect(decodeServer(wire as string)).toEqual(msg);

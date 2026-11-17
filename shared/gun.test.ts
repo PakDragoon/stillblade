@@ -9,7 +9,9 @@ import {
 import { createPlayerState } from './movement';
 import { viewDir } from './raycast';
 import type { Vec3 } from './types';
-import { DEFENDER_KNIFE, GUN_COUNT, SLOT_COUNT, SLOT_PISTOL, SLOT_RIFLE, WEAPONS, type WeaponDef } from './weapons';
+import {
+    DEFENDER_KNIFE, GUN_COUNT, SIGHTS, SIGHT_COUNT, SIGHT_IRON, adsTicksOf, adsZoomOf, cleanSight, sightDef, SLOT_COUNT, SLOT_PISTOL, SLOT_RIFLE, WEAPONS, type WeaponDef
+} from './weapons';
 
 const RIFLE = WEAPONS[SLOT_RIFLE];
 const PISTOL = WEAPONS[SLOT_PISTOL];
@@ -46,7 +48,7 @@ describe('weapon table', () => {
         expect(PISTOL.drawTicks).toBe(15); // 0.25 s
         expect(PISTOL.spreadStill).toBeLessThan(RIFLE.spreadStill);
         expect(PISTOL.spreadMoving).toBeLessThan(RIFLE.spreadMoving);
-        expect(RIFLE.adsZoom).toBe(1.5);
+        expect(RIFLE.adsZoom).toBe(1.3); // the iron sight's (package M; was 1.5 before sights)
         expect(PISTOL.adsZoom).toBe(1.2);
     });
 
@@ -349,13 +351,100 @@ describe('switching', () => {
         cancelReloads(l);
         expect(l.guns.every(g => g.reload === 0)).toBe(true);
         expect(heldGun(l)!.mag).toBe(1);
-        resetLoadout(l);
+        resetLoadout(l, SIGHT_IRON);
         expect(sameLoadout(l, createLoadout())).toBe(true);
         const copy = createLoadout();
         l.guns[1].shots = 9;
         copyLoadout(copy, l);
         expect(sameLoadout(copy, l)).toBe(true);
         expect(copy.guns[1]).not.toBe(l.guns[1]);
+    });
+});
+
+describe('rifle sights (package M)', () => {
+    it('keeps every sight number that travels within one byte, and the table small enough for its byte', () => {
+        expect(SIGHT_COUNT).toBeGreaterThanOrEqual(3);
+        expect(SIGHT_COUNT).toBeLessThanOrEqual(255); // LoadoutState.sight, roster, spawn message
+        expect(new Set(SIGHTS.map(x => x.id)).size).toBe(SIGHT_COUNT);
+        for (const x of SIGHTS) {
+            expect(Number.isInteger(x.adsTicks)).toBe(true);
+            expect(x.adsTicks).toBeGreaterThan(0);
+            expect(x.adsTicks).toBeLessThanOrEqual(255); // LoadoutState.aim travels in one byte
+            expect(x.adsZoom).toBeGreaterThanOrEqual(1);
+            expect(x.label.length).toBeGreaterThan(0);
+            expect(x.blurb.length).toBeGreaterThan(0);
+        }
+        expect(SIGHTS[SIGHT_IRON].id).toBe('iron');
+    });
+
+    it("starts with the brief's untuned values: iron 1.3x/12, red dot 1.4x/12, 2x scope 2.0x/16", () => {
+        expect(SIGHTS.map(x => [x.id, x.adsZoom, x.adsTicks])).toEqual([
+            ['iron', 1.3, 12], ['reddot', 1.4, 12], ['scope2x', 2.0, 16]
+        ]);
+    });
+
+    it('applies only to the rifle: the pistol keeps its own aim, the knife has none', () => {
+        expect(RIFLE.takesSights).toBe(true);
+        expect(PISTOL.takesSights).toBe(false);
+        for (let sight = 0; sight < SIGHT_COUNT; sight++) {
+            expect(adsTicksOf(SLOT_RIFLE, sight)).toBe(SIGHTS[sight].adsTicks);
+            expect(adsZoomOf(SLOT_RIFLE, sight)).toBe(SIGHTS[sight].adsZoom);
+            expect(adsTicksOf(SLOT_PISTOL, sight)).toBe(PISTOL.adsTicks);
+            expect(adsZoomOf(SLOT_PISTOL, sight)).toBe(PISTOL.adsZoom);
+            expect(adsZoomOf(SLOT_COUNT - 1, sight)).toBe(1);
+        }
+        // The rifle's own numbers are the iron sight's, for code with no loadout at hand.
+        expect(RIFLE.adsTicks).toBe(SIGHTS[SIGHT_IRON].adsTicks);
+        expect(RIFLE.adsZoom).toBe(SIGHTS[SIGHT_IRON].adsZoom);
+    });
+
+    it('cleans any outside value to a valid index, iron when unreadable', () => {
+        expect(cleanSight(0)).toBe(0);
+        expect(cleanSight(2)).toBe(2);
+        expect(cleanSight('1')).toBe(1);
+        for (const bad of [-1, SIGHT_COUNT, 1.5, '1.5', '', 'x', null, undefined, {}, '0001', NaN]) expect(cleanSight(bad)).toBe(SIGHT_IRON);
+        expect(sightDef(99)).toBe(SIGHTS[SIGHT_IRON]);
+    });
+
+    it("mounts the sight only at a spawn and aims in at that sight's pace", () => {
+        for (let sight = 0; sight < SIGHT_COUNT; sight++) {
+            const l = createLoadout();
+            resetLoadout(l, sight);
+            expect(l.sight).toBe(sight);
+            const t = SIGHTS[sight].adsTicks;
+            runL(l, t - 1, () => ({ aim: true }));
+            expect(aimFraction(l)).toBeLessThan(1);
+            stepLoadout(l, input({ aim: true }), true);
+            expect(aimFraction(l)).toBe(1);
+            runL(l, 5, () => ({ aim: true }));
+            expect(l.aim).toBe(t);
+            // Recoil and spread scale by aim fraction exactly as before: the sight does not change them.
+            expect(recoilScale(l)).toBeCloseTo(RIFLE.adsRecoil, 15);
+            // Commands never change the sight.
+            runL(l, 30, i => ({ slot: (i % 3) + 1, aim: true, fire: i % 2 === 0, reload: true, swap: true }));
+            expect(l.sight).toBe(sight);
+        }
+        const bad = createLoadout();
+        resetLoadout(bad, 77);
+        expect(bad.sight).toBe(SIGHT_IRON);
+    });
+
+    it("eases a 2x scope out into the pistol's range on a switch", () => {
+        const l = createLoadout();
+        resetLoadout(l, 2);
+        runL(l, SIGHTS[2].adsTicks, () => ({ aim: true }));
+        expect(l.aim).toBe(16);
+        stepLoadout(l, input({ slot: 2, aim: true }), true);
+        expect(l.aim).toBe(PISTOL.adsTicks - 1);
+    });
+
+    it('copies and compares the sight with the rest of the loadout', () => {
+        const a = createLoadout(), b = createLoadout();
+        resetLoadout(a, 1);
+        expect(sameLoadout(a, b)).toBe(false);
+        copyLoadout(b, a);
+        expect(b.sight).toBe(1);
+        expect(sameLoadout(a, b)).toBe(true);
     });
 });
 
@@ -505,7 +594,7 @@ describe('spread seed', () => {
         runL(l, PISTOL.drawTicks, i => (i === 0 ? { slot: 2 } : {}));
         expect(stepLoadout(l, input({ fire: true }), true)).toBe(0);
         expect(spreadSeed(l)).toBe(256 + 1);
-        resetLoadout(l);
+        resetLoadout(l, SIGHT_IRON);
         expect(l.guns.every(g => g.shots === 0)).toBe(true);
     });
 });

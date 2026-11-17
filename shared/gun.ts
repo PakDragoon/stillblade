@@ -3,7 +3,7 @@ import { horizontalSpeed } from './movement';
 import { viewDir } from './raycast';
 import { KNIFE_SLASH, KNIFE_SWING, copyKnifeState, createKnifeState, resetKnife, sameKnifeState, stepKnife, type KnifeState } from './knife';
 import type { PlayerState, Vec3 } from './types';
-import { GUN_COUNT, SLOT_COUNT, SLOT_KNIFE, WEAPONS, drawTicksOf, isGunSlot, type WeaponDef } from './weapons';
+import { GUN_COUNT, SIGHT_COUNT, SIGHT_IRON, SLOT_COUNT, SLOT_KNIFE, WEAPONS, adsTicksOf, drawTicksOf, isGunSlot, type WeaponDef } from './weapons';
 
 /**
  * One defender weapon's state. Every field is a small integer counted in the shooter's own
@@ -43,8 +43,16 @@ export interface LoadoutState {
     prev: number;
     /** Commands left until the weapon in hand can fire or reload; 0 when ready. */
     draw: number;
-    /** Aim-down-sights progress in commands, 0 (hip) to the weapon's `adsTicks` (fully aimed); 0 with the knife. */
+    /**
+     * Aim-down-sights progress in commands, 0 (hip) to the gun's aim time (fully aimed: `adsTicksOf` the slot
+     * and `sight`); 0 with the knife.
+     */
     aim: number;
+    /**
+     * The rifle sight in use (index into `SIGHTS`). Set only at a spawn (`resetLoadout`), from the choice the
+     * server holds for the player; never changed by a command. Sent exactly in the self snapshot (one byte).
+     */
+    sight: number;
     /**
      * 1 once the trigger has done something (a shot, a dry click, a reload on empty, a knife swing)
      * and is still held; 0 once released. A semi-automatic weapon fires only while this is 0, so every shot needs
@@ -169,13 +177,18 @@ const FIRST_PREV = SLOT_COUNT > 1 ? 1 : 0;
 
 export function createLoadout(): LoadoutState {
     return {
-        slot: 0, prev: FIRST_PREV, draw: 0, aim: 0, trigger: 0, guns: WEAPONS.map(d => createGunState(d)),
+        slot: 0, prev: FIRST_PREV, draw: 0, aim: 0, trigger: 0, sight: SIGHT_IRON, guns: WEAPONS.map(d => createGunState(d)),
         knife: createKnifeState()
     };
 }
 
-/** Every weapon full, the first slot in hand and ready: every spawn (so every round start). */
-export function resetLoadout(l: LoadoutState): void {
+/**
+ * Every weapon full, the first slot in hand and ready, and `sight` mounted on the rifle: every spawn (so
+ * every round start). The server passes the sight the player chose (it becomes active here and only here);
+ * the client passes the one the `spawn` message names. An invalid index mounts the iron sight.
+ */
+export function resetLoadout(l: LoadoutState, sight: number): void {
+    l.sight = Number.isInteger(sight) && sight >= 0 && sight < SIGHT_COUNT ? sight : SIGHT_IRON;
     l.slot = 0;
     l.prev = FIRST_PREV;
     l.draw = 0;
@@ -206,12 +219,14 @@ export function copyLoadout(dst: LoadoutState, src: LoadoutState): void {
     dst.draw = src.draw;
     dst.aim = src.aim;
     dst.trigger = src.trigger;
+    dst.sight = src.sight;
     for (let i = 0; i < GUN_COUNT; i++) copyGunState(dst.guns[i], src.guns[i]);
     copyKnifeState(dst.knife, src.knife);
 }
 
 export function sameLoadout(a: LoadoutState, b: LoadoutState): boolean {
-    if (a.slot !== b.slot || a.prev !== b.prev || a.draw !== b.draw || a.aim !== b.aim || a.trigger !== b.trigger) return false;
+    if (a.slot !== b.slot || a.prev !== b.prev || a.draw !== b.draw || a.aim !== b.aim || a.trigger !== b.trigger ||
+        a.sight !== b.sight) return false;
     for (let i = 0; i < GUN_COUNT; i++) if (!sameGunState(a.guns[i], b.guns[i])) return false;
     return sameKnifeState(a.knife, b.knife);
 }
@@ -246,7 +261,7 @@ export function stepLoadout(l: LoadoutState, c: LoadoutInput, armed: boolean): n
         l.draw = drawTicksOf(want);
         // Aim keeps easing out at the usual rate, measured in the new gun's steps; the knife has no aim.
         if (!isGunSlot(want)) l.aim = 0;
-        else if (l.aim > WEAPONS[want].adsTicks) l.aim = WEAPONS[want].adsTicks;
+        else if (l.aim > adsTicksOf(want, l.sight)) l.aim = adsTicksOf(want, l.sight);
     } else if (l.draw > 0) l.draw--;
 
     const ready = l.draw === 0;
@@ -254,7 +269,7 @@ export function stepLoadout(l: LoadoutState, c: LoadoutInput, armed: boolean): n
     const def = knifeInHand ? null : WEAPONS[l.slot];
     const gun = knifeInHand ? null : l.guns[l.slot];
     if (def && gun && c.aim && ready && gun.reload === 0) {
-        if (l.aim < def.adsTicks) l.aim++;
+        if (l.aim < adsTicksOf(l.slot, l.sight)) l.aim++;
     } else if (l.aim > 0) l.aim--;
 
     // A semi-automatic gun needs a fresh press per shot; the knife swings while held, like the ghosts'.
@@ -271,9 +286,9 @@ export function stepLoadout(l: LoadoutState, c: LoadoutInput, armed: boolean): n
     return result;
 }
 
-/** Aim-down-sights progress 0..1 of the weapon in hand (always 0 with the knife). */
+/** Aim-down-sights progress 0..1 of the weapon in hand, with its sight (always 0 with the knife). */
 export function aimFraction(l: LoadoutState): number {
-    return isGunSlot(l.slot) ? l.aim / WEAPONS[l.slot].adsTicks : 0;
+    return isGunSlot(l.slot) ? l.aim / adsTicksOf(l.slot, l.sight) : 0;
 }
 
 /** Recoil multiplier for the gun in hand: 1 from the hip, `adsRecoil` fully aimed; 1 with the knife. */

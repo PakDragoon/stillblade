@@ -4,10 +4,10 @@ import type { GunState, LoadoutState } from './gun';
 import type { KnifeState } from './knife';
 import type { RoomOptions } from './room-options';
 import type { InputCmd, Vec3 } from './types';
-import { GUN_COUNT } from './weapons';
+import { GUN_COUNT, SIGHT_COUNT } from './weapons';
 import type { HitZone } from './zones';
 
-export const PROTOCOL_VERSION = 14;
+export const PROTOCOL_VERSION = 15;
 export const DEFAULT_PORT = 8080;
 /** Snapshots per second sent to each client. */
 export const SNAPSHOT_RATE = 30;
@@ -202,6 +202,11 @@ export interface RosterEntry extends MatchStats {
     idle: boolean;
     /** A computer player run by the server (its name also starts with "BOT"). */
     bot: boolean;
+    /**
+     * The rifle sight this player's current life uses (index into `SIGHTS`, shared/weapons.ts), for drawing it
+     * on their gun. The active one only: a choice made mid-life shows from their next spawn. Bots: iron.
+     */
+    sight: number;
 }
 
 /**
@@ -284,7 +289,8 @@ export type ServerMsg =
     /** `practice`: the room is a private practice range (no rounds, reserves kept full: the client predicts that too). */
     | { type: 'welcome'; version: number; id: number; team: Team; map: string; mapName: string; time: number; options: RoomOptions; room: string; practice?: boolean }
     | { type: 'snap'; time: number; ack: number; me: SelfSnap; players: PlayerSnap[] }
-    | { type: 'spawn'; pos: Vec3; yaw: number }
+    /** `sight`: the rifle sight active for this life (the client predicts aim with it until the first snapshot). */
+    | { type: 'spawn'; pos: Vec3; yaw: number; sight: number }
     | ShotEvent
     | SlashEvent
     | SoundEvent
@@ -362,6 +368,11 @@ export type ClientMsg =
     | { type: 'removeplayer'; target: number }
     /** Result card: pick the next map (a map id; the current one means "same map"). */
     | { type: 'mapvote'; map: string }
+    /**
+     * The rifle sight this player wants (index into `SIGHTS`). Sent on joining and on every change; the server
+     * keeps it and mounts it at the player's next spawn, never mid-life.
+     */
+    | { type: 'sight'; sight: number }
     | ReportMsg;
 
 export const CHAT_MAX_CHARS = 120;
@@ -408,11 +419,11 @@ const CMD_TAG = 1;
 const SNAP_TAG = 2;
 const CMD_BYTES = 26;
 /**
- * Self state up to the loadout, then 5 loadout bytes, 7 per gun, 2 for the defender knife, 2 for the
+ * Self state up to the loadout, then 6 loadout bytes (slot, previous, draw, aim, trigger, sight), 7 per gun, 2 for the defender knife, 2 for the
  * ghost knife, 1 for the bomb repick wait (the carrier flag is a bit of the flags byte), 1 player count.
  */
 const SNAP_LOADOUT = 75;
-const SNAP_GUNS = SNAP_LOADOUT + 5;
+const SNAP_GUNS = SNAP_LOADOUT + 6;
 const SNAP_MELEE = SNAP_GUNS + 7 * GUN_COUNT;
 const SNAP_KNIFE = SNAP_MELEE + 2;
 const SNAP_CARRY = SNAP_KNIFE + 2;
@@ -482,6 +493,7 @@ function encodeSnap(m: Extract<ServerMsg, { type: 'snap' }>): Uint8Array<ArrayBu
     v.setUint8(SNAP_LOADOUT + 2, l.draw);
     v.setUint8(SNAP_LOADOUT + 3, l.aim);
     v.setUint8(SNAP_LOADOUT + 4, l.trigger);
+    v.setUint8(SNAP_LOADOUT + 5, l.sight);
     for (let i = 0; i < GUN_COUNT; i++) {
         const g = l.guns[i], o = SNAP_GUNS + 7 * i;
         v.setUint8(o, g.mag);
@@ -525,7 +537,7 @@ function decodeLoadout(v: DataView): LoadoutState {
     }
     return {
         slot: v.getUint8(SNAP_LOADOUT), prev: v.getUint8(SNAP_LOADOUT + 1), draw: v.getUint8(SNAP_LOADOUT + 2),
-        aim: v.getUint8(SNAP_LOADOUT + 3), trigger: v.getUint8(SNAP_LOADOUT + 4), guns,
+        aim: v.getUint8(SNAP_LOADOUT + 3), trigger: v.getUint8(SNAP_LOADOUT + 4), sight: v.getUint8(SNAP_LOADOUT + 5), guns,
         knife: { cooldown: v.getUint8(SNAP_MELEE), windup: v.getUint8(SNAP_MELEE + 1) }
     };
 }
@@ -621,6 +633,9 @@ export function decodeClient(data: ArrayBuffer | Uint8Array | string): ClientMsg
             case 'mapvote':
                 if (typeof m.map !== 'string' || m.map.length > 40) throw new Error('bad map vote');
                 return { type: 'mapvote', map: m.map };
+            case 'sight':
+                if (!Number.isInteger(m.sight) || (m.sight as number) < 0 || (m.sight as number) >= SIGHT_COUNT) throw new Error('bad sight');
+                return { type: 'sight', sight: m.sight as number };
             case 'report': {
                 // Shape only; the server cleans and caps every field (server/src/reports.ts).
                 if ((m.kind !== 'feedback' && m.kind !== 'error') || typeof m.text !== 'string') throw new Error('bad report');
