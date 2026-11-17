@@ -55,6 +55,7 @@ for _S in 'LR':
 CROUCH_DROP = {'crouch_idle': 0.50, 'crouch_walk': 0.40}
 CROUCH_LEAN = 22.0
 CROUCH_HEAD_COUNTER = 0.8
+CROUCH_FEET_IN = 0.75
 DEATH_RECENTRE = 0.6
 
 # Held weapons. Rifle: the chest turns right (bladed stance) so the left hand reaches the handguard; the gun's grip sits
@@ -242,10 +243,14 @@ def crouch(rt, frames, name):
     below = descendants(data, 'Hips')
     spine = descendants(data, 'Abdomen')
     neck = descendants(data, 'Neck')
+    # The source's idle stands with one foot well forward: kept under dropped hips, that leg goes straight out in a
+    # lunge. Each foot's average forward offset from the hips (its stance, not its stride) is mostly taken out.
+    stance = {S: sum((m[f'Foot.{S}'].translation - m['Hips'].translation).dot(FWD) for _, m in frames) / len(frames)
+              for S in 'LR'}
     out = []
     for f, m0 in frames:
         mats = {k: v.copy() for k, v in m0.items()}
-        feet = {S: mats[f'Foot.{S}'].copy() for S in 'LR'}
+        feet = {S: Matrix.Translation(-FWD * stance[S] * CROUCH_FEET_IN) @ mats[f'Foot.{S}'] for S in 'LR'}
         T = Matrix.Translation(-UP * CROUCH_DROP[name])
         for n in below:
             mats[n] = T @ mats[n]
