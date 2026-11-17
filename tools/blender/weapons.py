@@ -46,6 +46,7 @@ from mathutils import Matrix, Vector
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import realistic as rl  # noqa: E402
+import soldier  # noqa: E402
 
 ROOT = rl.ROOT
 OUT = os.path.join(ROOT, 'client', 'public', 'models', 'weapons.glb')
@@ -64,7 +65,7 @@ FP_RIFLE = {'BARREL': 1900, 'FOLDING_STOCK_CHICK_REST': 900, 'MUZZLE_BRAKE': 700
             'FOLDING_STOCK': 750, 'HAND_GUARD': 1500, 'RECEIVER': 2300}
 FP_REDDOT = {'main_shape': 1300, 'main_bat_1': 220, 'main_buttons_1': 90, 'main_buttons_2': 90, 'main_a': 220}
 FP_KNIFE = 1300                     # per source mesh (two)
-TP_PISTOL_SCALE = 1.35
+TP_PISTOL_SCALE = 1.0               # real size (package O: the new hands hold it; M part 2 drew it 1.35x)
 TP = {'gun': 3200, 'pistol': 1700, 'knife': 800, 'reddot': 380, 'scope_dl': 380}
 FP_SCOPE_DL = 1500                  # a downloaded scope, first person
 
@@ -425,6 +426,22 @@ def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     os.makedirs(rl.BUILD, exist_ok=True)
 
+    # The first-person arms' textures (package O) go into each gun's atlas: crops of the soldier's maps.
+    arm_crops = {}
+    if os.path.isdir(soldier.SRC):
+        before = set(bpy.data.objects)
+        _, sparts = soldier.fp_sources()
+        arm_crops = soldier.fp_crops(sparts)
+        for o in set(bpy.data.objects) - before:
+            bpy.data.objects.remove(o)
+    else:
+        log('WARNING soldier sources missing: the arm regions of the atlases stay flat grey')
+
+    def arm_regions(name):
+        if not arm_crops:
+            return [rl.Region(k, r, constant=0.2) for k, r in rl.ARM_LAYOUTS[name].items()]
+        return soldier.fp_regions(rl.ARM_LAYOUTS[name], arm_crops)
+
     # --- Rifle and its sights -------------------------------------------------------------------
     rifle = build_rifle()
     bore_x, bore_z = rifle['bore']
@@ -454,8 +471,8 @@ def main():
         'tris', rl.tris(scope.data))
 
     atlas = rl.Atlas('rifle', [(k, r, {'ak105': rifle['maps']['ak105'], 'folding_stock': rifle['maps']['folding_stock'],
-                                       'sight': reddot_maps, 'scope': scope_maps}[k]) for k, r in RIFLE_LAYOUT],
-                     RIFLE_SWATCHES)
+                                       'sight': reddot_maps, 'scope': scope_maps}[k]) for k, r in RIFLE_LAYOUT]
+                     + arm_regions('rifle'), RIFLE_SWATCHES)
     for o in (rifle['body'], rifle['mag'], rifle['bolt'], rifle['cheek']):
         rl.prepare(o, atlas, 'rifle')
     rl.prepare(reddot, atlas, 'rifle', material_region={m.name: 'sight' for m in reddot.data.materials if m})
@@ -482,7 +499,8 @@ def main():
 
     # --- Pistol ---------------------------------------------------------------------------------
     pistol = build_pistol()
-    patlas = rl.Atlas('pistol', [(k, r, pistol['maps']) for k, r in PISTOL_LAYOUT], SIDE_SWATCHES)
+    patlas = rl.Atlas('pistol', [(k, r, pistol['maps']) for k, r in PISTOL_LAYOUT] + arm_regions('pistol'),
+                      SIDE_SWATCHES)
     for o in (pistol['body'], pistol['slide'], pistol['mag']):
         rl.prepare(o, patlas, 'pistol')
     rl.prepare(pistol['sup'], patlas, 'pistol', swatch='metal', colour=SUPPRESSOR_RGBA)
@@ -491,7 +509,8 @@ def main():
 
     # --- Knife ----------------------------------------------------------------------------------
     knife = build_knife()
-    katlas = rl.Atlas('knife', [(knife['material'], KNIFE_LAYOUT[0][1], knife['maps'])], SIDE_SWATCHES)
+    katlas = rl.Atlas('knife', [(knife['material'], KNIFE_LAYOUT[0][1], knife['maps'])] + arm_regions('knife'),
+                      SIDE_SWATCHES)
     rl.prepare(knife['body'], katlas, 'knife')
     katlas.write()
 

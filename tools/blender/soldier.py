@@ -434,6 +434,139 @@ def build_look(look, tier, sources, fold, atlas):
 
 
 # ---------------------------------------------------------------------------------------------
+# First-person arms (viewmodel.py) and their regions in the gun atlases (weapons.py writes them)
+
+ARM_BONES = set()
+for _S in 'LR':
+    ARM_BONES.update({f'UpperArm.{_S}', f'LowerArm.{_S}', f'Wrist.{_S}'})
+    ARM_BONES.update(f'{F}{k}.{_S}' for F in FINGERS for k in (2, 3, 4))
+    ARM_BONES.update(f'Thumb{k}.{_S}' for k in (1, 2, 3))
+HAND_BONES = {b for b in ARM_BONES if not b.startswith(('UpperArm', 'LowerArm'))}
+# Look -> [(FBX, mesh, triangles)]: the defender's forearms, hands and rolled sleeves; the ghost's suit arms.
+FP_PARTS = {'defender': [('SKM_Character.fbx', 'Quantum_Arms', 2600), ('SKM_Character.fbx', 'Shirt_RolledUp', 700)],
+            'ghost': [('SKM_Body_Full.fbx', 'Body_Full', 3000)]}
+FP_REGION = {'M_Quantum_Arms': 'arms', 'M_Quantum_Head': 'arms', 'M_Quantum_Body': 'arms', 'M_Shirt_RolledUp': 'sleeve',
+             'M_Body': 'ghostarms', 'M_Head': 'ghostarms'}
+FP_TEXTURES = {'arms': MATERIALS['M_Quantum_Arms'][1:], 'sleeve': MATERIALS['M_Shirt_RolledUp'][1:],
+               'ghostarms': MATERIALS['M_Body'][1:]}
+# Ghost arms: a dark suit, darker gloves (vertex colours over a grey copy of the body's texture).
+GHOST_SLEEVE = (0.11, 0.11, 0.13, 0.0)
+GHOST_GLOVE = (0.05, 0.05, 0.055, 0.0)
+FP_ARM_MIN_WEIGHT = 0.35
+
+
+def fp_sources():
+    """Imports the soldier into the current scene; returns (shipped skeleton armature, {look: [arm part objects]}):
+    only the faces whose vertices are mostly weighted to the arm bones, weights folded and kept on the arm bones only,
+    source UVs and materials kept."""
+    sources, folds, q = {}, {}, None
+    for fbx in ('SKM_Character.fbx', 'SKM_Body_Full.fbx'):
+        a, meshes = import_fbx(fbx)
+        sources[fbx], folds[fbx] = meshes, fold_map(a)
+        if q is None:
+            q = a
+        else:
+            bpy.data.objects.remove(a)
+    arm = build_armature(q)
+    bpy.data.objects.remove(q)
+    out = {}
+    for look, items in FP_PARTS.items():
+        out[look] = []
+        for fbx, name, budget in items:
+            obj = copy_part(sources[fbx][name], f'fp_{look}_{name}', set(), folds[fbx])
+            cut_to_arms(obj)
+            obj['budget'] = budget
+            out[look].append(obj)
+    for d in sources.values():
+        for o in d.values():
+            bpy.data.objects.remove(o)
+    return arm, out
+
+
+def cut_to_arms(obj):
+    me = obj.data
+    gname = {g.index: g.name for g in obj.vertex_groups}
+    keep = []
+    for v in me.vertices:
+        w = sum(g.weight for g in v.groups if gname[g.group] in ARM_BONES)
+        keep.append(w >= FP_ARM_MIN_WEIGHT)
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bm.verts.ensure_lookup_table()
+    dead = [f for f in bm.faces if not all(keep[v.index] for v in f.verts)]
+    bmesh.ops.delete(bm, geom=dead, context='FACES')
+    loose = [v for v in bm.verts if not v.link_faces]
+    bmesh.ops.delete(bm, geom=loose, context='VERTS')
+    bm.to_mesh(me)
+    bm.free()
+    for g in list(obj.vertex_groups):
+        if g.name not in ARM_BONES:
+            obj.vertex_groups.remove(g)
+
+
+def fp_crops(parts):
+    box = {}
+    for objs in parts.values():
+        for obj in objs:
+            me = obj.data
+            uv = np.zeros(len(me.loops) * 2, np.float32)
+            me.uv_layers[0].data.foreach_get('uv', uv)
+            uv = uv.reshape(-1, 2)
+            mats = material_names(obj)
+            for p in me.polygons:
+                reg = FP_REGION.get(mats[p.material_index])
+                if reg is None:
+                    continue
+                sel = uv[p.loop_start:p.loop_start + p.loop_total]
+                lo, hi = sel.min(axis=0), sel.max(axis=0)
+                b = box.get(reg)
+                box[reg] = (np.minimum(b[0], lo), np.maximum(b[1], hi)) if b else (lo, hi)
+    return {reg: (max(0.0, float(lo[0]) - 0.01), max(0.0, float(lo[1]) - 0.01), min(1.0, float(hi[0]) + 0.01),
+                  min(1.0, float(hi[1]) + 0.01)) for reg, (lo, hi) in box.items()}
+
+
+def grey_suit(rgb, s):
+    lum = rgb[..., 0] * 0.3 + rgb[..., 1] * 0.55 + rgb[..., 2] * 0.15
+    k = lum / max(float(lum.mean()), 1e-3)
+    rgb[...] = np.clip(k * 0.75, 0, 1)[..., None]
+    s[...] = 0.12
+
+
+def fp_regions(rects, crops):
+    """Atlas regions (with their maps) for the arms: `rects` = {region: rect} from realistic.ARM_LAYOUTS."""
+    out = []
+    for reg, rect in rects.items():
+        stem_c, stem_r = FP_TEXTURES[reg]
+        post = dye_orange if reg == 'sleeve' else grey_suit if reg == 'ghostarms' else None
+        out.append(rl.Region(reg, rect, texture_maps(stem_c, stem_r), crop=crops.get(reg), post=post))
+    return out
+
+
+def fp_arms(look, parts, atlas, material):
+    """One arms object for `look`: parts reduced, UVs into `atlas`, vertex colours, `material`."""
+    done = []
+    for obj in parts:
+        rl.decimate(obj, obj['budget'])
+        atlas.remap(obj, material_region={m.name: FP_REGION.get(m.name.split('.')[0], 'arms')
+                                          for m in obj.data.materials if m})
+        if look == 'ghost':
+            me = obj.data
+            gname = {g.index: g.name for g in obj.vertex_groups}
+            hand = [sum(g.weight for g in v.groups if gname[g.group] in HAND_BONES) > 0.5 for v in me.vertices]
+            rl.set_colour(obj, GHOST_SLEEVE)
+            attr = me.color_attributes['Col']
+            for lp in me.loops:
+                if hand[lp.vertex_index]:
+                    attr.data[lp.index].color = GHOST_GLOVE
+        else:
+            rl.set_colour(obj, (1, 1, 1, 0))
+        done.append(obj)
+    obj = rl.join(done, f'arms_{look}')
+    rl.single_material(obj, material)
+    return obj
+
+
+# ---------------------------------------------------------------------------------------------
 
 def args():
     rest = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []

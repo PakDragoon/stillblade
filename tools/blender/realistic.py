@@ -45,10 +45,18 @@ ATLAS_SIZES = (2048, 1024)
 # Atlas layout per gun (UV units, v up): [(source material, rect)], swatch rect. The rifle: AK-105 body, folding stock,
 # red dot, downloaded scope; the swatches (flat colours for generated parts and the first-person arms) in the corner.
 LAYOUTS = {
-    'rifle': ([('ak105', (0.0, 0.0, 0.75, 1.0)), ('folding_stock', (0.75, 0.75, 1.0, 1.0)),
+    'rifle': ([('ak105', (0.0, 0.25, 0.75, 1.0)), ('folding_stock', (0.75, 0.75, 1.0, 1.0)),
                ('sight', (0.75, 0.5, 1.0, 0.75)), ('scope', (0.75, 0.25, 1.0, 0.5))], (0.75, 0.0, 1.0, 0.25)),
-    'pistol': ([('T_PM', (0.0, 0.0, 0.875, 1.0))], (0.875, 0.0, 1.0, 1.0)),
-    'knife': ([('Material.001', (0.0, 0.0, 0.875, 1.0))], (0.875, 0.0, 1.0, 1.0)),
+    'pistol': ([('T_PM', (0.0, 0.25, 0.875, 1.0))], (0.875, 0.0, 1.0, 1.0)),
+    'knife': ([('Material.001', (0.0, 0.5, 0.875, 1.0))], (0.875, 0.0, 1.0, 1.0)),
+}
+# The first-person arms (package O; soldier.py fills them from the soldier's textures): forearm and hand skin, the
+# rolled sleeve, and on the knife the ghost's suit arms.
+ARM_LAYOUTS = {
+    'rifle': {'arms': (0.0, 0.0, 0.375, 0.25), 'sleeve': (0.375, 0.0, 0.75, 0.25)},
+    'pistol': {'arms': (0.0, 0.0, 0.4375, 0.25), 'sleeve': (0.4375, 0.0, 0.875, 0.25)},
+    'knife': {'arms': (0.0, 0.25, 0.4375, 0.5), 'sleeve': (0.4375, 0.25, 0.875, 0.5),
+              'ghostarms': (0.0, 0.0, 0.875, 0.25)},
 }          # High, Low
 WEBP_QUALITY = {'albedo': 82, 'normal': 85}
 

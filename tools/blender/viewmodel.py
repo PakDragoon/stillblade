@@ -2,22 +2,23 @@
 Stillblade first-person viewmodels: arms and hands holding each weapon, with their clips.
 
     "C:/Program Files/Blender Foundation/Blender 5.3/blender.exe" --background --factory-startup \
-        --python tools/blender/viewmodel.py [-- --swat <SWAT.glb>]
+        --python tools/blender/viewmodel.py [-- --rig rifle|pistol|knife]
 
 Writes client/public/models/viewmodel_rifle.glb, viewmodel_pistol.glb and viewmodel_knife.glb (one file per rig, so
 each holds only its own clips). Sources:
-  - the arms, gloves and finger rig of "SWAT" by Quaternius (CC0; tools/blender/source-art/characters/quaternius-swat/
-    SWAT.glb, the same file characters.py uses; see client/public/models/CREDITS.md);
+  - the arms (package O): the Quantum soldier's forearms, hands and rolled-up sleeves for defenders, the stealth
+    suit's arms with gloves for ghosts (soldier.py fp_sources / fp_arms: the same skeleton and textures as the third-
+    person characters; their textures live in each gun's atlas, written by weapons.py);
   - the full-detail realistic weapon parts written by weapons.py (package M part 2) to the git-ignored
     tools/blender/source-art/realistic/build/weapons_fp.glb: the AK-105, the Makarov, the knife, the sights and the
     suppressors, already in the shipped frame with UVs into each gun's texture atlas, plus landmarks (mark_*) and the
     aim points (aim_*). Run weapons.py first.
-The arms keep their vertex colours (sleeves, gloves) and point their UVs at a flat swatch of the gun's atlas, so a rig
-is still one mesh with one material (the gun's).
+The arms' UVs point into the gun's atlas (skin, sleeve and ghost-suit regions), so a rig is still one mesh with one
+material (the gun's).
 
 Each rig is ONE skinned mesh (arms + weapon), so it is one draw call:
-  - bones UpperArm / LowerArm / Wrist / finger chains (.L and .R) copied from the SWAT rig at the character's 1.8 m
-    scale, plus "weapon" (the weapon's own frame, origin at the grip) and, under it, the moving parts:
+  - bones UpperArm / LowerArm / Wrist / three bones per finger and thumb (.L and .R) from the soldier's skeleton (real
+    size), plus "weapon" (the weapon's own frame, origin at the grip) and, under it, the moving parts:
       rifle  : mag (the AK magazine), bolt (the bolt carrier with its charging handle on the right), sup (suppressor),
                sight_reddot and sight_scope2x (the optional sights on the dust-cover rail, weapons.py's gun_sight_<id>)
       pistol : mag (magazine and follower), slide (slide and safety), sup (suppressor)
@@ -53,9 +54,9 @@ from mathutils import Matrix, Vector
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import rigkit as rk  # noqa: E402
+import soldier  # noqa: E402
 
 ROOT = os.path.normpath(os.path.join(HERE, '..', '..'))
-DEFAULT_SWAT = os.path.join(HERE, 'source-art', 'characters', 'quaternius-swat', 'SWAT.glb')
 import realistic as rl  # noqa: E402
 WEAPONS_GLB = rl.FP_GLB
 OUT_DIR = os.path.join(ROOT, 'client', 'public', 'models')
@@ -66,19 +67,11 @@ TARGET_HEIGHT = 1.8
 GRIP_PALM_OFFSET = 0.024
 GRIP_ALONG_HAND = 0.6
 # The source's cartoon hands are large next to real-size guns: the clips scale each hand about its wrist.
-HAND_SCALE = 0.8
+HAND_SCALE = 1.0          # real hands (package O); the cartoon SWAT hands were drawn at 0.8
 
 FINGERS = ('Index', 'Middle', 'Ring', 'Pinky')
-ARM_BONES = ['UpperArm', 'LowerArm', 'Wrist'] + [f'{f}{k}' for f in FINGERS for k in (1, 2, 3, 4)] + \
+ARM_BONES = ['UpperArm', 'LowerArm', 'Wrist'] + [f'{f}{k}' for f in FINGERS for k in (2, 3, 4)] + \
     [f'Thumb{k}' for k in (1, 2, 3)]
-
-# Linear RGB per SWAT material. First person sees sleeves and gloves only.
-PALETTES = {
-    # Coyote-brown gloves: they must read against the black guns.
-    # (Alpha is the emission channel of the weapon material: 0.)
-    'defender': {'Swat': (0.62, 0.22, 0.04, 0.0), 'Swat_Black': (0.2, 0.135, 0.07, 0.0), 'Skin': (0.17, 0.115, 0.06, 0.0)},
-    'ghost': {'Swat': (0.075, 0.07, 0.11, 0.0), 'Swat_Black': (0.025, 0.025, 0.03, 0.0), 'Skin': (0.04, 0.04, 0.045, 0.0)},
-}
 
 # Hip poses of the guns in PlayCanvas camera space (position, Euler degrees): presenter.ts VM_LOOKS[..].hip.
 HIP = {
@@ -88,9 +81,9 @@ HIP = {
 
 # Shoulders and elbow pole directions in camera space (Blender axes: X right, Y forward, Z up).
 SHOULDERS = {
-    'rifle': {'R': (0.2, 0.12, -0.3), 'L': (0.06, 0.47, -0.34)},
-    'pistol': {'R': (0.19, -0.02, -0.27), 'L': (-0.04, 0.17, -0.34)},
-    'knife': {'R': (0.18, 0.08, -0.3), 'L': (-0.2, -0.02, -0.28)},
+    'rifle': {'R': (0.17, 0.0, -0.25), 'L': (-0.08, 0.22, -0.27)},
+    'pistol': {'R': (0.17, -0.02, -0.25), 'L': (-0.15, 0.0, -0.26)},
+    'knife': {'R': (0.17, -0.02, -0.25), 'L': (-0.17, -0.02, -0.25)},
 }
 POLES = {'R': (0.8, -0.3, -1.0), 'L': (-0.8, -0.3, -1.0)}
 
@@ -107,184 +100,6 @@ THUMB_RELAX = (20, 10, 5)
 
 def log(*a):
     rk.log('viewmodel', *a)
-
-
-def args():
-    swat = DEFAULT_SWAT
-    if '--' in sys.argv:
-        rest = sys.argv[sys.argv.index('--') + 1:]
-        if '--swat' in rest:
-            swat = rest[rest.index('--swat') + 1]
-    return swat
-
-
-# ---------------------------------------------------------------------------------------------
-# Arms from the SWAT model
-
-def import_swat(path, palette_name):
-    """Imports SWAT.glb and returns (src armature, scale to metres, arms mesh object in metres with vertex groups)."""
-    bpy.ops.import_scene.gltf(filepath=path)
-    arm = next(o for o in bpy.data.objects if o.type == 'ARMATURE' and o.name.startswith('CharacterArmature'))
-    # Unparent from the importer's root node, keeping the world transform (the root node is removed later).
-    mw = arm.matrix_world.copy()
-    arm.parent = None
-    arm.matrix_world = mw
-    arm.data.pose_position = 'REST'
-    bpy.context.view_layer.update()
-    meshes = [o for o in bpy.data.objects if o.type == 'MESH' and o.parent == arm]
-    dg = bpy.context.evaluated_depsgraph_get()
-    zs = []
-    for o in meshes:
-        ev = o.evaluated_get(dg)
-        m = ev.to_mesh()
-        zs.extend((o.matrix_world @ v.co).z for v in m.vertices)
-        ev.to_mesh_clear()
-    s = TARGET_HEIGHT / (max(zs) - min(zs))
-    body = next(o for o in meshes if o.name.startswith('Swat_Body'))
-    palette = PALETTES[palette_name]
-
-    me = body.data
-    ev = body.evaluated_get(dg)
-    em = ev.to_mesh()
-    world = [body.matrix_world @ v.co for v in em.vertices]
-    ev.to_mesh_clear()
-    gname = {g.index: g.name for g in body.vertex_groups}
-    wanted = {f'{b}.{side}' for b in ARM_BONES for side in 'LR'}
-    weights = []
-    for v in me.vertices:
-        w = {gname[g.group]: g.weight for g in v.groups if gname[g.group] in wanted and g.weight > 0}
-        weights.append(w)
-    keep_v = [sum(w.values()) >= 0.35 for w in weights]
-    mats = [m.name if m else '' for m in me.materials]
-
-    bm = bmesh.new()
-    vmap = {}
-    for i, v in enumerate(me.vertices):
-        if keep_v[i]:
-            vmap[i] = bm.verts.new(world[i] * s)
-    bm.verts.ensure_lookup_table()
-    col_layer = bm.loops.layers.color.new('Col')
-    face_cols = []
-    for p in me.polygons:
-        if not all(keep_v[i] for i in p.vertices):
-            continue
-        try:
-            f = bm.faces.new([vmap[i] for i in p.vertices])
-        except ValueError:
-            continue
-        name = mats[p.material_index] if p.material_index < len(mats) else ''
-        key = next((k for k in palette if name == k or name.startswith(k + '.')), None)
-        face_cols.append((f, palette[key] if key else (1, 0, 1, 1)))
-    out_me = bpy.data.meshes.new('arms')
-    bm.to_mesh(out_me)
-    bm.free()
-    obj = bpy.data.objects.new('arms', out_me)
-    bpy.context.scene.collection.objects.link(obj)
-    # Vertex groups (renormalised over the arm bones) and corner colours, by the kept vertex order.
-    kept = [i for i in range(len(me.vertices)) if keep_v[i]]
-    groups = {}
-    for new_i, old_i in enumerate(kept):
-        w = weights[old_i]
-        tot = sum(w.values())
-        for gn, gw in w.items():
-            g = groups.get(gn) or obj.vertex_groups.new(name=gn)
-            groups[gn] = g
-            g.add([new_i], gw / tot, 'REPLACE')
-    set_corner_colours(obj, [c for _, c in face_cols])
-    thin_arms(obj, arm, s)
-    # Fewer triangles: the sleeves are mostly off screen and the file is downloaded by every player.
-    n = tris(out_me)
-    if n > ARM_TRIS:
-        dec = obj.modifiers.new('Decimate', 'DECIMATE')
-        dec.ratio = ARM_TRIS / n
-        dec.use_collapse_triangulate = True
-        with bpy.context.temp_override(object=obj, active_object=obj):
-            bpy.ops.object.modifier_apply(modifier=dec.name)
-    log('arms:', len(out_me.vertices), 'verts', tris(out_me), 'tris, scale', round(s, 5))
-    return arm, s, obj
-
-
-ARM_THIN = 0.78
-ARM_TRIS = 1500
-
-
-def thin_arms(obj, src, s):
-    """
-    Pulls the sleeve vertices toward their bone's axis (by ARM_THIN at full upper or lower arm weight): the source's
-    cartoon forearms fill the screen at first-person distance. The hands are left as they are.
-    """
-    heads = {}
-    for side in 'LR':
-        for n in ('UpperArm', 'LowerArm', 'Wrist'):
-            b = src.data.bones[f'{n}.{side}']
-            heads[f'{n}.{side}'] = (src.matrix_world @ b.head_local) * s
-    groups = {g.index: g.name for g in obj.vertex_groups}
-    for v in obj.data.vertices:
-        w = {groups[g.group]: g.weight for g in v.groups}
-        for side in 'LR':
-            wu, wl = w.get(f'UpperArm.{side}', 0.0), w.get(f'LowerArm.{side}', 0.0)
-            if wu + wl <= 0:
-                continue
-            a, b = (heads[f'UpperArm.{side}'], heads[f'LowerArm.{side}']) if wu >= wl else                 (heads[f'LowerArm.{side}'], heads[f'Wrist.{side}'])
-            d = b - a
-            k = max(0.0, min(1.0, (v.co - a).dot(d) / d.length_squared))
-            p = a + d * k
-            f = 1 - (1 - ARM_THIN) * min(1.0, wu + wl)
-            v.co = p + (v.co - p) * f
-
-
-def set_corner_colours(obj, per_face):
-    me = obj.data
-    for a in list(me.color_attributes):
-        me.color_attributes.remove(a)
-    attr = me.color_attributes.new('Col', 'BYTE_COLOR', 'CORNER')
-    for poly, col in zip(me.polygons, per_face):
-        for li in poly.loop_indices:
-            attr.data[li].color = col
-    me.color_attributes.active_color = attr
-    me.color_attributes.render_color_index = me.color_attributes.find('Col')
-
-
-def tris(me):
-    return sum(len(p.vertices) - 2 for p in me.polygons)
-
-
-def make_armature(name, src, s, extra):
-    """New armature at the origin: the SWAT arm bones (metres) plus `extra` = [(name, parent, head)] (identity
-    orientation: Y forward, Z up)."""
-    data = bpy.data.armatures.new(name)
-    obj = bpy.data.objects.new(name, data)
-    bpy.context.scene.collection.objects.link(obj)
-    for o in bpy.context.scene.objects:
-        o.select_set(False)
-    bpy.context.view_layer.objects.active = obj
-    obj.select_set(True)
-    bpy.ops.object.mode_set(mode='EDIT')
-    eb = data.edit_bones
-    src_scale = src.matrix_world.to_scale()[0]
-    names = [b.name for b in src.data.bones if any(b.name == f'{a}.{sd}' for a in ARM_BONES for sd in 'LR')]
-    for n in names:
-        sb = src.data.bones[n]
-        M = src.matrix_world @ sb.matrix_local
-        loc = M.translation * s
-        rot = M.to_3x3().normalized().to_quaternion()
-        b = eb.new(n)
-        b.head = (0, 0, 0)
-        b.tail = (0, max(sb.length * src_scale * s, 0.012), 0)
-        b.matrix = Matrix.LocRotScale(loc, rot, None)
-    for n in names:
-        p = src.data.bones[n].parent
-        if p is not None and p.name in names:
-            eb[n].parent = eb[p.name]
-    for n, parent, head in extra:
-        b = eb.new(n)
-        b.head = Vector(head)
-        b.tail = Vector(head) + Vector((0, 0.05, 0))
-        b.roll = 0
-        if parent:
-            b.parent = eb[parent]
-    bpy.ops.object.mode_set(mode='OBJECT')
-    return obj
 
 
 # ---------------------------------------------------------------------------------------------
@@ -710,29 +525,28 @@ def skin(obj, arm, groups=None):
     mod.object = arm
 
 
-def build(rig_name, swat):
+def build(rig_name):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
     scene.render.fps = FPS
     weapons = import_weapons()
     parts, marks = weapon_parts(rig_name, weapons)
     layout, swatch_rect = rl.LAYOUTS[rig_name]
-    atlas = rl.Atlas(rig_name, [(k, r, {}) for k, r in layout], swatch_rect)
+    # The arms (package O): the soldier's forearms, hands and rolled sleeves (defender) or the ghost's suit arms, cut
+    # from soldier.py's sources, their textures in this gun's atlas (weapons.py wrote them there).
+    src, sparts = soldier.fp_sources()
+    s = 1.0
+    crops = soldier.fp_crops(sparts)
+    atlas = rl.Atlas(rig_name, [(k, r, {}) for k, r in layout] +
+                     [rl.Region(k, r, crop=crops.get(k)) for k, r in rl.ARM_LAYOUTS[rig_name].items()], swatch_rect)
     palettes = ['defender', 'ghost'] if rig_name == 'knife' else ['defender']
-    arms = []
-    src = s = None
-    for pal in palettes:
-        before = set(bpy.data.objects)
-        src, s, a = import_swat(swat, pal)
-        # The arms: flat swatch of the gun's atlas (their colour is the vertex colour), sharp edges by angle.
-        atlas.remap(a, swatch='polymer')
-        a.data.set_sharp_from_angle(angle=math.radians(45))
-        arms.append((pal, a))
-        for o in set(bpy.data.objects) - before:
-            if o is not a and o is not src:
+    arms = [(pal, soldier.fp_arms(pal, sparts[pal], atlas, rig_name)) for pal in palettes]
+    for pal, objs in sparts.items():
+        if pal not in palettes:
+            for o in objs:
                 bpy.data.objects.remove(o)
-        if pal != palettes[-1]:
-            bpy.data.objects.remove(src)
+    for pal, a in arms:
+        log(pal, 'arms tris', tris(a.data), 'verts', len(a.data.vertices))
 
     extra = [('weapon', None, (0, 0, 0))]
     for bone in parts:
@@ -745,7 +559,6 @@ def build(rig_name, swat):
         extra.append((bone, 'weapon', tuple(c)))
     # The armature must not share a name with a mesh node (the client picks the knife's variant by node name).
     arm = make_armature(f'rig_{rig_name}', src, s, extra)
-    # The SWAT source is no longer needed (nor its 24 clips).
     bpy.data.objects.remove(src)
     for a in list(bpy.data.actions):
         bpy.data.actions.remove(a)
@@ -834,8 +647,6 @@ def build(rig_name, swat):
 
 
 def main():
-    swat = args()
-    log('SWAT source', swat)
     only = None
     if '--' in sys.argv:
         rest = sys.argv[sys.argv.index('--') + 1:]
@@ -844,7 +655,7 @@ def main():
     for name in ('rifle', 'pistol', 'knife'):
         if only and name != only:
             continue
-        build(name, swat)
+        build(name)
 
 
 main()
