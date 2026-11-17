@@ -1,0 +1,22 @@
+{
+ "drawCalls": {
+  "rifle iron": {
+   "hipWithoutOtherPlayers": 9,
+   "aimedWithoutOtherPlayers": 8
+  },
+  "rifle reddot": {
+   "hipWithoutOtherPlayers": 9,
+   "aimedWithoutOtherPlayers": 8
+  },
+  "rifle scope2x": {
+   "hipWithoutOtherPlayers": 9,
+   "aimedWithoutOtherPlayers": 8
+  },
+  "pistolHip": 8,
+  "knifeIdle": 10
+ },
+ "notes": [
+  "third person room 0: [{\"id\":2,\"as\":\"reddot\",\"weapon\":0},{\"id\":4,\"as\":\"scope\",\"weapon\":0},{\"id\":6,\"as\":\"pistol\",\"weapon\":1}]",
+  "third person room 1: [{\"id\":2,\"as\":\"knife\",\"weapon\":2},{\"id\":4,\"as\":\"suppressed-reddot\",\"weapon\":0}]"
+ ]
+}

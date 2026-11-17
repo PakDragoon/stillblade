@@ -5,20 +5,25 @@ Stillblade first-person viewmodels: arms and hands holding each weapon, with the
         --python tools/blender/viewmodel.py [-- --swat <SWAT.glb>]
 
 Writes client/public/models/viewmodel_rifle.glb, viewmodel_pistol.glb and viewmodel_knife.glb (one file per rig, so
-each holds only its own clips). Sources, both CC0 and already on disk (nothing new is downloaded):
-  - the arms, gloves and finger rig of "SWAT" by Quaternius (tools/blender/source-art/characters/quaternius-swat/
+each holds only its own clips). Sources:
+  - the arms, gloves and finger rig of "SWAT" by Quaternius (CC0; tools/blender/source-art/characters/quaternius-swat/
     SWAT.glb, the same file characters.py uses; see client/public/models/CREDITS.md);
-  - the shipped weapon meshes, client/public/models/weapons.glb (built by weapons.py from Quaternius's "Character
-    Soldier"), imported as they are, so first and third person show the same guns.
+  - the full-detail realistic weapon parts written by weapons.py (package M part 2) to the git-ignored
+    tools/blender/source-art/realistic/build/weapons_fp.glb: the AK-105, the Makarov, the knife, the sights and the
+    suppressors, already in the shipped frame with UVs into each gun's texture atlas, plus landmarks (mark_*) and the
+    aim points (aim_*). Run weapons.py first.
+The arms keep their vertex colours (sleeves, gloves) and point their UVs at a flat swatch of the gun's atlas, so a rig
+is still one mesh with one material (the gun's).
 
 Each rig is ONE skinned mesh (arms + weapon), so it is one draw call:
   - bones UpperArm / LowerArm / Wrist / finger chains (.L and .R) copied from the SWAT rig at the character's 1.8 m
     scale, plus "weapon" (the weapon's own frame, origin at the grip) and, under it, the moving parts:
-      rifle  : mag (the magazine), bolt (a small generated cocking knob at the front left of the receiver), sup (suppressor),
-               sight_reddot and sight_scope2x (the optional sights, weapons.py's gun_sight_<id>; package M)
-      pistol : mag (the base plate plus a generated magazine body), slide, sup (suppressor)
+      rifle  : mag (the AK magazine), bolt (the bolt carrier with its charging handle on the right), sup (suppressor),
+               sight_reddot and sight_scope2x (the optional sights on the dust-cover rail, weapons.py's gun_sight_<id>)
+      pistol : mag (magazine and follower), slide (slide and safety), sup (suppressor)
       knife  : no parts
-  - empties "muzzle" (suppressor front) and "muzzle_bare" (bare barrel front) under the weapon bone, guns only.
+  - empties "muzzle" (suppressor front) and "muzzle_bare" (bare muzzle front) under the weapon bone, guns only, and
+    "aim_<sight>" (the eye position when aiming with that sight; presenter.ts aims the rig by it).
   - the knife file holds two meshes on the same armature: "vm_knife" (defender sleeves) and "vm_ghost" (the ghost
     suit); the client shows one.
 The suppressor is part of the mesh; the client hides it by scaling the "sup" bone to almost nothing (no extra draw
@@ -51,7 +56,8 @@ import rigkit as rk  # noqa: E402
 
 ROOT = os.path.normpath(os.path.join(HERE, '..', '..'))
 DEFAULT_SWAT = os.path.join(HERE, 'source-art', 'characters', 'quaternius-swat', 'SWAT.glb')
-WEAPONS_GLB = os.path.join(ROOT, 'client', 'public', 'models', 'weapons.glb')
+import realistic as rl  # noqa: E402
+WEAPONS_GLB = rl.FP_GLB
 OUT_DIR = os.path.join(ROOT, 'client', 'public', 'models')
 
 FPS = 30
@@ -69,12 +75,9 @@ ARM_BONES = ['UpperArm', 'LowerArm', 'Wrist'] + [f'{f}{k}' for f in FINGERS for 
 # Linear RGB per SWAT material. First person sees sleeves and gloves only.
 PALETTES = {
     # Coyote-brown gloves: they must read against the black guns.
-    'defender': {'Swat': (0.62, 0.22, 0.04, 1.0), 'Swat_Black': (0.2, 0.135, 0.07, 1.0), 'Skin': (0.17, 0.115, 0.06, 1.0)},
-    'ghost': {'Swat': (0.075, 0.07, 0.11, 1.0), 'Swat_Black': (0.025, 0.025, 0.03, 1.0), 'Skin': (0.04, 0.04, 0.045, 1.0)},
-}
-PART_COLOURS = {
-    'knob': (0.13, 0.135, 0.14, 1.0),     # weapons.py's Grey2
-    'magbody': (0.045, 0.048, 0.052, 1.0),  # DarkGrey
+    # (Alpha is the emission channel of the weapon material: 0.)
+    'defender': {'Swat': (0.62, 0.22, 0.04, 0.0), 'Swat_Black': (0.2, 0.135, 0.07, 0.0), 'Skin': (0.17, 0.115, 0.06, 0.0)},
+    'ghost': {'Swat': (0.075, 0.07, 0.11, 0.0), 'Swat_Black': (0.025, 0.025, 0.03, 0.0), 'Skin': (0.04, 0.04, 0.045, 0.0)},
 }
 
 # Hip poses of the guns in PlayCanvas camera space (position, Euler degrees): presenter.ts VM_LOOKS[..].hip.
@@ -85,7 +88,7 @@ HIP = {
 
 # Shoulders and elbow pole directions in camera space (Blender axes: X right, Y forward, Z up).
 SHOULDERS = {
-    'rifle': {'R': (0.2, 0.12, -0.3), 'L': (-0.02, 0.36, -0.44)},
+    'rifle': {'R': (0.2, 0.12, -0.3), 'L': (0.0, 0.5, -0.42)},
     'pistol': {'R': (0.19, -0.02, -0.27), 'L': (-0.04, 0.17, -0.34)},
     'knife': {'R': (0.18, 0.08, -0.3), 'L': (-0.2, -0.02, -0.28)},
 }
@@ -287,83 +290,6 @@ def make_armature(name, src, s, extra):
 # ---------------------------------------------------------------------------------------------
 # Weapon parts
 
-def components(obj):
-    """Loose parts of a mesh: list of (face indices, bbox min, bbox max, centroid)."""
-    bm = bmesh.new()
-    bm.from_mesh(obj.data)
-    bm.faces.ensure_lookup_table()
-    seen = set()
-    out = []
-    for f in bm.faces:
-        if f.index in seen:
-            continue
-        stack = [f]
-        seen.add(f.index)
-        faces = []
-        while stack:
-            x = stack.pop()
-            faces.append(x)
-            for v in x.verts:
-                for y in v.link_faces:
-                    if y.index not in seen:
-                        seen.add(y.index)
-                        stack.append(y)
-        pts = [v.co.copy() for x in faces for v in x.verts]
-        lo = Vector((min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts)))
-        hi = Vector((max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts)))
-        out.append(([x.index for x in faces], lo, hi, sum(pts, Vector()) / len(pts)))
-    bm.free()
-    return out
-
-
-def split_faces(obj, faces, name):
-    """Moves the given faces of `obj` into a new object (same frame)."""
-    faces = set(faces)
-    part = bpy.data.objects.new(name, obj.data.copy())
-    bpy.context.scene.collection.objects.link(part)
-    for o, keep in ((obj, False), (part, True)):
-        bm = bmesh.new()
-        bm.from_mesh(o.data)
-        dead = [f for f in bm.faces if (f.index in faces) != keep]
-        bmesh.ops.delete(bm, geom=dead, context='FACES')
-        bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context='VERTS')
-        bm.to_mesh(o.data)
-        bm.free()
-        o.data.update()
-    return part
-
-
-def box_part(name, centre, size, colour, tilt=0.0):
-    """A box mesh object (Blender axes), optionally tilted about X by `tilt` radians around its centre."""
-    me = bpy.data.meshes.new(name)
-    bm = bmesh.new()
-    bmesh.ops.create_cube(bm, size=1.0)
-    bmesh.ops.scale(bm, vec=size, verts=bm.verts)
-    bmesh.ops.rotate(bm, verts=bm.verts, cent=(0, 0, 0), matrix=Matrix.Rotation(tilt, 3, 'X'))
-    bmesh.ops.translate(bm, verts=bm.verts, vec=centre)
-    bm.to_mesh(me)
-    bm.free()
-    obj = bpy.data.objects.new(name, me)
-    bpy.context.scene.collection.objects.link(obj)
-    set_corner_colours(obj, [colour] * len(me.polygons))
-    return obj
-
-
-def normalise_colours(obj):
-    """Rewrites whatever colour attribute the importer made as the corner byte colour 'Col' (linear values)."""
-    me = obj.data
-    src = me.color_attributes.active_color or (me.color_attributes[0] if len(me.color_attributes) else None)
-    cols = []
-    for poly in me.polygons:
-        if src is None:
-            cols.append((1, 0, 1, 1))
-        elif src.domain == 'CORNER':
-            cols.append(tuple(src.data[poly.loop_indices[0]].color))
-        else:
-            cols.append(tuple(src.data[poly.vertices[0]].color))
-    set_corner_colours(obj, cols)
-
-
 def axis_of(points):
     """Unit axis from the centroid of the lowest third of `points` (by Z) to that of the highest third."""
     pts = sorted(points, key=lambda p: p.z)
@@ -379,75 +305,83 @@ def tilt_to(axis):
 
 
 def import_weapons():
+    """The first-person parts file (weapons.py): {name without 'fp_': object}, world transforms as exported."""
+    if not os.path.exists(WEAPONS_GLB):
+        raise FileNotFoundError(f'{WEAPONS_GLB} is missing: run tools/blender/weapons.py first')
+    before = set(bpy.data.objects)
     bpy.ops.import_scene.gltf(filepath=WEAPONS_GLB)
-    objs = {o.name: o for o in bpy.data.objects if o.name in (
-        'gun', 'gun_suppressor', 'gun_muzzle', 'gun_muzzle_bare', 'pistol', 'pistol_suppressor', 'pistol_muzzle',
-        'pistol_muzzle_bare', 'knife') or o.name.startswith('gun_sight_')}
     bpy.context.view_layer.update()
+    objs = {}
+    for o in set(bpy.data.objects) - before:
+        if o.name.startswith('fp_'):
+            objs[o.name[3:].split('.')[0]] = o
+        else:
+            bpy.data.objects.remove(o)
     for o in objs.values():
         if o.type == 'MESH':
-            normalise_colours(o)
+            mw = o.matrix_world.copy()
+            o.parent = None
+            o.data.transform(mw)
+            o.matrix_world = Matrix()
+            corner_colours(o)
     return objs
+
+
+def corner_colours(obj):
+    """The importer's colour attribute (any name, domain or type) as the corner byte colour 'Col' the arms use, so
+    joining keeps both (attributes are joined by name)."""
+    me = obj.data
+    src = me.color_attributes.active_color or (me.color_attributes[0] if len(me.color_attributes) else None)
+    n = len(me.loops)
+    vals = [1.0, 1.0, 1.0, 0.0] * n
+    if src is not None:
+        if src.domain == 'CORNER':
+            vals = [c for d in src.data for c in d.color]
+        else:
+            per_v = [tuple(d.color) for d in src.data]
+            vals = [c for lp in me.loops for c in per_v[lp.vertex_index]]
+    for a in list(me.color_attributes):
+        me.color_attributes.remove(a)
+    attr = me.color_attributes.new('Col', 'BYTE_COLOR', 'CORNER')
+    attr.data.foreach_set('color', vals)
+    me.color_attributes.active_color = attr
+    me.color_attributes.render_color_index = me.color_attributes.find('Col')
+
+
+def mark(w, name):
+    """A landmark empty: (location, its +Z axis)."""
+    m = w[f'mark_{name}'].matrix_world
+    return m.translation.copy(), m.col[2].to_3d().normalized()
 
 
 def weapon_parts(rig, w):
     """
-    Splits the rig's weapon into its moving parts. Returns ({bone: [mesh objects]}, landmarks dict) in the weapon's
-    frame (Blender: X right, Y forward = muzzle or blade tip, Z up, origin at the grip).
+    The rig's weapon and its moving parts, and landmarks ({bone: [mesh objects]}, marks), in the weapon's frame
+    (Blender: X right, Y forward = muzzle or blade tip, Z up, origin at the grip).
     """
     marks = {}
     if rig == 'rifle':
-        gun = w['gun']
-        comps = components(gun)
-        mag = [c for c in comps if c[1].y >= 0.18 and c[2].y <= 0.36 and c[2].z <= 0.05 and c[1].z < -0.05]
-        mag_obj = split_faces(gun, [i for c in mag for i in c[0]], 'mag')
-        mpts = [v.co.copy() for v in mag_obj.data.vertices]
-        ax, lo, hi = axis_of(mpts)
-        marks['mag_centre'] = (lo + hi) / 2
-        marks['mag_axis'] = ax
-        marks['mag_bottom'] = lo
-        # Grip axis from the grip's own vertices (below the receiver, behind the magazine).
-        gp = [v.co.copy() for v in gun.data.vertices if v.co.z < -0.015 and v.co.y < 0.08]
-        marks['grip_axis'] = axis_of(gp)[0]
-        # A cocking knob at the front left of the receiver, where the support hand can reach it from the magazine.
-        knob = box_part('bolt', (-0.036, 0.31, 0.15), (0.016, 0.022, 0.014), PART_COLOURS['knob'])
-        marks['knob'] = Vector((-0.036, 0.31, 0.15))
-        log('rifle: magazine', len(mag), 'parts, axis', tuple(round(c, 3) for c in ax), 'centre',
-            tuple(round(c, 3) for c in marks['mag_centre']), 'grip axis', tuple(round(c, 3) for c in marks['grip_axis']))
-        parts = {'weapon': [gun], 'mag': [mag_obj], 'bolt': [knob], 'sup': [w['gun_suppressor']]}
-        # Optional sights (package M): one bone each, named after weapons.py's node (gun_sight_<id> -> sight_<id>).
+        marks['grip_axis'] = mark(w, 'rifle_grip')[1]
+        c, ax = mark(w, 'rifle_mag')
+        marks['mag_centre'], marks['mag_axis'] = c, ax
+        marks['mag_bottom'] = mark(w, 'rifle_mag_bottom')[0]
+        marks['handguard'] = mark(w, 'rifle_handguard')[0]
+        marks['handguard_half'] = mark(w, 'rifle_handguard_size')[0]
+        marks['handle'] = mark(w, 'rifle_handle')[0]
+        log('rifle: magazine axis', tuple(round(x, 3) for x in ax), 'centre', tuple(round(x, 3) for x in c),
+            'handguard', tuple(round(x, 3) for x in marks['handguard']), 'handle', tuple(round(x, 3) for x in marks['handle']))
+        parts = {'weapon': [w['gun']], 'mag': [w['gun_mag']], 'bolt': [w['gun_bolt']], 'sup': [w['gun_suppressor']]}
         for name in sorted(n for n in w if n.startswith('gun_sight_')):
             parts[name[len('gun_'):]] = [w[name]]
         return parts, marks
     if rig == 'pistol':
-        p = w['pistol']
-        comps = components(p)
-        slide = [c for c in comps if c[1].z >= 0.005]
-        base = [c for c in comps if c[2].z <= -0.04]
-        gp = [v.co.copy() for v in p.data.vertices if v.co.z < -0.005 and v.co.y < 0.03]
-        gax = axis_of(gp)[0]
-        marks['grip_axis'] = gax
-        slide_obj = split_faces(p, [i for c in slide for i in c[0]], 'slide')
-        base = [c for c in components(p) if c[2].z <= -0.04]     # face indices changed with the split
-        base_obj = split_faces(p, [i for c in base for i in c[0]], 'mag')
-        bpts = [v.co for v in base_obj.data.vertices]
-        bc = Vector(((min(q.x for q in bpts) + max(q.x for q in bpts)) / 2, (min(q.y for q in bpts) + max(q.y for q in bpts)) / 2,
-                     max(q.z for q in bpts)))
-        # The magazine body: a box from the base plate up into the grip, along the grip's rake (hidden in the grip
-        # when seated; seen while it drops out and goes back in).
-        length = 0.078
-        centre = bc + gax * (length / 2 - 0.002)
-        body = box_part('magbody', centre, (0.017, 0.028, length), PART_COLOURS['magbody'], tilt=-math.atan2(gax.y, gax.z))
-        join([base_obj, body])
-        marks['mag_centre'] = bc + gax * (length / 2)
-        marks['mag_axis'] = gax
-        marks['mag_bottom'] = bc
-        spts = [v.co for v in slide_obj.data.vertices]
-        marks['slide_rear'] = Vector((0.0, min(q.y for q in spts) + 0.012, max(q.z for q in spts) - 0.006))
-        marks['slide_centre'] = Vector((0.0, (min(q.y for q in spts) + max(q.y for q in spts)) / 2,
-                                        (min(q.z for q in spts) + max(q.z for q in spts)) / 2))
-        log('pistol: slide', len(slide), 'parts; base plate', len(base), 'parts; grip axis', tuple(round(c, 3) for c in gax))
-        return {'weapon': [p], 'mag': [base_obj], 'slide': [slide_obj], 'sup': [w['pistol_suppressor']]}, marks
+        marks['grip_axis'] = mark(w, 'pistol_grip')[1]
+        c, ax = mark(w, 'pistol_mag')
+        marks['mag_centre'], marks['mag_axis'] = c, ax
+        marks['mag_bottom'] = mark(w, 'pistol_mag_bottom')[0]
+        marks['slide_rear'] = mark(w, 'pistol_slide_rear')[0]
+        return {'weapon': [w['pistol']], 'mag': [w['pistol_mag']], 'slide': [w['pistol_slide']],
+                'sup': [w['pistol_suppressor']]}, marks
     return {'weapon': [w['knife']]}, marks
 
 
@@ -555,6 +489,11 @@ def scaled(m, s):
 
 
 HIDDEN = 0.001
+# Rifle support hand: roll of the hand under the handguard (degrees; negative turns the palm toward the gun's right)
+# and how far inside the handguard's half height the grip point sits. Bolt carrier travel when the handle is pulled.
+SUPPORT_ROLL = -35
+SUPPORT_INSET = 0.016
+BOLT_TRAVEL = 0.07
 
 
 def build_gun_clips(rig):
@@ -575,12 +514,20 @@ def build_gun_clips(rig):
     rest_parts[moving] = Matrix.Translation(rig.rest[moving].translation)
 
     if rifle:
-        # Left hand wraps the magazine like a vertical foregrip, palm on its left side.
-        support = Matrix.Translation(mk['mag_centre'] + Vector((-0.004, 0.0, -0.005))) @ tilt_to(max_)
-        mag_grip = support.copy()
-        # Pulling the bolt: pinching the knob from the left, fingers forward.
-        knob = mk['knob']
-        bolt_grip = Matrix.Translation(knob + Vector((-0.012, 0.0, -0.012))) @ Matrix.Rotation(math.radians(15), 4, "X")
+        # Left hand under the handguard: index finger forward along it, palm up and turned toward the gun's right,
+        # fingers wrapping round its right side.
+        hg, half = mk['handguard'], mk['handguard_half']
+        a = math.radians(SUPPORT_ROLL)
+        fwd, up = Vector((math.cos(a), 0.0, math.sin(a))), Vector((0.0, 1.0, 0.0))
+        palm = fwd.cross(up)
+        support = rk.frame_from(palm, fwd, up, hg - palm * max(0.0, half.z - SUPPORT_INSET))
+        # Holding the magazine: palm on its left side, fingers round its front.
+        mag_grip = Matrix.Translation(mk['mag_centre'] + Vector((-0.004, 0.0, -0.005))) @ tilt_to(max_)
+        # Pulling the charging handle (right side): the left hand comes under the gun, palm toward the receiver,
+        # fingers up over the handle.
+        handle = mk['handle']
+        bolt_grip = rk.frame_from(Vector((-1, 0, 0)), Vector((0, 0, 1)), Vector((0, 1, 0)),
+                                  handle + Vector((0.021, 0.004, -0.012)))
         support_curl, support_thumb = WRAP_CURL, THUMB_GRIP
     else:
         # Support hand wrapped over the right hand's fingers on the grip's left side.
@@ -607,11 +554,12 @@ def build_gun_clips(rig):
         # Brought in toward the middle of the view, muzzle up, canted so the magazine well faces the left hand.
         G1 = (-0.11, -0.05, 0.03, 6, 8, 35)
         G1b = (-0.11, -0.05, 0.038, 9, 8, 35)             # magazine seated: a small jolt up
-        G1c = (-0.115, -0.06, 0.03, 4, 10, 31)            # bolt pulled: the gun rocks back
-        gun_keys = [(0.0, (0, 0, 0, 0, 0, 0)), (0.25, G1), (1.36, G1), (1.42, G1b), (1.55, G1), (1.9, G1),
-                    (1.97, G1c), (2.07, G1c), (2.1, G1), (2.2, (0, 0, 0, 0, 0, 0))]
+        G2 = (-0.07, -0.03, 0.03, 6, 4, -14)               # rolled the other way: the charging handle faces the hand
+        G2c = (-0.075, -0.045, 0.03, 4, 6, -17)            # bolt pulled: the gun rocks back
+        gun_keys = [(0.0, (0, 0, 0, 0, 0, 0)), (0.25, G1), (1.36, G1), (1.42, G1b), (1.55, G1), (1.8, G2), (1.9, G2),
+                    (1.97, G2c), (2.07, G2c), (2.1, G2), (2.2, (0, 0, 0, 0, 0, 0))]
         belt = rig.cam(Matrix.Translation(Vector((-0.1, 0.3, -0.75))) @ Matrix.Rotation(math.radians(-30), 4, 'X'))
-        bolt_keys = [(0.0, (0.0,)), (1.9, (0.0,)), (1.97, (-0.06,)), (2.07, (-0.06,)), (2.1, (0.0,))]
+        bolt_keys = [(0.0, (0.0,)), (1.9, (0.0,)), (1.97, (-BOLT_TRAVEL,)), (2.07, (-BOLT_TRAVEL,)), (2.1, (0.0,))]
 
         def gunm(t):
             return gun_at(t, gun_keys)
@@ -629,7 +577,7 @@ def build_gun_clips(rig):
             (1.25, on_gun(mag_grip, down(0.09))), (1.4, on_gun(mag_grip)), (1.5, on_gun(mag_grip)),
             (1.8, on_gun(bolt_grip)), (1.9, on_gun(bolt_grip)),
             (1.97, lambda t: gunm(t) @ Matrix.Translation(Vector((0, bolt_off(t), 0))) @ bolt_grip),
-            (2.07, lambda t: gunm(t) @ Matrix.Translation(Vector((0, -0.06, 0))) @ bolt_grip),
+            (2.07, lambda t: gunm(t) @ Matrix.Translation(Vector((0, -BOLT_TRAVEL, 0))) @ bolt_grip),
             (2.2, on_gun(support))]
 
         def reload(t):
@@ -645,9 +593,9 @@ def build_gun_clips(rig):
                 parts['mag'] = scaled(left @ hand_to_mag, HIDDEN)
             else:
                 parts['mag'] = left @ hand_to_mag
-            # The left shoulder reaches forward and up for the cocking knob.
+            # The left shoulder reaches forward and across for the charging handle.
             sw = rk.keyed([(0.0, (0.0,)), (1.55, (0.0,)), (1.8, (1.0,)), (2.07, (1.0,)), (2.2, (0.0,))], t)[0]
-            shift = {'L': (0.05 * sw, 0.06 * sw, 0.07 * sw)}
+            shift = {'L': (0.08 * sw, 0.06 * sw, 0.02 * sw)}
             holding = 0.28 <= t < 1.45
             lc = WRAP_CURL if holding else (PINCH_CURL if 1.75 <= t < 2.12 else (RELAX_CURL if 0.2 <= t < 0.28 else support_curl))
             return rig.pose(gun, parts, {'R': gun @ grip_r, 'L': left}, {'R': TRIGGER_CURL, 'L': lc},
@@ -768,12 +716,17 @@ def build(rig_name, swat):
     scene.render.fps = FPS
     weapons = import_weapons()
     parts, marks = weapon_parts(rig_name, weapons)
+    layout, swatch_rect = rl.LAYOUTS[rig_name]
+    atlas = rl.Atlas(rig_name, [(k, r, {}) for k, r in layout], swatch_rect)
     palettes = ['defender', 'ghost'] if rig_name == 'knife' else ['defender']
     arms = []
     src = s = None
     for pal in palettes:
         before = set(bpy.data.objects)
         src, s, a = import_swat(swat, pal)
+        # The arms: flat swatch of the gun's atlas (their colour is the vertex colour), sharp edges by angle.
+        atlas.remap(a, swatch='polymer')
+        a.data.set_sharp_from_angle(angle=math.radians(45))
         arms.append((pal, a))
         for o in set(bpy.data.objects) - before:
             if o is not a and o is not src:
@@ -790,7 +743,8 @@ def build(rig_name, swat):
         if bone == 'mag' and 'mag_centre' in marks:
             c = marks['mag_centre']
         extra.append((bone, 'weapon', tuple(c)))
-    arm = make_armature(f'vm_{rig_name}', src, s, extra)
+    # The armature must not share a name with a mesh node (the client picks the knife's variant by node name).
+    arm = make_armature(f'rig_{rig_name}', src, s, extra)
     # The SWAT source is no longer needed (nor its 24 clips).
     bpy.data.objects.remove(src)
     for a in list(bpy.data.actions):
@@ -817,22 +771,12 @@ def build(rig_name, swat):
         name = 'vm_ghost' if pal == 'ghost' else f'vm_{rig_name}'
         m.name = name
         m.data.name = name
-        m.data.set_sharp_from_angle(angle=math.radians(45))
         skin(m, arm)
         meshes.append(m)
         log(name, 'tris', tris(m.data), 'verts', len(m.data.vertices))
 
-    mat = bpy.data.materials.new('viewmodel')
-    mat.use_nodes = True
-    nt = mat.node_tree
-    bsdf = next(n for n in nt.nodes if n.type == 'BSDF_PRINCIPLED')
-    ca = nt.nodes.new('ShaderNodeVertexColor')
-    ca.layer_name = 'Col'
-    nt.links.new(ca.outputs['Color'], bsdf.inputs['Base Color'])
-    bsdf.inputs['Roughness'].default_value = 0.6
     for m in meshes:
-        m.data.materials.clear()
-        m.data.materials.append(mat)
+        rl.single_material(m, rig_name)
         with bpy.context.temp_override(object=m, active_object=m):
             bpy.ops.object.vertex_group_limit_total(group_select_mode='ALL', limit=4)
             bpy.ops.object.vertex_group_normalize_all(group_select_mode='ALL', lock_active=False)
@@ -841,7 +785,9 @@ def build(rig_name, swat):
     empties = []
     prefix = {'rifle': 'gun', 'pistol': 'pistol'}.get(rig_name)
     if prefix:
-        for src_name, name in ((f'{prefix}_muzzle', 'muzzle'), (f'{prefix}_muzzle_bare', 'muzzle_bare')):
+        pairs = [(f'{prefix}_muzzle', 'muzzle'), (f'{prefix}_muzzle_bare', 'muzzle_bare')]
+        pairs += [(n, n[len(prefix) + 1:]) for n in sorted(weapons) if n.startswith(f'{prefix}_aim_')]
+        for src_name, name in pairs:
             loc = weapons[src_name].matrix_world.translation.copy()
             e = bpy.data.objects.new(name, None)
             scene.collection.objects.link(e)
@@ -877,13 +823,14 @@ def build(rig_name, swat):
     bpy.context.view_layer.objects.active = arm
     out = os.path.join(OUT_DIR, f'viewmodel_{rig_name}.glb')
     bpy.ops.export_scene.gltf(
-        filepath=out, export_format='GLB', use_selection=True, export_yup=True, export_texcoords=False,
+        filepath=out, export_format='GLB', use_selection=True, export_yup=True, export_texcoords=True,
         export_normals=True, export_tangents=False, export_vertex_color='ACTIVE', export_all_vertex_colors=False,
-        export_materials='EXPORT', export_skins=True, export_all_influences=False, export_def_bones=False,
+        export_materials='EXPORT', export_image_format='NONE', export_skins=True, export_all_influences=False, export_def_bones=False,
         export_animations=True, export_animation_mode='ACTIONS', export_force_sampling=True,
         export_optimize_animation_size=True, export_anim_slide_to_zero=False, export_morph=False,
         export_extras=False, export_cameras=False, export_lights=False)
     log('wrote', out, os.path.getsize(out), 'bytes')
+    rl.quantize(out)
 
 
 def main():

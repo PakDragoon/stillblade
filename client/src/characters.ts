@@ -2,7 +2,7 @@ import * as pc from 'playcanvas';
 import { TICK_RATE } from '@shared/constants';
 import { SLOT_COUNT, SLOT_KNIFE, WEAPONS } from '@shared/weapons';
 import type { RemoteView } from './presenter-api';
-import { instantiateWeapon, WEAPON_MESH, type WeaponInstance, type WeaponModel } from './weapons';
+import { instantiateWeapon, WEAPON_MESH, type WeaponInstance, type WeaponMaterials, type WeaponModel } from './weapons';
 
 /**
  * Animated remote-player characters.
@@ -29,7 +29,7 @@ import { instantiateWeapon, WEAPON_MESH, type WeaponInstance, type WeaponModel }
  *   - Ally ghost: the same shader, steady violet, fixed opacity.
  *
  * Weapons (weapons.ts) hang from the "socket_gun" / "socket_knife" nodes on the right wrist bone:
- *   - Defenders carry every gun in the table (shared/weapons.ts; same vertex-colour material as the body),
+ *   - Defenders carry every gun in the table (shared/weapons.ts; the textured weapon materials, weapons.ts),
  *     all in socket_gun with only the one in hand (RemoteView.weapon) enabled, held with the rifle's two-handed
  *     "aim" pose or the pistol's one-handed "pistol" pose; a remote shot plays "shoot" / "pistol_shoot" (a recoil
  *     that ends on the hold). RemoteView.reloading plays "reload_rifle" (2.2 s) or "reload_pistol" (1.4 s) from
@@ -395,15 +395,19 @@ export class Character {
         this.state = S_IDLE;
     }
 
-    /** Puts the guns and knife into the hand sockets (once; the model may load after the character). */
-    setWeapons(w: WeaponModel): void {
+    /**
+     * Puts the guns and knife into the hand sockets (once; the model may load after the character). Guns and the
+     * defender's knife use the textured weapon materials; the ghost's knife the ghost shimmer, like its body.
+     */
+    setWeapons(w: WeaponModel, mats: WeaponMaterials): void {
         if (this.guns.length > 0 || this.knife) return;
         const gs = this.entity.findByName('socket_gun');
         const ks = this.entity.findByName('socket_knife');
         if (gs) {
             // Every gun's origin is its grip, so all share the socket; still one draw call, as only one is enabled.
             for (let i = 0; i < WEAPONS.length; i++) {
-                const g = instantiateWeapon(w, WEAPON_MESH[WEAPONS[i].id], this.model.defenderMat);
+                const name = WEAPON_MESH[WEAPONS[i].id];
+                const g = instantiateWeapon(w, name, mats.of(name));
                 g.setSuppressed(this.suppressed);
                 g.setSight(this.sight);
                 gs.addChild(g.entity);
@@ -416,7 +420,7 @@ export class Character {
             ks.addChild(k.entity);
             this.knife = k.entity;
             this.knifeMi = k.meshInstance;
-            const dk = instantiateWeapon(w, 'knife', this.model.defenderMat);
+            const dk = instantiateWeapon(w, 'knife', mats.of('knife'));
             ks.addChild(dk.entity);
             this.defenderKnife = dk.entity;
         }

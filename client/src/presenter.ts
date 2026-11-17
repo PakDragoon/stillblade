@@ -13,7 +13,7 @@ import { bindings } from './bindings';
 import { SIGHT_IRON, SLOT_COUNT, SLOT_KNIFE, WEAPONS, isGunSlot, sightDef, slotLabel, type SightId, type WeaponId } from '@shared/weapons';
 import type { HitZone } from '@shared/zones';
 import {
-    instantiateWeapon, loadWeaponModel, makeWeaponMaterial, WEAPON_MESH, type WeaponInstance, type WeaponModel
+    instantiateWeapon, loadWeaponModel, WEAPON_MESH, WeaponMaterials, type WeaponInstance, type WeaponModel
 } from './weapons';
 import { loadViewmodel, type VmRig } from './viewmodel';
 import { Effects, faceAt, type Surface } from './effects';
@@ -62,15 +62,20 @@ const RELOAD_RETURN = 12;
 const XHAIR_AIM_OPACITY = 0.15;
 
 /**
- * Rifle sights (package M): height of each sight's optical axis above the grip, in metres (tools/blender/weapons.py
- * RIFLE_SIGHTS `axis`; iron = the eye line of the rifle's aimed pose, VM_LOOKS.rifle.aim). Aimed, the gun is lowered
- * by the difference from iron so the sight's centre sits on the screen centre. Re-point these for a new rifle model.
+ * Aiming (package M part 2): weapons.glb carries, per gun and sight, the point where the eye sits when aiming with it
+ * (`<gun>_aim_<sight>`: on the sight's optical axis, at its eye relief; tools/blender/weapons.py). Aimed, the gun is
+ * placed so that point is the camera, so the sight's centre is the screen centre whatever the model. Until the model
+ * has loaded, VM_LOOKS[..].aim stands in, lowered by these optical axis heights above the iron line (metres).
  */
-const SIGHT_EYE: Record<SightId, number> = { iron: 0.226, reddot: 0.226, scope2x: 0.236 };
-/** The sight overlay (red dot reticle, scope ring) starts to show at this aim progress and is full at 1. */
+const SIGHT_EYE_FALLBACK: Record<SightId, number> = { iron: 0, reddot: 0.02, scope2x: 0.03 };
+/** The red dot's DOM reticle (only while the gun has no reticle of its own) starts at this aim progress. */
 const SIGHT_OVERLAY_FROM = 0.55;
-/** From this aim progress the 2x scope's view is the overlay alone: the gun in first person is hidden. */
-const SCOPE_HIDE_GUN = 0.92;
+/**
+ * The 2x scope's reticle (a chevron, DOM) fades in from this aim progress: by then the scope's eyepiece is centred.
+ * The scope itself is the model, seen from close behind its eyepiece: the view is magnified by the aim zoom and the
+ * scope's body and the gun stay in view around the lens (no blackout, no second render pass).
+ */
+const SCOPE_RETICLE_FROM = 0.8;
 
 /**
  * First-person look of each defender weapon, by WeaponId (shared/weapons.ts). Positions are metres in
@@ -482,17 +487,13 @@ body.sb-lowhp #sb-low { display: block; }
     margin: calc(var(--s, 4px) * -1.5) 0 0 calc(var(--s, 4px) * -1.5); border: 2px solid var(--c); box-shadow: 0 0 0 1px rgba(0,0,0,.55); box-sizing: border-box; }
 #sb-reddot { left: 50%; top: 50%; width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; border-radius: 50%; display: none;
     opacity: 0; background: #ff3324; box-shadow: 0 0 3px 1px rgba(255,51,36,.85), 0 0 9px 3px rgba(255,51,36,.25); text-shadow: none; }
-#sb-scope { inset: 0; display: none; opacity: 0; text-shadow: none;
-    background: radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 0, rgba(0,0,0,0) 37vmin, rgba(0,0,0,.35) 40vmin,
-        rgba(0,0,0,.9) 41vmin, #000 42.5vmin, #000 100%); }
-#sb-scope i { position: absolute; left: 50%; top: 50%; background: rgba(0,0,0,.85); }
-#sb-scope i.h { width: 82vmin; height: 1px; margin: -.5px 0 0 -41vmin;
-    background: linear-gradient(to right, #000 0 30%, rgba(0,0,0,.85) 30% 47%, rgba(0,0,0,0) 47% 53%, rgba(0,0,0,.85) 53% 70%, #000 70% 100%); }
-#sb-scope i.v { width: 1px; height: 82vmin; margin: -41vmin 0 0 -.5px;
-    background: linear-gradient(to bottom, rgba(0,0,0,.85) 0 47%, rgba(0,0,0,0) 47% 53%, rgba(0,0,0,.85) 53% 70%, #000 70% 100%); }
-#sb-scope i.h.thick { height: 4px; margin-top: -2px; background: linear-gradient(to right, #000 0 30%, rgba(0,0,0,0) 30% 70%, #000 70% 100%); }
-#sb-scope i.v.thick { width: 4px; margin-left: -2px; background: linear-gradient(to bottom, rgba(0,0,0,0) 0 70%, #000 70% 100%); }
-#sb-scope i.dot { width: 3px; height: 3px; margin: -1.5px 0 0 -1.5px; border-radius: 50%; background: #c8241b; }
+#sb-scope { left: 50%; top: 50%; width: 0; height: 0; display: none; opacity: 0; text-shadow: none; }
+#sb-scope i { position: absolute; display: block; }
+#sb-scope i.chev { left: 0; top: -1px; width: 10px; height: 10px; transform: rotate(45deg); transform-origin: 0 0;
+    border-top: 2px solid #ff7a1f; border-left: 2px solid #ff7a1f; filter: drop-shadow(0 0 2px rgba(255,110,20,.8)); }
+#sb-scope i.post { left: -1px; top: 6px; width: 2px; height: 3vmin; background: rgba(10,10,10,.85); }
+#sb-scope i.bar { top: calc(6px + 1vmin); height: 1px; width: 2vmin; background: rgba(10,10,10,.8); }
+#sb-scope i.bar.l { left: -2vmin; } #sb-scope i.bar.r { left: 0; }
 #sb-xhair { mix-blend-mode: normal; } #sb-xhair i { background: var(--c, #e8eaed); box-shadow: 0 0 0 1px rgba(0,0,0,.5); }
 #sb-banner { left: 50%; top: 22%; transform: translateX(-50%); text-align: center; display: none; white-space: nowrap; }
 #sb-banner div:empty { display: none; }
@@ -635,7 +636,9 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         .catch((err: unknown) => {
             console.warn('[stillblade] Character model failed to load; drawing box players instead.', err);
         });
-    // Weapons load independently: the viewmodel keeps its boxes and characters stay unarmed until then.
+    // Weapons load independently: the viewmodel keeps its boxes and characters stay unarmed until then. Their
+    // textured materials (weapons.ts) exist from the start; the atlases load with the first setTier.
+    const weaponMats = new WeaponMaterials(app, import.meta.env.BASE_URL);
     let weaponModel: WeaponModel | null = null;
     loadWeaponModel(app, `${import.meta.env.BASE_URL}models/weapons.glb`)
         .then(m => {
@@ -750,7 +753,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         r.char = new Character(model, r.root);
         r.body.enabled = false;
         r.neck.enabled = false;
-        if (weaponModel) r.char.setWeapons(weaponModel);
+        if (weaponModel) r.char.setWeapons(weaponModel, weaponMats);
         r.char.setSuppressed(suppressedLook);
         r.char.reset();
         if (r.look !== Look.None) applyCharLook(r);
@@ -900,11 +903,16 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     box(knifeBoxes, knifeHandleMat, 0.022, 0.028, 0.09, 0, -0.002, 0.051, VM);  // handle
     knife.enabled = false;
 
+    /** Per gun slot, per sight (SIGHTS index): the aim point (eye position) in the gun's frame, from weapons.glb. */
+    const aimPoints: (pc.Vec3 | null)[][] = WEAPONS.map(() => []);
+    /** The aimed pose built from an aim point (position, then no rotation); reused every frame. */
+    const aimPose = [0, 0, 0, 0, 0, 0];
     const useWeaponModel = (m: WeaponModel): void => {
-        const vmMat = makeWeaponMaterial(0.4);
         for (let i = 0; i < vmGuns.length; i++) {
             const v = vmGuns[i];
-            const g = instantiateWeapon(m, WEAPON_MESH[WEAPONS[i].id], vmMat, VM);
+            const mesh = WEAPON_MESH[WEAPONS[i].id];
+            aimPoints[i] = m.aims.get(mesh) ?? [];
+            const g = instantiateWeapon(m, mesh, weaponMats.of(mesh), VM);
             g.setSuppressed(suppressedLook);
             g.setSight(vmSight);
             v.model = g;
@@ -919,18 +927,18 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             v.flash.setLocalPosition(0, 0, -0.04 * fx);
             v.boxes.enabled = false;
         }
-        const k = instantiateWeapon(m, 'knife', vmMat, VM);
+        const k = instantiateWeapon(m, 'knife', weaponMats.of('knife'), VM);
         knife.addChild(k.entity);
         if (knifeRig) k.entity.enabled = false;
         k.entity.setLocalPosition(0, 0, KNIFE_MODEL_BACK);
         knifeBoxes.enabled = false;
-        for (let i = 0; i < active.length; i++) active[i].char?.setWeapons(m);
-        for (let i = 0; i < free.length; i++) free[i].char?.setWeapons(m);
+        for (let i = 0; i < active.length; i++) active[i].char?.setWeapons(m, weaponMats);
+        for (let i = 0; i < free.length; i++) free[i].char?.setWeapons(m, weaponMats);
     };
 
-    // Arms rigs (tools/blender/viewmodel.py): one skinned mesh each, the same single draw call as the bare gun. They
-    // load on their own; until then (or if one fails) the bare model or the boxes stand in.
-    const rigMat = makeWeaponMaterial(0.4);
+    // Arms rigs (tools/blender/viewmodel.py): one skinned mesh each, the same single draw call as the bare gun, drawn
+    // with that gun's weapon material (the arms use a flat swatch of its atlas). They load on their own; until then
+    // (or if one fails) the bare model or the boxes stand in.
     /** Muzzle entity (flash, tracer start) onto the rig's muzzle for the current look. */
     const rigMuzzle = (v: VmGun): void => {
         const m = v.rig?.activeMuzzle();
@@ -941,7 +949,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     };
     for (let i = 0; i < vmGuns.length; i++) {
         const id = WEAPONS[i].id, file = RIG_FILE[id];
-        loadViewmodel(app, `${import.meta.env.BASE_URL}models/${file}`, file, VM, rigMat, [`${id}_idle`, `${id}_reload`])
+        loadViewmodel(app, `${import.meta.env.BASE_URL}models/${file}`, file, VM, weaponMats.of(WEAPON_MESH[id]),
+            [`${id}_idle`, `${id}_reload`])
             .then(rig => {
                 const v = vmGuns[i];
                 v.rig = rig;
@@ -962,7 +971,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     camera.addChild(knifeRigRoot);
     knifeRigRoot.enabled = false;
     let knifeRig: VmRig | null = null;
-    loadViewmodel(app, `${import.meta.env.BASE_URL}models/viewmodel_knife.glb`, 'viewmodel_knife.glb', VM, rigMat,
+    loadViewmodel(app, `${import.meta.env.BASE_URL}models/viewmodel_knife.glb`, 'viewmodel_knife.glb', VM, weaponMats.of('knife'),
         ['knife_idle', 'knife_swing'])
         .then(rig => {
             knifeRig = rig;
@@ -1038,10 +1047,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             swingT = -1; // a switch cancels a swing in progress (the rule cancels its windup too)
         }
         if (defender && local.sight !== vmSight) { vmSight = local.sight; applyVmSight(); }
-        // Fully into a 2x scope the view is the scope overlay alone (presenter HUD): no gun in front of it.
-        const scoped = defender && vmSight !== SIGHT_IRON && sightDef(vmSight).id === 'scope2x' && isGunSlot(local.weapon) &&
-            WEAPONS[local.weapon].takesSights && local.aim >= SCOPE_HIDE_GUN;
-        gun.enabled = localAlive && defender && !knifeHeld && !scoped;
+        gun.enabled = localAlive && defender && !knifeHeld;
         knife.enabled = localAlive && (!defender || knifeHeld);
         if (defender && !knifeHeld) {
             // The weapon in hand changes the moment a switch starts: the old one simply disappears.
@@ -1090,9 +1096,17 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             const a0 = local.aim > 0 ? Math.min(1, local.aim) : 0;
             const a = a0 * a0 * (3 - 2 * a0) * (1 - w);
             const ha = 1 - a;
-            const hip = look.hip, aim = look.aim, rl = look.reload, dr = look.draw;
-            // A taller sight lowers the aimed gun so its optical centre, not the iron line, meets the screen centre.
-            const sightDrop = WEAPONS[slot].takesSights ? SIGHT_EYE[sightDef(vmSight).id] - SIGHT_EYE.iron : 0;
+            const hip = look.hip, rl = look.reload, dr = look.draw;
+            // Aimed: the sight's aim point (weapons.glb) on the camera; before the model loads, the old fixed pose.
+            const sightIdx = WEAPONS[slot].takesSights ? vmSight : SIGHT_IRON;
+            const ap = aimPoints[slot][sightIdx] ?? null;
+            let aim = look.aim, sightDrop = 0;
+            if (ap) {
+                aimPose[0] = -ap.x; aimPose[1] = -ap.y; aimPose[2] = -ap.z;
+                aim = aimPose;
+            } else if (WEAPONS[slot].takesSights) {
+                sightDrop = SIGHT_EYE_FALLBACK[sightDef(vmSight).id];
+            }
             // Switch: rises from below, rotated, easing into place as draw falls from 1 to 0.
             const d0 = local.draw > 0 ? Math.min(1, local.draw) : 0;
             const d = d0 * d0;
@@ -1324,7 +1338,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     const crosshair = document.getElementById('crosshair');
     // Rifle sight overlays (package M): DOM over the canvas, so no draw call. Made first: the rest of the HUD sits above.
     const scopeEl = div('sb-scope');
-    for (const c of ['h thick', 'v thick', 'h', 'v', 'dot']) scopeEl.appendChild(document.createElement('i')).className = c;
+    // An ACOG-style chevron with a drop post and two stadia bars; the scope's housing around it is the model.
+    for (const c of ['post', 'bar l', 'bar r', 'chev']) scopeEl.appendChild(document.createElement('i')).className = c;
     const redDotEl = div('sb-reddot');
     const OVERLAY_OPACITY: string[] = [];
     for (let i = 0; i <= 20; i++) OVERLAY_OPACITY.push((i / 20).toFixed(2));
@@ -1674,15 +1689,18 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     };
 
     /**
-     * The mounted rifle sight's overlay while aiming the rifle: the red dot's reticle or the 2x scope's ring and
-     * darkened edge, fading in with aim progress; the hip crosshair and spread ticks hide once it is half in.
+     * The mounted rifle sight's overlay while aiming the rifle, fading in with aim progress: the 2x scope's chevron,
+     * and the red dot's DOM reticle only while the gun has none of its own (the models' red dot carries a glowing
+     * reticle on its glass, weapons.py). The hip crosshair and spread ticks hide once the sight is half in.
      */
     const updateSightOverlay = (local: LocalView): void => {
         const rifle = local.alive && local.team === 'defenders' && isGunSlot(local.weapon) && WEAPONS[local.weapon].takesSights;
         const kind = rifle && local.sight !== SIGHT_IRON ? sightDef(local.sight).id : '';
-        const f = kind ? (Math.min(1, Math.max(0, local.aim)) - SIGHT_OVERLAY_FROM) / (1 - SIGHT_OVERLAY_FROM) : 0;
+        const from = kind === 'scope2x' ? SCOPE_RETICLE_FROM : SIGHT_OVERLAY_FROM;
+        const f = kind ? (Math.min(1, Math.max(0, local.aim)) - from) / (1 - from) : 0;
         const op = f > 0 ? Math.round(f * 20) : 0;
-        const show = op > 0 ? kind : '';
+        const meshDot = kind === 'reddot' && !!(vmGuns[slotOf(local.weapon)].rig || vmGuns[slotOf(local.weapon)].model);
+        const show = op > 0 && !meshDot ? kind : '';
         if (show !== shownOverlay) {
             shownOverlay = show;
             redDotEl.style.display = show === 'reddot' ? 'block' : 'none';
@@ -1693,7 +1711,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             shownOverlayOp = op;
             (show === 'reddot' ? redDotEl : scopeEl).style.opacity = OVERLAY_OPACITY[op];
         }
-        const hide = op >= 10;
+        const hide = op >= 10 || (kind !== '' && local.aim >= 0.75);
         if (hide !== shownXhairHidden) {
             shownXhairHidden = hide;
             if (crosshair) crosshair.style.visibility = local.alive && !hide ? '' : 'hidden';
@@ -2080,6 +2098,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         setTier(t: Tier): void {
             tier = t;
             effects.setTier(t);
+            weaponMats.setTier(t);
             fxLight.enabled = t === 'high';
             if (t !== 'high') boomT = Math.min(boomT, BOOM_TIME);
         },
