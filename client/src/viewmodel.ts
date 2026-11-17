@@ -5,11 +5,13 @@ import { SIGHTS, SIGHT_IRON } from '@shared/weapons';
  * First-person rigs: arms and hands holding one weapon, built by tools/blender/viewmodel.py into
  * client/public/models/viewmodel_{rifle,pistol,knife}.glb.
  *
- * Each rig is ONE skinned mesh (sleeves, gloves and the weapon with its moving parts), so it is one draw call. Bones:
- * the SWAT character's arm and finger chains, "weapon" (the weapon's own frame, origin at the grip) and under it the
- * moving parts: "mag", "bolt" (rifle) or "slide" (pistol), and "sup" (the suppressor). Empties "muzzle" (suppressor
- * front) and "muzzle_bare" (bare barrel front) hang from the weapon bone. The knife file has two meshes on the same
- * armature: "vm_knife" (a defender's sleeves) and "vm_ghost" (a ghost's), one shown at a time.
+ * Each rig is ONE skinned mesh (sleeves, gloves and the weapon with its moving parts), so it is one draw call, drawn
+ * with its gun's textured material (weapons.ts `WeaponMaterials`; package M part 2: the AK-105, the Makarov, the
+ * knife). Bones: the SWAT character's arm and finger chains, "weapon" (the weapon's own frame, origin at the grip) and
+ * under it the moving parts: "mag", "bolt" (rifle: the bolt carrier and its charging handle) or "slide" (pistol), and
+ * "sup" (the suppressor). Empties "muzzle" (suppressor front), "muzzle_bare" (bare muzzle front) and "aim_<sight>"
+ * hang from the weapon bone. The knife file has two meshes on the same armature ("rig_knife"): "vm_knife" (a
+ * defender's sleeves) and "vm_ghost" (a ghost's), one shown at a time by node name.
  *
  * Rig space: for a gun, the rig's origin is the grip at the gun's hip pose (presenter.ts places the rig root exactly
  * where it used to place the bare gun, so aiming, drawing, kick and sway still move the whole rig); for the knife it

@@ -1,589 +1,575 @@
 """
-Stillblade weapon pipeline: CC0 source models -> client/public/models/weapons.glb
+Stillblade weapon pipeline (package M part 2: realistic models): downloaded CC-BY models -> client/public/models/
+weapons.glb (third person), the weapon textures, and the full-detail parts the first-person rigs are built from.
 
     "C:/Program Files/Blender Foundation/Blender 5.3/blender.exe" --background --factory-startup \
-        --python tools/blender/weapons.py [-- <source.glb> <out.glb>]
+        --python tools/blender/weapons.py
 
-Source: "Character Soldier" by Quaternius (CC0 1.0, poly.pizza model PpLF4rt4ah), already downloaded for the
-character work into tools/blender/source-art/characters/quaternius-soldier/CharacterSoldier.glb (see
-client/public/models/CREDITS.md). It carries a set of hand-held props; three are used:
-  - "SMG"     : compact SMG with an integral suppressor (1,006 triangles, 4 flat-colour materials): the rifle.
-                The suppressor is every face with the "Black" material (nine parts, nothing else uses it); it is
-                split off into its own node, and a short 12-sided barrel stub is added where it met the receiver
-                (inside the suppressor's collar, so it is hidden when the suppressor is on).
-  - "Pistol"  : semi-automatic pistol (990 triangles, 3 flat-colour materials); it has no suppressor, so a
-                12-sided cylinder is generated at the muzzle as its own node
-  - "Knife_1" : combat knife with a serrated spine (687 triangles, 4 flat-colour materials)
+Sources: tools/blender/source-art/realistic/ (git-ignored; see realistic.py and client/public/models/CREDITS.md):
+the AK-105 (rifle), the Makarov PM (pistol), the tactical knife, the red dot sight, and the 2x scope if the owner has
+downloaded it (otherwise a 2x combat scope is generated here). Run viewmodel.py after this one.
 
-What it does:
-  1. Imports the source GLB with the armature in its rest pose and bakes each prop's world transform.
-  2. Re-orients each prop into the shipped axis convention (below), puts the origin at the grip, and scales it
-     to real-world size (gun 0.66 m including the suppressor, pistol 0.20 m plus a 0.11 m suppressor,
-     knife 0.30 m).
-  3. Bakes the material colours into a vertex-colour attribute (a dark tactical palette), welds, decimates
-     the knife to <= 400 triangles, removes UVs, and gives both meshes ONE shared vertex-colour material.
-  4. Adds, as children of "gun" / "pistol": the suppressor mesh "gun_suppressor" / "pistol_suppressor" (vertices
-     in the gun's own frame, identity local transform), the empty "gun_muzzle" / "pistol_muzzle" at the centre of
-     the suppressor's front face, and the empty "gun_muzzle_bare" / "pistol_muzzle_bare" at the centre of the bare
-     barrel's front face.
-  5. Adds the rifle's optional sights (package M) as more children of "gun": "gun_sight_reddot" (a 1x red dot) and
-     "gun_sight_scope2x" (a 2x scope), generated stand-ins on the receiver top (the iron sights are the gun's own and
-     need no node). One node per non-iron sight of SIGHTS in shared/weapons.ts, named gun_sight_<SightId>.
-  6. Exports a GLB with eleven nodes: gun (mesh) with gun_suppressor, gun_sight_reddot, gun_sight_scope2x (meshes),
-     gun_muzzle and gun_muzzle_bare (empties); pistol (mesh) with pistol_suppressor (mesh), pistol_muzzle and
-     pistol_muzzle_bare (empties); knife (mesh).
+Writes:
+  client/public/models/weapons.glb                 third person: reduced meshes, the node layout below
+  client/public/models/textures/<gun>_{albedo,normal}_{2048,1024}.webp   one atlas per gun (realistic.py)
+  tools/blender/source-art/realistic/build/weapons_fp.glb   full-detail parts, landmarks and aim points for
+                                                   viewmodel.py (git-ignored, rebuilt from the sources)
 
-Sights (client/src/weapons.ts, viewmodel.py): like the suppressor, a sight is merged into the gun's ONE mesh at load in
-third person (one merged mesh per suppressor and sight combination), and is a bone scaled away when not mounted in the
-first-person rig. They are placeholders: package M part 2 replaces the rifle with a realistic AK-103, and its sights
-need only the same node names and an optical axis height in RIFLE_SIGHTS (and presenter.ts SIGHT_EYE) to re-point.
+Node layout of weapons.glb (unchanged names, so the client and characters.py keep working):
+  gun (mesh) with children gun_suppressor, gun_sight_reddot, gun_sight_scope2x (meshes in gun's own frame), the
+      empties gun_muzzle (suppressor front), gun_muzzle_bare (muzzle brake front) and gun_aim_<sight> (where the eye
+      sits when aiming with that sight: on its optical axis, at its eye relief; presenter.ts aims the gun by them);
+  pistol (mesh) with pistol_suppressor, pistol_muzzle, pistol_muzzle_bare, pistol_aim_iron;
+  knife (mesh).
+Each mesh has positions, normals (the sources' own, carried through every reduction), UVs into its gun's atlas, and a
+vertex colour (RGB tints the atlas, A = emission: only the red dot's reticle). One material per gun: rifle, pistol,
+knife.
 
-Suppressor option (rooms choose it; client/src/weapons.ts): the client draws a gun either bare (the gun mesh alone,
-tracers and flash from *_muzzle_bare) or suppressed (gun + its suppressor, merged into ONE mesh at load so a gun is
-still one draw call, tracers and flash from *_muzzle). Gun body plus suppressor is exactly the earlier single mesh.
+Axis convention (glTF / engine space), origin = centre of the hand's grip (a third of the way down the pistol grip
+for the guns, the middle of the handle for the knife):
+  -Z forward (gun: muzzle; knife: blade tip), +Y up (gun: sights; knife: spine), +X right.
+The gun and pistol share the character's "socket_gun"; the knife sits in "socket_knife" (characters.py).
 
-Axis convention (glTF / engine space, for both meshes), origin = centre of the hand's grip:
-  -Z forward (gun: muzzle direction; knife: blade tip direction)
-  +Y up      (gun: sights side, magazine and grip point to -Y; knife: spine side, cutting edge to -Y)
-  +X right
-The gun and pistol origins are the middle of the grip (where the fist closes), so both sit in the character's
-one "socket_gun" with an identity transform; the knife origin is the middle of the handle. client/src/weapons.ts and tools/blender/characters.py (hand sockets) both rely on this.
+Suppressors (room option): a realistic can generated here (the AK's slips over its muzzle brake; the pistol's screws
+on its muzzle), its own node, merged into the gun's one mesh by the client when the room has suppressors.
+Sights (package M): the AK-105 has a Picatinny rail on its dust cover; the red dot and the 2x scope stand on it (the
+iron sights are the gun's own). Like the suppressor, each is merged into the one gun mesh in third person and is a bone
+scaled away in the first-person rig.
 """
 import math
 import os
 import sys
 
-import bmesh
 import bpy
 from mathutils import Matrix, Vector
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.normpath(os.path.join(HERE, '..', '..'))
-DEFAULT_SRC = os.path.join(HERE, 'source-art', 'characters', 'quaternius-soldier', 'CharacterSoldier.glb')
-DEFAULT_OUT = os.path.join(ROOT, 'client', 'public', 'models', 'weapons.glb')
+sys.path.insert(0, HERE)
+import realistic as rl  # noqa: E402
 
-GUN_LENGTH = 0.66
-PISTOL_LENGTH = 0.20
-PISTOL_SUPPRESSOR = (0.11, 0.015)            # length, radius (m)
-GUN_BARREL_STUB = (0.045, 0.0105)            # bare SMG barrel: length, radius (m)
+ROOT = rl.ROOT
+OUT = os.path.join(ROOT, 'client', 'public', 'models', 'weapons.glb')
+
+# Real sizes (metres): AK-105 with the stock unfolded and its muzzle brake 0.824; the PM is modelled in metres;
+# the knife 0.30 (as before); the red dot's housing 0.056 wide; the generated 2x scope 0.145 long.
+RIFLE_LENGTH = 0.824
 KNIFE_LENGTH = 0.30
-KNIFE_MAX_TRIS = 400
+REDDOT_WIDTH = 0.056
+SCOPE_LENGTH = 0.145
+# Where the fist closes on a pistol grip: this far down from the top of the grip (fraction of its length).
+GRIP_DOWN = 0.35
 
-# Rifle sights (package M), in the gun's shipped frame (Blender X right, Y forward, Z up, metres, origin at the grip).
-# The receiver top is flat at z = 0.194 from y = -0.03 to 0.32 on the bore line (x = 0.0133); the iron sight line
-# (the eye height of the aimed pose in presenter.ts) is z = 0.226. `axis` is each sight's optical axis height: the
-# client lowers the aimed gun by (axis - 0.226) so the sight's centre sits on the screen centre (presenter.ts SIGHT_EYE).
-RECEIVER_TOP = 0.194
-RIFLE_SIGHTS = {
-    # A short tube red dot (Aimpoint-like) on a low mount, its axis on the iron sight line.
-    'reddot': {'axis': 0.226, 'back': 0.085, 'length': 0.042, 'r_out': 0.0185, 'r_in': 0.0150,
-               'mount': (0.11, 0.05, 0.026)},
-    # A 2x scope: a slim tube with eyepiece and objective bells on two rings, its axis 1 cm higher.
-    'scope2x': {'axis': 0.236, 'back': -0.035, 'length': 0.235, 'r_out': 0.0125, 'r_in': 0.0100,
-                'eyepiece': (-0.065, 0.045, 0.0175, 0.0140), 'objective': (0.175, 0.055, 0.0200, 0.0165),
-                'rings': (0.02, 0.135)},
-}
+# Triangle budgets. First person: per source part (the rest kept as modelled); third person: per node.
+FP_RIFLE = {'BARREL': 1900, 'FOLDING_STOCK_CHICK_REST': 900, 'MUZZLE_BRAKE': 700, 'IRON_SIGHT': 850,
+            'FOLDING_STOCK': 750, 'HAND_GUARD': 1500, 'RECEIVER': 2300}
+FP_REDDOT = {'main_shape': 1300, 'main_bat_1': 220, 'main_buttons_1': 90, 'main_buttons_2': 90, 'main_a': 220}
+FP_KNIFE = 1300                     # per source mesh (two)
+TP_PISTOL_SCALE = 1.35
+TP = {'gun': 3200, 'pistol': 1700, 'knife': 800, 'reddot': 380, 'scope_dl': 380}
+FP_SCOPE_DL = 1500                  # a downloaded scope, first person
 
-# Linear RGB per source material (matched by name prefix).
-GUN_PALETTE = {
-    'Black': (0.018, 0.018, 0.02, 1.0),     # suppressor, grip panels
-    'DarkGrey': (0.045, 0.048, 0.052, 1.0),  # receiver
-    'Grey2': (0.13, 0.135, 0.14, 1.0),       # small parts
-    'Grey': (0.075, 0.078, 0.082, 1.0),      # magazine, trim
-}
-PISTOL_PALETTE = {
-    'Black': (0.018, 0.018, 0.02, 1.0),     # added suppressor
-    'DarkGrey': (0.045, 0.048, 0.052, 1.0),  # frame
-    'Grey': (0.075, 0.078, 0.082, 1.0),      # slide
-    'Wood': (0.03, 0.03, 0.032, 1.0),        # grip panels (black polymer, not wood)
-}
-KNIFE_PALETTE = {
-    'LightGrey': (0.42, 0.43, 0.45, 1.0),    # blade
-    'Grey': (0.20, 0.21, 0.23, 1.0),         # guard, pommel
-    'DarkWood': (0.022, 0.022, 0.02, 1.0),   # grip wrap
-    'Wood': (0.05, 0.05, 0.045, 1.0),        # handle
-}
+# Eye positions when aimed (the shipped frame, metres): iron sights put the eye this far behind the grip (over the
+# end of the stock, so the receiver and rear sight lead the eye to the front post); the red dot this far behind its
+# glass; the 2x scope this far behind its eyepiece, so the eyepiece fills the view like a real combat scope.
+EYE_BEHIND_GRIP = {'rifle': 0.44, 'pistol': 0.30}
+REDDOT_EYE_RELIEF = 0.26
+SCOPE_EYE_RELIEF = 0.068
 
-# Source-space landmarks (CharacterSoldier.glb, armature in rest pose, Blender world coordinates), measured
-# once with a slice profile of each prop (see the report printed below to re-check them):
-#   SMG: barrel along -X (muzzle at x = -1.733), sights toward -Y, magazine and grip toward +Y.
-#        Pistol grip: x in [-0.78, -0.64]; its middle, a third of the way down, is the grip origin.
-#   Knife_1: blade along -Y (tip at y = -0.965), handle y in [-0.03, 0.444], spine toward -X.
-GUN_AXES = (Vector((-1, 0, 0)), Vector((0, -1, 0)))     # (forward, up) in source space
-GUN_GRIP_X = (-0.78, -0.64)
-#   Pistol: same axes as the SMG (muzzle at x = -1.385, sights toward -Y); its grip is the "Wood" material,
-#   hanging toward +Y from the frame (y = 0.0) to y = 0.26.
-PISTOL_AXES = (Vector((-1, 0, 0)), Vector((0, -1, 0)))
-KNIFE_AXES = (Vector((0, -1, 0)), Vector((-1, 0, 0)))
-KNIFE_HANDLE_Y = (-0.03, 0.444)
+# Atlas layouts: realistic.LAYOUTS (shared with viewmodel.py, whose arms use the swatches).
+RIFLE_LAYOUT, RIFLE_SWATCHES = rl.LAYOUTS['rifle']
+PISTOL_LAYOUT, SIDE_SWATCHES = rl.LAYOUTS['pistol']
+KNIFE_LAYOUT, _ = rl.LAYOUTS['knife']
+
+# Generated parts: vertex colours (linear RGB; A = emission) on the 'metal' or 'polymer' swatch.
+SUPPRESSOR_RGBA = (0.11, 0.11, 0.115, 0.0)
+SCOPE_RGBA = (0.085, 0.085, 0.09, 0.0)
+FIBRE_RGBA = (0.9, 0.45, 0.08, 0.0)
+RETICLE_RGBA = (1.0, 0.08, 0.05, 1.0)
+RETICLE_RADIUS = 0.0011
 
 
 def log(*a):
     print('[weapons]', *a, flush=True)
 
 
-def args():
-    if '--' in sys.argv:
-        rest = sys.argv[sys.argv.index('--') + 1:]
-        if len(rest) >= 2:
-            return rest[0], rest[1]
-    return DEFAULT_SRC, DEFAULT_OUT
+def by_name(objs):
+    return {o.name.split('.')[0]: o for o in objs}
 
 
-def tris(me):
-    return sum(len(p.vertices) - 2 for p in me.polygons)
+def grip_origin(pts):
+    """A third of the way down a pistol grip: on its axis (top centroid to bottom centroid), centred across it."""
+    ax, lo, hi = rl.axis_of(pts)
+    return hi + (lo - hi) * GRIP_DOWN, ax
 
 
-def basis(forward, up):
-    """Matrix whose rows map source vectors to (right, forward, up) = Blender (X, Y, Z)."""
-    f = forward.normalized()
-    u = (up - f * up.dot(f)).normalized()
-    r = f.cross(u)
-    return Matrix((r, f, u)).to_4x4()
+# ---------------------------------------------------------------------------------------------
+# Rifle: AK-105
+
+def build_rifle():
+    path = rl.find_source('rifle', ('.fbx',))
+    if not path:
+        raise FileNotFoundError('AK-105 source missing: tools/blender/source-art/realistic/rifle/ak105fbx.zip')
+    log('rifle source', path)
+    objs = by_name(rl.import_model(path))
+    tex = os.path.dirname(path)
+    tex = os.path.join(tex, 'textures') if os.path.isdir(os.path.join(tex, 'textures')) else tex
+    maps = {}
+    for mat in ('ak105', 'folding_stock'):
+        stem = 'ak105_ak' if mat == 'ak105' else 'ak105_folding_stock'
+        maps[mat] = {'base': (rl.load_image(os.path.join(tex, f'{stem}_BaseColor.png')), None),
+                     'rough': (rl.load_image(os.path.join(tex, f'{stem}_Roughness.png')), 0),
+                     'metal': (rl.load_image(os.path.join(tex, f'{stem}_Metallic.png')), 0),
+                     'normal': (rl.load_image(os.path.join(tex, f'{stem}_Normal.png')), None)}
+    # Source: muzzle toward -Y, sights +Z, charging handle on -X (the right side).
+    fwd, up = Vector((0, -1, 0)), Vector((0, 0, 1))
+    pg = objs['PISTOL GRIP']
+    pts = [v.co.copy() for v in pg.data.vertices]
+    origin, _ = grip_origin(pts)
+    xs = [p.x for p in pts]
+    origin.x = (min(xs) + max(xs)) / 2
+    all_pts = rl.points(list(objs.values()))
+    length = max(p.dot(fwd) for p in all_pts) - min(p.dot(fwd) for p in all_pts)
+    s = RIFLE_LENGTH / length
+    rl.to_frame(list(objs.values()), fwd, up, origin, s)
+    log('rifle: source length', round(length, 4), 'scale', round(s, 5), 'grip origin (source)',
+        tuple(round(c, 4) for c in origin))
+
+    # Landmarks (shipped frame).
+    brake = objs['MUZZLE_BRAKE']
+    blo, bhi = rl.bounds(brake)
+    bore_x, bore_z = (blo.x + bhi.x) / 2, (blo.z + bhi.z) / 2
+    mx, my, mz, _ = rl.front_face(brake)
+    muzzle_bare = Vector((bore_x, my, bore_z))
+    barrel_pts = rl.points(objs['BARREL'])
+    post = [p for p in barrel_pts if p.y > blo.y - 0.09]
+    iron_z = max(p.z for p in post)
+    rear = max(rl.points(objs['IRON_SIGHT']), key=lambda p: p.z)
+    dc = rl.points(objs['DUST_COVER'])
+    rail_z = max(p.z for p in dc)
+    rail = [p for p in dc if p.z > rail_z - 0.002]
+    rail_y = (min(p.y for p in rail), max(p.y for p in rail))
+    hlo, hhi = rl.bounds(objs['HAND_GUARD'])
+    handle = max(rl.points(objs['BOLT_CARRIER']), key=lambda p: p.x)
+    mag_ax, mag_lo, mag_hi = rl.axis_of(rl.points(objs['MAGAZINE']))
+    grip_ax, glo, ghi = rl.axis_of(rl.points(pg))
+    log('rifle: bore x/z', round(bore_x, 4), round(bore_z, 4), 'muzzle brake front', round(my, 4), 'rear', round(blo.y, 4),
+        'front post top', round(iron_z, 4), 'rear sight top', tuple(round(c, 4) for c in rear),
+        'rail top', round(rail_z, 4), 'from', tuple(round(c, 4) for c in rail_y),
+        'handguard', tuple(round(c, 4) for c in hlo), tuple(round(c, 4) for c in hhi),
+        'charging handle', tuple(round(c, 4) for c in handle))
+
+    # First-person reduction (normals carried over).
+    for name, target in FP_RIFLE.items():
+        rl.decimate(objs[name], target)
+    mag = objs.pop('MAGAZINE')
+    bolt = objs.pop('BOLT_CARRIER')
+    # The raised cheek rest stands almost at the sight line right in front of the eye when aiming: first person
+    # leaves it out (the folding stock itself stays); third person keeps it.
+    cheek = objs.pop('FOLDING_STOCK_CHICK_REST')
+    cheek.name = cheek.data.name = 'fp_gun_cheek'
+    body = rl.join(list(objs.values()), 'fp_gun')
+    mag.name = mag.data.name = 'fp_gun_mag'
+    bolt.name = bolt.data.name = 'fp_gun_bolt'
+
+    # Suppressor: a can that slips over the muzzle brake.
+    br = (bhi.x - blo.x) / 2
+    sup = suppressor('fp_gun_suppressor', (bore_x, bore_z), blo.y - 0.006, 0.185, br + 0.0045, 32)
+    muzzle = Vector((bore_x, blo.y - 0.006 + 0.185, bore_z))
+
+    marks = {
+        'mark_rifle_grip': (Vector((0, 0, 0)), grip_ax),
+        'mark_rifle_mag': ((mag_lo + mag_hi) / 2, mag_ax),
+        'mark_rifle_mag_bottom': (mag_lo, mag_ax),
+        'mark_rifle_handguard': (Vector((bore_x, hlo.y + (hhi.y - hlo.y) * 0.22, (hlo.z + hhi.z) / 2)),
+                                 Vector((0, 0, 1))),
+        'mark_rifle_handguard_size': (Vector(((hhi.x - hlo.x) / 2, (hhi.y - hlo.y) / 2, (hhi.z - hlo.z) / 2)),
+                                      Vector((0, 0, 1))),
+        'mark_rifle_handle': (handle, Vector((1, 0, 0))),
+    }
+    return {'body': body, 'mag': mag, 'bolt': bolt, 'cheek': cheek, 'sup': sup, 'maps': maps,
+            'bore': (bore_x, bore_z), 'muzzle': muzzle, 'muzzle_bare': muzzle_bare, 'iron_z': iron_z,
+            'rail': (rail_z, rail_y), 'marks': marks}
 
 
-def bake_colours(obj, palette):
-    me = obj.data
-    for a in list(me.color_attributes):
-        me.color_attributes.remove(a)
-    attr = me.color_attributes.new('Col', 'BYTE_COLOR', 'CORNER')
-    names = [s.material.name if s.material else '' for s in obj.material_slots]
-    for poly in me.polygons:
-        name = names[poly.material_index] if poly.material_index < len(names) else ''
-        key = max((k for k in palette if name.startswith(k)), key=len, default=None)
-        col = palette[key] if key else (1, 0, 1, 1)
-        if key is None:
-            log('WARNING unknown material', name)
-        for li in poly.loop_indices:
-            attr.data[li].color = col
-    me.color_attributes.active_color = attr
-    me.color_attributes.render_color_index = me.color_attributes.find('Col')
-    me.materials.clear()
-    # The importer stores custom split normals; drop them so the sharp-edge angle below decides shading.
-    if me.has_custom_normals:
-        with bpy.context.temp_override(object=obj, active_object=obj):
-            bpy.ops.mesh.customdata_custom_splitnormals_clear()
-    for uv in list(me.uv_layers):
-        me.uv_layers.remove(uv)
+def suppressor(name, centre, back, length, radius, segments):
+    """A modern can: wrench-flat collar at the rear, a long body, a chamfered front face with the bore hole."""
+    r = radius
+    prof = [(0.0, r * 0.45), (0.0, r * 0.92), (0.004, r * 0.97), (0.030, r * 0.97), (0.034, r), (length - 0.008, r),
+            (length - 0.002, r * 0.93), (length, r * 0.84), (length, r * 0.30), (length - 0.006, r * 0.26)]
+    return rl.lathe(name, prof, segments, 'gen_metal', centre=centre, back=back)
 
 
-def isolate(name):
-    """Copy of a prop with its world transform baked in, unparented."""
-    src = bpy.data.objects[name]
-    me = src.data.copy()
-    me.transform(src.matrix_world)
-    obj = bpy.data.objects.new(name + '_baked', me)
-    bpy.context.scene.collection.objects.link(obj)
-    # The mesh copy keeps its material list, so colours can still be baked by material name.
-    return obj
+# ---------------------------------------------------------------------------------------------
+# Sights
+
+def build_reddot():
+    path = rl.find_source('reddot', ('.glb', '.gltf'))
+    if not path:
+        raise FileNotFoundError('red dot source missing: tools/blender/source-art/realistic/reddot/red_dot_sight.glb')
+    log('red dot source', path)
+    objs = {}
+    for o in rl.import_model(path):
+        key = o.name.replace('_low_sight_0', '').split('.')[0]
+        objs[key] = o
+    glass = objs.pop('main_glass')
+    for k in [k for k in objs if 'screw' in k]:
+        bpy.data.objects.remove(objs.pop(k))
+    mat = next(o.data.materials[0] for o in objs.values() if o.data.materials)
+    maps = rl.material_maps(mat)
+    log('red dot maps', {k: (v[0].name, v[1]) for k, v in maps.items()})
+    shape = objs['main_shape']
+    slo, shi = rl.bounds(shape)
+    glo, ghi = rl.bounds(glass)
+    s = REDDOT_WIDTH / (shi.x - slo.x)
+    # Source: window toward +Y (the hood in front, the low deck behind), buttons on +X (right). Origin: the rail
+    # contact under the glass centre line, at the middle of the housing's length.
+    origin = Vector(((glo.x + ghi.x) / 2, (slo.y + shi.y) / 2, slo.z))
+    rl.to_frame(list(objs.values()) + [glass], Vector((0, 1, 0)), Vector((0, 0, 1)), origin, s)
+    glo, ghi = rl.bounds(glass)
+    axis_z = (glo.z + ghi.z) / 2
+    glass_y = (glo.y + ghi.y) / 2
+    bpy.data.objects.remove(glass)
+    for k, target in FP_REDDOT.items():
+        if k in objs:
+            rl.decimate(objs[k], target)
+    body = rl.join(list(objs.values()), 'fp_gun_sight_reddot')
+    lo, hi = rl.bounds(body)
+    log('red dot: scale', round(s, 7), 'size', tuple(round(c, 4) for c in (hi - lo)), 'optical axis height',
+        round(axis_z, 4), 'glass y', round(glass_y, 4), 'tris', rl.tris(body.data))
+    return body, maps, axis_z, glass_y
 
 
-def weld(obj, dist=1e-5):
-    bpy.context.view_layer.objects.active = obj
-    for o in bpy.context.scene.objects:
-        o.select_set(o is obj)
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.remove_doubles(threshold=dist)
-    bpy.ops.object.mode_set(mode='OBJECT')
-
-
-def decimate(obj, max_tris):
-    n = tris(obj.data)
-    if n <= max_tris:
-        return
-    # Planar dissolve first (removes coplanar splits for free), then collapse if still over budget.
-    m = obj.modifiers.new('Planar', 'DECIMATE')
-    m.decimate_type = 'DISSOLVE'
-    m.angle_limit = math.radians(2.0)
-    with bpy.context.temp_override(object=obj, active_object=obj):
-        bpy.ops.object.modifier_apply(modifier=m.name)
-    tri = obj.modifiers.new('Tri', 'TRIANGULATE')
-    with bpy.context.temp_override(object=obj, active_object=obj):
-        bpy.ops.object.modifier_apply(modifier=tri.name)
-    n = tris(obj.data)
-    if n > max_tris:
-        m = obj.modifiers.new('Collapse', 'DECIMATE')
-        m.ratio = (max_tris - 2) / n
-        m.use_collapse_triangulate = True
-        with bpy.context.temp_override(object=obj, active_object=obj):
-            bpy.ops.object.modifier_apply(modifier=m.name)
-
-
-def front_face(obj):
-    """Forward-most face of a mesh in the shipped frame: (centre x, front y, centre z, height)."""
-    pts = [v.co for v in obj.data.vertices]
-    ymax = max(p.y for p in pts)
-    front = [p for p in pts if p.y > ymax - 0.004]
-    lo, hi = min(p.z for p in front), max(p.z for p in front)
-    return (min(p.x for p in front) + max(p.x for p in front)) / 2, ymax, (lo + hi) / 2, hi - lo
-
-
-def cylinder(name, centre_x, back_y, centre_z, length, radius, material):
-    """A 12-sided capped cylinder along +Y (shipped frame) from back_y to back_y + length, as its own object."""
-    me = bpy.data.meshes.new(name)
-    bm = bmesh.new()
-    bmesh.ops.create_cone(bm, cap_ends=True, cap_tris=False, segments=12, radius1=radius, radius2=radius, depth=length)
-    # The cone is built along Z: turn it to +Y and move it into place.
-    bmesh.ops.rotate(bm, verts=bm.verts, cent=(0, 0, 0), matrix=Matrix.Rotation(math.radians(-90), 3, 'X'))
-    bmesh.ops.translate(bm, verts=bm.verts, vec=(centre_x, back_y + length / 2, centre_z))
-    bm.to_mesh(me)
-    bm.free()
-    me.materials.append(bpy.data.materials.new(material))
-    obj = bpy.data.objects.new(name, me)
-    bpy.context.scene.collection.objects.link(obj)
-    return obj
-
-
-def ring_tube(name, centre_x, back_y, centre_z, length, r_out, r_in, material, segments=16):
+def build_scope_generated(segments, name):
     """
-    A thick open tube along +Y (shipped frame) from back_y to back_y + length: outer wall facing out, inner wall facing
-    in, and the two end rings, so it can be looked through from behind and reads solid from every side.
+    A 2x combat scope (ACOG-like) in its own frame (origin = rail contact under the eyepiece end's... centre of the
+    base, Y forward, Z up): a tube with eyepiece and objective bells, a flat housing on top with a fibre-optic light
+    pipe, a rail clamp base with two thumb nuts on the left. The tube has no inner wall
+    and no glass: from the eye on its axis you look straight through it (the client draws the reticle).
+    Returns (object, optical axis height, eyepiece rear y, front y).
     """
-    me = bpy.data.meshes.new(name)
-    bm = bmesh.new()
-    rings = []
-    for y in (back_y, back_y + length):
-        for r in (r_out, r_in):
-            rings.append([bm.verts.new((centre_x + r * math.cos(2 * math.pi * k / segments), y,
-                                        centre_z + r * math.sin(2 * math.pi * k / segments))) for k in range(segments)])
-    ob, ib, of, if_ = rings
-    for k in range(segments):
-        n = (k + 1) % segments
-        bm.faces.new((ob[k], ob[n], of[n], of[k]))      # outer wall
-        bm.faces.new((ib[k], if_[k], if_[n], ib[n]))    # inner wall
-        bm.faces.new((ob[k], ib[k], ib[n], ob[n]))      # back ring
-        bm.faces.new((of[k], of[n], if_[n], if_[k]))    # front ring
-    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-    bm.to_mesh(me)
-    bm.free()
-    me.materials.append(bpy.data.materials.new(material))
-    obj = bpy.data.objects.new(name, me)
-    bpy.context.scene.collection.objects.link(obj)
-    return obj
+    H = 0.034                                    # optical axis above the rail
+    y0 = -0.07                                   # eyepiece rear face
+    # Radius never shrinks toward the front (except the front rim): a face turned back toward the eye would show
+    # inside the lens as a dark ring.
+    tube = [(0.0, 0.0150), (0.0, 0.0186), (0.003, 0.0192), (0.086, 0.0192), (0.108, 0.0214), (0.140, 0.0216),
+            (0.145, 0.0204), (0.145, 0.0196)]
+    parts = [rl.lathe('tube', tube, segments, 'gen_metal', centre=(0.0, H), back=y0)]
+    bev = 0.0
+    # Seen from the eye on the axis, through the eyepiece, nothing but the tube may face the eye: the housing and the
+    # base start flush with the eyepiece's rear face (their rear faces frame the lens) and have no face against the
+    # tube; the thumb nuts start inside the clamp, out of the lens's view cone.
+    parts.append(rl.box('housing', (0.0, y0 + 0.040, H + 0.0255), (0.027, 0.080, 0.016), 'gen_metal', bevel=bev,
+                        segments=2 if bev else 1, drop=((0, 0, -1),)))
+    fibre = rl.cylinder('fibre', (0.0, y0 + 0.012, H + 0.0342), (0, 1, 0), 0.062, 0.0042, 'gen_polymer',
+                        segments=max(8, segments // 3))
+    parts.append(rl.box('base', (0.0, y0 + 0.050, (H - 0.0175) / 2), (0.020, 0.100, H - 0.0175), 'gen_metal',
+                        bevel=bev * 0.8, segments=1, drop=((0, 0, 1),)))
+    parts.append(rl.box('clamp', (0.0, y0 + 0.052, 0.005), (0.032, 0.090, 0.010), 'gen_metal', bevel=bev * 0.6,
+                        segments=1))
+    for yy in (0.03, 0.08):
+        parts.append(rl.cylinder('nut', (-0.008, y0 + yy, 0.005), (-1, 0, 0), 0.018, 0.0062, 'gen_metal',
+                                 segments=max(8, segments // 2)))
+    for p in parts:
+        rl.set_colour(p, SCOPE_RGBA)
+    rl.set_colour(fibre, FIBRE_RGBA)
+    parts.append(fibre)
+    return rl.join(parts, name), H, y0, y0 + 0.145
 
 
-def block(name, centre, size, material):
-    """An axis-aligned box (shipped frame) as its own object."""
-    me = bpy.data.meshes.new(name)
-    bm = bmesh.new()
-    bmesh.ops.create_cube(bm, size=1.0)
-    bmesh.ops.scale(bm, vec=size, verts=bm.verts)
-    bmesh.ops.translate(bm, verts=bm.verts, vec=centre)
-    bm.to_mesh(me)
-    bm.free()
-    me.materials.append(bpy.data.materials.new(material))
-    obj = bpy.data.objects.new(name, me)
-    bpy.context.scene.collection.objects.link(obj)
-    return obj
-
-
-def make_sight(sight_id, bore_x):
-    """One rifle sight stand-in as one object named gun_sight_<id>, in the gun's frame (RIFLE_SIGHTS)."""
-    d = RIFLE_SIGHTS[sight_id]
-    ax, back, length = d['axis'], d['back'], d['length']
-    if sight_id == 'reddot':
-        body = ring_tube('sight', bore_x, back, ax, length, d['r_out'], d['r_in'], 'Black')
-        my, ml, mw = d['mount']
-        # Mount: from the receiver top up to the tube's underside.
-        mount_h = ax - d['r_out'] + 0.003 - RECEIVER_TOP
-        join_into(body, block('mount', (bore_x, my, RECEIVER_TOP + mount_h / 2), (mw, ml, mount_h), 'DarkGrey'))
-        # Brightness knob on the right and an adjustment cap on top.
-        join_into(body, cylinder_x('knob', bore_x + d['r_out'] + 0.004, back + length * 0.5, ax, 0.008, 0.007, 'Grey2'))
-        join_into(body, block('cap', (bore_x, back + length * 0.5, ax + d['r_out'] + 0.003), (0.012, 0.012, 0.007), 'Grey2'))
-    else:
-        body = ring_tube('sight', bore_x, back, ax, length, d['r_out'], d['r_in'], 'Black')
-        ey, el, er, eri = d['eyepiece']
-        join_into(body, ring_tube('eyepiece', bore_x, ey, ax, el, er, eri, 'Black'))
-        oy, ol, orr, ori = d['objective']
-        join_into(body, ring_tube('objective', bore_x, oy, ax, ol, orr, ori, 'Black'))
-        # Turrets: elevation on top, windage on the right.
-        join_into(body, cylinder_z('elev', bore_x, back + length * 0.42, ax + d['r_out'], 0.012, 0.0085, 'Grey2'))
-        join_into(body, cylinder_x('wind', bore_x + d['r_out'], back + length * 0.42, ax, 0.012, 0.0085, 'Grey2'))
-        # Two rings with their bases down to the receiver.
-        for ry in d['rings']:
-            join_into(body, ring_tube('ring', bore_x, ry - 0.006, ax, 0.012, d['r_out'] + 0.004, d['r_out'] - 0.0005, 'DarkGrey'))
-            base_h = ax - d['r_out'] - RECEIVER_TOP
-            join_into(body, block('ringbase', (bore_x, ry, RECEIVER_TOP + base_h / 2), (0.016, 0.012, base_h), 'DarkGrey'))
-    body.name = f'gun_sight_{sight_id}'
-    lo_z = min(v.co.z for v in body.data.vertices)
-    log(f'sight {sight_id}: tris', tris(body.data), 'optical axis z', ax, 'lowest z', round(lo_z, 4),
-        'length', round(max(v.co.y for v in body.data.vertices) - min(v.co.y for v in body.data.vertices), 4))
-    return body
-
-
-def _turned_cylinder(name, centre, length, radius, material, rot):
-    me = bpy.data.meshes.new(name)
-    bm = bmesh.new()
-    bmesh.ops.create_cone(bm, cap_ends=True, cap_tris=False, segments=10, radius1=radius, radius2=radius, depth=length)
-    if rot is not None:
-        bmesh.ops.rotate(bm, verts=bm.verts, cent=(0, 0, 0), matrix=rot)
-    bmesh.ops.translate(bm, verts=bm.verts, vec=centre)
-    bm.to_mesh(me)
-    bm.free()
-    me.materials.append(bpy.data.materials.new(material))
-    obj = bpy.data.objects.new(name, me)
-    bpy.context.scene.collection.objects.link(obj)
-    return obj
-
-
-def cylinder_z(name, cx, cy, base_z, length, radius, material):
-    """A capped cylinder standing up (+Z) from base_z."""
-    return _turned_cylinder(name, (cx, cy, base_z + length / 2), length, radius, material, None)
-
-
-def cylinder_x(name, base_x, cy, cz, length, radius, material):
-    """A capped cylinder pointing right (+X) from base_x."""
-    return _turned_cylinder(name, (base_x + length / 2, cy, cz), length, radius, material,
-                            Matrix.Rotation(math.radians(90), 3, 'Y'))
-
-
-def join_into(obj, part):
-    for o in bpy.context.scene.objects:
-        o.select_set(o in (obj, part))
-    bpy.context.view_layer.objects.active = obj
-    with bpy.context.temp_override(active_object=obj, selected_editable_objects=[obj, part]):
-        bpy.ops.object.join()
-
-
-def make_suppressor(obj, length, radius):
+def build_scope_downloaded(path):
     """
-    A 12-sided cylinder in front of `obj` (shipped frame, Y forward), centred on the forward-most face (the barrel
-    tip), with a material named "Black" (baked like the others). Returned as its own object, not joined.
+    The owner's "AR Scope (Game-Ready)" (or any scope model dropped into source-art/realistic/scope2x/). Its
+    orientation is guessed: the optical axis is the longest side, the wider end is the objective (front), and the
+    mount hangs below the tube (the side the mesh reaches furthest from the eyepiece's centre line is down).
+    Glass and lens meshes are dropped. Returns (meshes, maps, axis height, eyepiece y, front y) in the scope's own
+    frame (origin = rail contact, Y forward, Z up), scaled to SCOPE_LENGTH.
     """
-    mx, ymax, bore_z, _ = front_face(obj)
-    sup = cylinder('suppressor', mx, ymax - 0.004, bore_z, length, radius, 'Black')
-    log('pistol suppressor radius', round(radius, 4), 'length', length, 'bore z', round(bore_z, 4))
-    return sup
+    log('2x scope source (downloaded)', path)
+    objs = rl.import_model(path)
+    for o in list(objs):
+        names = (o.name + ' ' + ' '.join(m.name for m in o.data.materials if m)).lower()
+        if 'glass' in names or 'lens' in names:
+            objs.remove(o)
+            bpy.data.objects.remove(o)
+    pts = rl.points(objs)
+    lo = Vector((min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts)))
+    hi = Vector((max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts)))
+    ext = hi - lo
+    ai = max(range(3), key=lambda i: ext[i])
+    axis = Vector([1.0 if i == ai else 0.0 for i in range(3)])
+
+    def end(sign):
+        t0, t1 = (lo[ai], lo[ai] + ext[ai] * 0.12) if sign < 0 else (hi[ai] - ext[ai] * 0.12, hi[ai])
+        sel = [p for p in pts if t0 <= p[ai] <= t1]
+        c = sum(sel, Vector()) / len(sel)
+        r = max((p - c - axis * (p - c).dot(axis)).length for p in sel)
+        return c, r
+
+    (c_lo, r_lo), (c_hi, r_hi) = end(-1), end(1)
+    fwd = axis if r_hi >= r_lo else -axis
+    rear_c = c_lo if r_hi >= r_lo else c_hi
+    # Down: of the two other axes (both directions), the one the mesh reaches furthest along from the eyepiece line.
+    others = [Vector([1.0 if i == j else 0.0 for i in range(3)]) * sgn for j in range(3) if j != ai for sgn in (1, -1)]
+    reach = {tuple(d): max((p - rear_c).dot(d) for p in pts) for d in others}
+    down = Vector(max(reach, key=reach.get))
+    up = -down
+    log('scope: optical axis', tuple(fwd), 'up', tuple(up), 'end radii', round(r_lo, 4), round(r_hi, 4))
+    mats = [m for o in objs for m in o.data.materials if m]
+    maps = rl.material_maps(mats[0]) if mats else {}
+    if len({m.name for m in mats}) > 1:
+        log('WARNING scope has', len({m.name for m in mats}), 'materials; all use the first one\'s maps')
+    length = ext[ai]
+    s = SCOPE_LENGTH / length
+    origin = rear_c.copy()
+    rl.to_frame(objs, fwd, up, origin, s)
+    pts = rl.points(objs)
+    base = min(p.z for p in pts)
+    for o in objs:
+        o.data.transform(Matrix.Translation((0, 0, -base)))
+    y_rear = min(p.y for p in pts)
+    return objs, maps, -base, y_rear, y_rear + SCOPE_LENGTH
 
 
-def split_off(obj, prefix, name):
-    """Moves every face whose material name starts with `prefix` from `obj` into a new object (same frame)."""
-    names = [m.name if m else '' for m in obj.data.materials]
-    part = bpy.data.objects.new(name, obj.data.copy())
-    bpy.context.scene.collection.objects.link(part)
-    for o, keep in ((obj, False), (part, True)):
-        bm = bmesh.new()
-        bm.from_mesh(o.data)
-        dead = [f for f in bm.faces if names[f.material_index].startswith(prefix) != keep]
-        bmesh.ops.delete(bm, geom=dead, context='FACES')
-        loose = [v for v in bm.verts if not v.link_faces]
-        bmesh.ops.delete(bm, geom=loose, context='VERTS')
-        bm.to_mesh(o.data)
-        bm.free()
-        o.data.update()
-    log('split', name, 'off', obj.name, ':', tris(part.data), 'tris moved,', tris(obj.data), 'left')
-    return part
+# ---------------------------------------------------------------------------------------------
+# Pistol: Makarov PM
+
+def build_pistol():
+    path = rl.find_source('pistol', ('.fbx',))
+    if not path:
+        raise FileNotFoundError('Makarov source missing: tools/blender/source-art/realistic/pistol/source.zip')
+    log('pistol source', path)
+    objs = by_name(rl.import_model(path))
+    for k in [k for k in objs if k.startswith('SM_9_18') or k in ('SM_PM_Magazine_S_F', 'SM_PM_Magazine_S_O')]:
+        bpy.data.objects.remove(objs.pop(k))
+    maps = {'base': (rl.load_image(rl.find_file('pistol', 'T_PM_BaseColor.png')), None),
+            'normal': (rl.load_image(rl.find_file('pistol', 'T_PM_Normal.png')), None)}
+    orm = rl.load_image(rl.find_file('pistol', 'T_PM_OcclusionRoughnessMetallic.png'))
+    maps.update({'ao': (orm, 0), 'rough': (orm, 1), 'metal': (orm, 2)})
+    # Source (metres): muzzle +X, sights +Z, safety on +Y (the left side).
+    fwd, up = Vector((1, 0, 0)), Vector((0, 0, 1))
+    frame = objs['SM_PM_Frame']
+    gp = [v.co.copy() for v in frame.data.vertices if v.co.z < 0.075 and v.co.x < -0.022]
+    origin, _ = grip_origin(gp)
+    ys = [p.y for p in gp]
+    origin.y = (min(ys) + max(ys)) / 2
+    rl.to_frame(list(objs.values()), fwd, up, origin, 1.0)
+    slide = objs['SM_PM_Slide']
+    sx, sy, sz, sh = rl.front_face(slide)
+    spts = rl.points(slide)
+    iron_z = max(p.z for p in spts if p.y > sy - 0.02)
+    grip_ax, _, _ = rl.axis_of([v.co.copy() for v in objs['SM_PM_Frame'].data.vertices if v.co.z < -0.005 and v.co.y < 0.03])
+    mag_ax, mag_lo, mag_hi = rl.axis_of(rl.points(objs['SM_PM_Magazine']))
+    # The bore: the slide's front face is a ring around it; its centre is the barrel's axis.
+    bore = Vector((sx, sy, sz))
+    log('pistol: grip origin (source)', tuple(round(c, 4) for c in origin), 'slide front', round(sy, 4),
+        'bore', tuple(round(c, 4) for c in bore), 'front sight top', round(iron_z, 4))
+    body = rl.join([objs['SM_PM_Frame'], objs['SM_PM_Hammer'], objs['SM_PM_Trigger']], 'fp_pistol')
+    slide = rl.join([objs['SM_PM_Slide'], objs['SM_PM_Safety']], 'fp_pistol_slide')
+    mag = rl.join([objs['SM_PM_Magazine'], objs['SM_PM_Mag_P']], 'fp_pistol_mag')
+    sup = suppressor('fp_pistol_suppressor', (bore.x, bore.z), sy - 0.002, 0.125, 0.0142, 28)
+    marks = {
+        'mark_pistol_grip': (Vector((0, 0, 0)), grip_ax),
+        'mark_pistol_mag': ((mag_lo + mag_hi) / 2, mag_ax),
+        'mark_pistol_mag_bottom': (mag_lo, mag_ax),
+        'mark_pistol_slide_rear': (Vector((0.0, min(p.y for p in spts) + 0.012, max(p.z for p in spts) - 0.004)),
+                                   Vector((0, 0, 1))),
+    }
+    return {'body': body, 'slide': slide, 'mag': mag, 'sup': sup, 'maps': maps,
+            'muzzle_bare': bore, 'muzzle': Vector((bore.x, sy - 0.002 + 0.125, bore.z)), 'iron_z': iron_z,
+            'bore': (bore.x, bore.z), 'marks': marks}
 
 
-def add_empty(parent, name, loc):
-    e = bpy.data.objects.new(name, None)
-    bpy.context.scene.collection.objects.link(e)
-    e.parent = parent
-    e.location = loc
-    return e
+# ---------------------------------------------------------------------------------------------
+# Knife
+
+def build_knife():
+    path = rl.find_source('knife', ('.gltf', '.glb'))
+    if not path:
+        raise FileNotFoundError('knife source missing: tools/blender/source-art/realistic/knife/tactical_knife_gltf.zip')
+    log('knife source', path)
+    objs = rl.import_model(path)
+    mat = objs[0].data.materials[0]
+    maps = rl.material_maps(mat)
+    log('knife maps', {k: (v[0].name, v[1]) for k, v in maps.items()})
+    # Source: blade tip toward -Y, spine +Z. The handle is the mesh that does not reach the tip.
+    handle = max(objs, key=lambda o: min(v.co.y for v in o.data.vertices))
+    hlo, hhi = rl.bounds(handle)
+    pts = rl.points(objs)
+    fwd, up = Vector((0, -1, 0)), Vector((0, 0, 1))
+    length = max(p.dot(fwd) for p in pts) - min(p.dot(fwd) for p in pts)
+    centre = (hlo + hhi) / 2
+    s = KNIFE_LENGTH / length
+    rl.to_frame(objs, fwd, up, centre, s)
+    for o in objs:
+        rl.decimate(o, FP_KNIFE)
+    knife = rl.join(objs, 'fp_knife')
+    lo, hi = rl.bounds(knife)
+    log('knife: scale', round(s, 5), 'bounds', tuple(round(c, 4) for c in lo), tuple(round(c, 4) for c in hi))
+    return {'body': knife, 'maps': maps, 'material': mat.name}
+
+
+# ---------------------------------------------------------------------------------------------
+
+def tp_copy(src_objs, name, target):
+    """Third-person version: copies joined into one mesh, reduced to `target` triangles, normals carried over."""
+    copies = [rl.duplicate(o, o.name + '_tp') for o in src_objs]
+    ref = rl.join(copies, name + '_ref')
+    obj = rl.duplicate(ref, name)
+    rl.decimate(obj, target, keep_normals=False)
+    rl.transfer_normals(ref, obj)
+    bpy.data.objects.remove(ref)
+    return obj
 
 
 def main():
-    src, out = args()
-    log('source', src)
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.gltf(filepath=src)
-    arm = next(o for o in bpy.data.objects if o.type == 'ARMATURE')
-    arm.data.pose_position = 'REST'
-    bpy.context.view_layer.update()
+    os.makedirs(rl.BUILD, exist_ok=True)
 
-    gun = isolate('SMG')
-    pistol = isolate('Pistol')
-    knife = isolate('Knife_1')
-    for o in list(bpy.data.objects):
-        if o not in (gun, pistol, knife):
-            bpy.data.objects.remove(o)
-    # Muzzle points (shipped frame), found below: suppressed (suppressor front) and bare (barrel front).
-    muzzles = {}
+    # --- Rifle and its sights -------------------------------------------------------------------
+    rifle = build_rifle()
+    bore_x, bore_z = rifle['bore']
+    rail_z, (ry0, ry1) = rifle['rail']
+    reddot, reddot_maps, rd_axis, rd_glass = build_reddot()
+    # Red dot: on the dust-cover rail, a little ahead of its middle.
+    rd_y = ry0 + (ry1 - ry0) * 0.58
+    reddot.data.transform(Matrix.Translation((bore_x, rd_y, rail_z)))
+    dot = rl.disc('reticle', (bore_x, rd_y + rd_glass - 0.0005, rail_z + rd_axis), (0, -1, 0), RETICLE_RADIUS,
+                  'gen_glow', segments=12)
 
-    # --- Gun --------------------------------------------------------------------------------------
-    pts = [v.co.copy() for v in gun.data.vertices]
-    grip_pts = [p for p in pts if GUN_GRIP_X[0] <= p.x <= GUN_GRIP_X[1]]
-    # Receiver bottom = lowest sights-side extent of the grip slice is not needed: take the grip's own span
-    # along the up axis and sit the origin a third of the way down from its top (where the fist closes).
-    fwd, up = GUN_AXES
-    ups = [-p.y for p in grip_pts]                      # height along "up" (= -Y in source)
-    top, bottom = max(ups), min(ups)
-    receiver_bottom = sorted(ups)[len(ups) // 2]          # median: the receiver body dominates the slice
-    grip_y = -(receiver_bottom - (receiver_bottom - bottom) * 0.4)
-    grip = Vector(((GUN_GRIP_X[0] + GUN_GRIP_X[1]) / 2, grip_y, sum(p.z for p in pts) / len(pts)))
-    length = max(p.dot(fwd) for p in pts) - min(p.dot(fwd) for p in pts)
-    s = GUN_LENGTH / length
-    gun.data.transform(Matrix.Scale(s, 4) @ basis(fwd, up) @ Matrix.Translation(-grip))
-    gun.data.update()
-    log('gun: source length', round(length, 4), 'scale', round(s, 5), 'grip (source)', tuple(round(c, 3) for c in grip),
-        'grip top/bottom/receiver', round(top, 3), round(bottom, 3), round(receiver_bottom, 3))
-    # The integral suppressor (the length above, and so the scale, still includes it: suppressed is unchanged).
-    gun_sup = split_off(gun, 'Black', 'gun_suppressor')
-    sp = [v.co for v in gun_sup.data.vertices]
-    bore_x = (min(p.x for p in sp) + max(p.x for p in sp)) / 2
-    bore_z = (min(p.z for p in sp) + max(p.z for p in sp)) / 2
-    mx, ymax, mz, _ = front_face(gun_sup)
-    muzzles['gun_muzzle'] = (mx, ymax, mz)
-    # Bare barrel: a short stub from the receiver's front on the suppressor's axis.
-    front = max(v.co.y for v in gun.data.vertices)
-    stub_len, stub_r = GUN_BARREL_STUB
-    join_into(gun, cylinder('barrel', bore_x, front - 0.004, bore_z, stub_len, stub_r, 'Grey2'))
-    muzzles['gun_muzzle_bare'] = (bore_x, front - 0.004 + stub_len, bore_z)
-    log('gun: receiver front', round(front, 4), 'bore', round(bore_x, 4), round(bore_z, 4),
-        'suppressor front', round(ymax, 4))
-    # Optional sights on the receiver top (package M), each its own child mesh like the suppressor.
-    sights = [make_sight(sid, bore_x) for sid in RIFLE_SIGHTS]
+    scope_path = rl.find_source('scope2x', ('.glb', '.gltf', '.fbx', '.obj'))
+    scope_maps = {}
+    if scope_path:
+        sobjs, scope_maps, sc_axis, sc_rear, sc_front = build_scope_downloaded(scope_path)
+        for o in sobjs:
+            rl.decimate(o, FP_SCOPE_DL // max(1, len(sobjs)))
+        scope = rl.join(sobjs, 'fp_gun_sight_scope2x')
+        scope_source = 'downloaded'
+    else:
+        scope, sc_axis, sc_rear, sc_front = build_scope_generated(32, 'fp_gun_sight_scope2x')
+        scope_source = 'generated'
+    # 2x scope: its eyepiece over the rear of the rail (the eye close behind it when aiming).
+    sc_y = ry0 + 0.012 - sc_rear
+    scope.data.transform(Matrix.Translation((bore_x, sc_y, rail_z)))
+    log('2x scope', scope_source, 'axis height', round(sc_axis, 4), 'eyepiece y', round(sc_y + sc_rear, 4),
+        'tris', rl.tris(scope.data))
+
+    atlas = rl.Atlas('rifle', [(k, r, {'ak105': rifle['maps']['ak105'], 'folding_stock': rifle['maps']['folding_stock'],
+                                       'sight': reddot_maps, 'scope': scope_maps}[k]) for k, r in RIFLE_LAYOUT],
+                     RIFLE_SWATCHES)
+    for o in (rifle['body'], rifle['mag'], rifle['bolt'], rifle['cheek']):
+        rl.prepare(o, atlas, 'rifle')
+    rl.prepare(reddot, atlas, 'rifle', material_region={m.name: 'sight' for m in reddot.data.materials if m})
+    rl.prepare(dot, atlas, 'rifle', swatch='glow', colour=RETICLE_RGBA)
+    reddot = rl.join([reddot, dot], 'fp_gun_sight_reddot')
+    rl.prepare(rifle['sup'], atlas, 'rifle', swatch='metal', colour=SUPPRESSOR_RGBA)
+    if scope_path:
+        rl.prepare(scope, atlas, 'rifle', material_region={m.name: 'scope' for m in scope.data.materials if m})
+    else:
+        keep = [tuple(c.color) for c in scope.data.color_attributes['Col'].data]
+        atlas.remap(scope, swatch='metal')
+        scope.data.color_attributes['Col'].data.foreach_set('color', [x for c in keep for x in c])
+        rl.single_material(scope, 'rifle')
+    atlas.write()
+
+    # Aim points (eye positions) per sight; iron line from the front post.
+    eye_y = -EYE_BEHIND_GRIP['rifle']
+    rifle_aims = {
+        'iron': (bore_x, eye_y, rifle['iron_z']),
+        'reddot': (bore_x, rd_y + rd_glass - REDDOT_EYE_RELIEF, rail_z + rd_axis),
+        'scope2x': (bore_x, sc_y + sc_rear - SCOPE_EYE_RELIEF, rail_z + sc_axis),
+    }
+    log('rifle aim points', {k: tuple(round(c, 4) for c in v) for k, v in rifle_aims.items()})
 
     # --- Pistol ---------------------------------------------------------------------------------
-    me = pistol.data
-    names = [m.name if m else '' for m in me.materials]
-    idx = sorted({vi for p in me.polygons if names[p.material_index].startswith('Wood') for vi in p.vertices})
-    grip_pts = [me.vertices[i].co.copy() for i in idx]
-    pts = [v.co.copy() for v in me.vertices]
-    fwd, up = PISTOL_AXES
-    ups = [p.dot(up) for p in grip_pts]
-    top, bottom = max(ups), min(ups)
-    # A third of the way down the grip, centred in the grip's cross-section at that height. The grip is a
-    # few long quads (no vertices midway) and raked back, so interpolate between its top and bottom ends.
-    span = top - bottom
-    h = top - span * 0.35
-    ends = []
-    for lo_, hi_ in ((top - span * 0.25, top), (bottom, bottom + span * 0.25)):
-        e = [p.x for p in grip_pts if lo_ <= p.dot(up) <= hi_]
-        ends.append((min(e) + max(e)) / 2)
-    # Sideways, centre on the slide (front half), not the grip panels: they sit off to one side.
-    xmin = min(p.x for p in pts)
-    slide = [p for p in pts if p.x < xmin + (max(p.x for p in pts) - xmin) * 0.4]
-    grip = Vector((ends[0] + (ends[1] - ends[0]) * 0.35, -h,
-                   (min(p.z for p in slide) + max(p.z for p in slide)) / 2))
-    length = max(p.dot(fwd) for p in pts) - min(p.dot(fwd) for p in pts)
-    s = PISTOL_LENGTH / length
-    pistol.data.transform(Matrix.Scale(s, 4) @ basis(fwd, up) @ Matrix.Translation(-grip))
-    # The prop is rolled in the source (its grip leans to one side under the slide, which reads as a canted gun
-    # when aimed): turn it about the barrel axis so the grip's bottom sits straight under the slide's centre,
-    # then put the grip back on the origin sideways.
-    pts = [v.co for v in pistol.data.vertices]
-    zs = [p.z for p in pts]
-    ztop, zbot = max(zs), min(zs)
-    slide = [p for p in pts if p.z > ztop - 0.02 and p.y > 0.06]
-    foot = [p for p in pts if p.z < zbot + 0.012]
-    xs, zs_ = (min(p.x for p in slide) + max(p.x for p in slide)) / 2, sum(p.z for p in slide) / len(slide)
-    xb, zb = (min(p.x for p in foot) + max(p.x for p in foot)) / 2, sum(p.z for p in foot) / len(foot)
-    roll = math.atan2(xb - xs, zs_ - zb)
-    rot = Matrix.Rotation(roll, 4, 'Y')
-    pistol.data.transform(rot)
-    a, b = rot @ Vector((xs, 0, zs_)), rot @ Vector((xb, 0, zb))
-    x0 = a.x + (b.x - a.x) * (0 - a.z) / (b.z - a.z)
-    pistol.data.transform(Matrix.Translation((-x0, 0, 0)))
-    pistol.data.update()
-    log('pistol: roll corrected by', round(math.degrees(roll), 2), 'deg; slide/foot x after', round(a.x - x0, 4), round(b.x - x0, 4))
-    log('pistol: source length', round(length, 4), 'scale', round(s, 5), 'grip (source)',
-        tuple(round(c, 3) for c in grip), 'grip top/bottom', round(top, 3), round(bottom, 3))
-    mx, ymax, mz, _ = front_face(pistol)
-    muzzles['pistol_muzzle_bare'] = (mx, ymax, mz)
-    pistol_sup = make_suppressor(pistol, *PISTOL_SUPPRESSOR)
-    pistol_sup.name = 'pistol_suppressor'
-    mx, ymax, mz, _ = front_face(pistol_sup)
-    muzzles['pistol_muzzle'] = (mx, ymax, mz)
+    pistol = build_pistol()
+    patlas = rl.Atlas('pistol', [(k, r, pistol['maps']) for k, r in PISTOL_LAYOUT], SIDE_SWATCHES)
+    for o in (pistol['body'], pistol['slide'], pistol['mag']):
+        rl.prepare(o, patlas, 'pistol')
+    rl.prepare(pistol['sup'], patlas, 'pistol', swatch='metal', colour=SUPPRESSOR_RGBA)
+    patlas.write()
+    pistol_aims = {'iron': (pistol['bore'][0], -EYE_BEHIND_GRIP['pistol'], pistol['iron_z'])}
 
     # --- Knife ----------------------------------------------------------------------------------
-    pts = [v.co.copy() for v in knife.data.vertices]
-    fwd, up = KNIFE_AXES
-    handle = [p for p in pts if KNIFE_HANDLE_Y[0] <= p.y <= KNIFE_HANDLE_Y[1]]
-    hc = Vector((sum(p.x for p in handle) / len(handle), (KNIFE_HANDLE_Y[0] + KNIFE_HANDLE_Y[1]) / 2,
-                 sum(p.z for p in handle) / len(handle)))
-    # Centre of the handle cross-section (bounding box, not vertex mean).
-    hc.x = (min(p.x for p in handle) + max(p.x for p in handle)) / 2
-    hc.z = (min(p.z for p in handle) + max(p.z for p in handle)) / 2
-    length = max(p.dot(fwd) for p in pts) - min(p.dot(fwd) for p in pts)
-    s = KNIFE_LENGTH / length
-    knife.data.transform(Matrix.Scale(s, 4) @ basis(fwd, up) @ Matrix.Translation(-hc))
-    knife.data.update()
-    log('knife: source length', round(length, 4), 'scale', round(s, 5), 'handle centre (source)', tuple(round(c, 3) for c in hc))
+    knife = build_knife()
+    katlas = rl.Atlas('knife', [(knife['material'], KNIFE_LAYOUT[0][1], knife['maps'])], SIDE_SWATCHES)
+    rl.prepare(knife['body'], katlas, 'knife')
+    katlas.write()
 
-    # --- Colours, weld, budget, one material ---------------------------------------------------
-    bake_colours(gun, GUN_PALETTE)
-    bake_colours(gun_sup, GUN_PALETTE)
-    for sight in sights:
-        bake_colours(sight, GUN_PALETTE)
-    bake_colours(pistol, PISTOL_PALETTE)
-    bake_colours(pistol_sup, PISTOL_PALETTE)
-    bake_colours(knife, KNIFE_PALETTE)
-    for o in (gun, gun_sup, pistol, pistol_sup, knife, *sights):
-        weld(o)
-    decimate(knife, KNIFE_MAX_TRIS)
+    # --- First-person parts file (viewmodel.py) -----------------------------------------------------
+    fp = [rifle['body'], rifle['mag'], rifle['bolt'], rifle['sup'], reddot, scope,
+          pistol['body'], pistol['slide'], pistol['mag'], pistol['sup'], knife['body']]
+    fp_empties = []
+    for n, loc in (('fp_gun_muzzle', rifle['muzzle']), ('fp_gun_muzzle_bare', rifle['muzzle_bare']),
+                   ('fp_pistol_muzzle', pistol['muzzle']), ('fp_pistol_muzzle_bare', pistol['muzzle_bare'])):
+        fp_empties.append(rl.add_empty(n, loc))
+    for k, v in rifle_aims.items():
+        fp_empties.append(rl.add_empty(f'fp_gun_aim_{k}', v))
+    for k, v in pistol_aims.items():
+        fp_empties.append(rl.add_empty(f'fp_pistol_aim_{k}', v))
+    for n, (loc, axis) in list(rifle['marks'].items()) + list(pistol['marks'].items()):
+        fp_empties.append(rl.add_empty('fp_' + n, loc, axis=axis))
+    for o in fp:
+        log('first person', o.name, 'tris', rl.tris(o.data), 'verts', len(o.data.vertices))
+    export(fp + fp_empties, rl.FP_GLB)
 
-    mat = bpy.data.materials.new('weapon')
-    mat.use_nodes = True
-    nt = mat.node_tree
-    bsdf = next(n for n in nt.nodes if n.type == 'BSDF_PRINCIPLED')
-    ca = nt.nodes.new('ShaderNodeVertexColor')
-    ca.layer_name = 'Col'
-    nt.links.new(ca.outputs['Color'], bsdf.inputs['Base Color'])
-    bsdf.inputs['Roughness'].default_value = 0.55
-    bsdf.inputs['Metallic'].default_value = 0.0
-    for o, name in ((gun, 'gun'), (gun_sup, 'gun_suppressor'), (pistol, 'pistol'), (pistol_sup, 'pistol_suppressor'),
-                    (knife, 'knife'), *((sg, sg.name) for sg in sights)):
-        o.name = name
-        o.data.name = name
-        o.data.materials.append(mat)
-        o.data.set_sharp_from_angle(angle=math.radians(40))
+    # --- Third person (weapons.glb) ------------------------------------------------------------------
+    gun = tp_copy([rifle['body'], rifle['mag'], rifle['bolt'], rifle['cheek']], 'gun', TP['gun'])
+    gsup = suppressor('gun_suppressor', rifle['bore'], rifle['muzzle'].y - 0.185, 0.185,
+                      (rl.bounds(rifle['sup'])[1].x - rl.bounds(rifle['sup'])[0].x) / 2, 12)
+    rl.prepare(gsup, atlas, 'rifle', swatch='metal', colour=SUPPRESSOR_RGBA)
+    grd = tp_copy([reddot], 'gun_sight_reddot', TP['reddot'])
+    if scope_path:
+        gsc = tp_copy([scope], 'gun_sight_scope2x', TP['scope_dl'])
+    else:
+        gsc, _, _, _ = build_scope_generated(12, 'gun_sight_scope2x')
+        gsc.data.transform(Matrix.Translation((bore_x, sc_y, rail_z)))
+        keep = [tuple(c.color) for c in gsc.data.color_attributes['Col'].data]
+        atlas.remap(gsc, swatch='metal')
+        gsc.data.color_attributes['Col'].data.foreach_set('color', [x for c in keep for x in c])
+        rl.single_material(gsc, 'rifle')
+    pis = tp_copy([pistol['body'], pistol['slide'], pistol['mag']], 'pistol', TP['pistol'])
+    psup = suppressor('pistol_suppressor', pistol['bore'], pistol['muzzle'].y - 0.125, 0.125, 0.0142, 12)
+    rl.prepare(psup, patlas, 'pistol', swatch='metal', colour=SUPPRESSOR_RGBA)
+    # Third person only: the character's cartoon fist is larger than a real Makarov and swallowed it, so the pistol
+    # is drawn larger about its grip (its muzzles follow; the aim point is first-person only and stays real).
+    for o in (pis, psup):
+        o.data.transform(Matrix.Scale(TP_PISTOL_SCALE, 4))
+    kn = tp_copy([knife['body']], 'knife', TP['knife'])
+    tp = [gun, gsup, grd, gsc, pis, psup, kn]
+    for o in (gsup, grd, gsc):
+        o.parent = gun
+    psup.parent = pis
+    tp_empties = []
+    for n, loc in (('gun_muzzle', rifle['muzzle']), ('gun_muzzle_bare', rifle['muzzle_bare'])):
+        tp_empties.append(rl.add_empty(n, loc, parent=gun))
+    for k, v in rifle_aims.items():
+        tp_empties.append(rl.add_empty(f'gun_aim_{k}', v, parent=gun))
+    for n, loc in (('pistol_muzzle', pistol['muzzle']), ('pistol_muzzle_bare', pistol['muzzle_bare'])):
+        tp_empties.append(rl.add_empty(n, loc * TP_PISTOL_SCALE, parent=pis))
+    for k, v in pistol_aims.items():
+        tp_empties.append(rl.add_empty(f'pistol_aim_{k}', v, parent=pis))
+    for o in tp:
+        lo, hi = rl.bounds(o)
+        log('third person', o.name, 'tris', rl.tris(o.data), 'verts', len(o.data.vertices),
+            'bounds lo', tuple(round(c, 3) for c in lo), 'hi', tuple(round(c, 3) for c in hi))
+    for e in tp_empties:
+        x, y, z = e.matrix_world.translation
+        log(e.name, '(Blender)', (round(x, 4), round(y, 4), round(z, 4)), '-> glTF', (round(x, 4), round(z, 4), round(-y, 4)))
+    export(tp + tp_empties, OUT)
 
-    # --- Suppressors as children; muzzles: suppressor front and bare barrel front -----------------
-    # Both meshes are in the gun's own frame and the gun object sits at the origin, so the child keeps an
-    # identity local transform (the client merges the two meshes for the suppressed look).
-    gun_sup.parent = gun
-    for sight in sights:
-        sight.parent = gun
-    pistol_sup.parent = pistol
-    empties = [add_empty(gun, n, muzzles[n]) for n in ('gun_muzzle', 'gun_muzzle_bare')]
-    empties += [add_empty(pistol, n, muzzles[n]) for n in ('pistol_muzzle', 'pistol_muzzle_bare')]
 
-    # --- Report ---------------------------------------------------------------------------------
-    for o in (gun, gun_sup, pistol, pistol_sup, knife, *sights):
-        p = [v.co for v in o.data.vertices]
-        lo = Vector((min(v.x for v in p), min(v.y for v in p), min(v.z for v in p)))
-        hi = Vector((max(v.x for v in p), max(v.y for v in p), max(v.z for v in p)))
-        log(o.name, 'tris', tris(o.data), 'verts', len(o.data.vertices),
-            'bounds (Blender X right, Y forward, Z up) lo', tuple(round(c, 3) for c in lo), 'hi', tuple(round(c, 3) for c in hi))
-    for m in empties:
-        x, y, z = m.location
-        log(m.name, '(Blender)', tuple(round(c, 4) for c in m.location), '-> glTF',
-            (round(x, 4), round(z, 4), round(-y, 4)))
-    # Gun landmarks for the support hand (characters.py): front of the magazine, under the receiver.
-    gp = [v.co for v in gun.data.vertices]
-    mag = [v for v in gp if v.z < -0.03 and v.y > 0.05]
-    if mag:
-        log('magazine span forward', round(min(v.y for v in mag), 3), round(max(v.y for v in mag), 3),
-            'lowest', round(min(v.z for v in mag), 3))
-    rec = [v for v in gp if v.z > -0.01]
-    log('receiver top', round(max(v.z for v in gp), 3), 'rear', round(min(v.y for v in gp), 3))
-
-    # --- Export ---------------------------------------------------------------------------------
-    for o in bpy.data.objects:
-        o.select_set(True)
-    os.makedirs(os.path.dirname(out), exist_ok=True)
+def export(objs, path):
+    for o in bpy.context.scene.objects:
+        o.select_set(o in objs)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     bpy.ops.export_scene.gltf(
-        filepath=out,
-        export_format='GLB',
-        use_selection=True,
-        export_yup=True,
-        export_texcoords=False,
-        export_normals=True,
-        export_tangents=False,
-        export_vertex_color='ACTIVE',
-        export_all_vertex_colors=False,
-        export_materials='EXPORT',
-        export_animations=False,
-        export_skins=False,
-        export_morph=False,
-        export_extras=False,
-        export_cameras=False,
-        export_lights=False,
-    )
-    log('wrote', out, os.path.getsize(out), 'bytes')
+        filepath=path, export_format='GLB', use_selection=True, export_yup=True, export_texcoords=True,
+        export_normals=True, export_tangents=False, export_vertex_color='ACTIVE', export_all_vertex_colors=False,
+        export_materials='EXPORT', export_image_format='NONE', export_animations=False, export_skins=False,
+        export_morph=False, export_extras=False, export_cameras=False, export_lights=False)
+    log('wrote', path, os.path.getsize(path), 'bytes')
+    if path == OUT:
+        rl.quantize(path)
 
 
 main()

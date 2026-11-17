@@ -287,7 +287,7 @@ Warehouse routes from the ghost spawn: to A through the yard stair and service c
 
 ## Assets and licences
 
-All third-party art is CC0. Maps: textures and sky from Poly Haven, listed in `client/public/maps/CREDITS.md`. Models: Quaternius "SWAT" character and the SMG and knife from "Character Soldier", via poly.pizza, listed in `client/public/models/CREDITS.md`. Raw downloads live in the git-ignored `tools/blender/source-art/`; the Blender scripts fall back to the shipped files if it is missing, but rebuilding characters or weapons from source needs those files present.
+Maps: CC0 textures and sky from Poly Haven, listed in `client/public/maps/CREDITS.md`. Models (`client/public/models/CREDITS.md`): the Quaternius "SWAT" character and arms (CC0, via poly.pizza); since package M part 2 the weapons are CC-BY models from Fab (AK-105 by SpatialNeglect, Makarov PM by TaigaForest, Tactical Knife and Red Dot Sight by Gerardo Justel), whose authors must stay credited. Raw downloads live in the git-ignored `tools/blender/source-art/`; the Blender scripts fall back to the shipped files if it is missing, but rebuilding characters or weapons from source needs those files present.
 
 ## Hosting
 
@@ -375,6 +375,7 @@ Warehouse's lightmap on the GPU grows from about 48 MB to 85 MB with mipmaps (th
 
 Follow `ROADMAP.md`. **State on 2026-11-17, when the owner moved to a new session:** everything through wave 4 is built, reviewed, merged into `main` and pushed: waves 1 to 3 (packages A to F), G (graphics tiers and effects), L (menus and settings redesign plus a scoreboard ping column, protocol 14) and H (recorded sounds). 415 tests, protocol 14. No build session is running and no branch is waiting for review; the old worktrees and branches under `.claude/worktrees/` are all merged and can be deleted when the owner says so. **The game server on the owner's PC must be restarted from `main` to match protocol 14** (start command under Hosting).
 
+- **Package M part 2 (2026-11-18, realistic AK-105, Makarov, knife, red dot, a generated 2x scope; no protocol change): built on branch `claude/realistic-weapons-804056`, not reviewed, not merged.** The 2x scope model still needs the owner's download ("AR Scope (Game-Ready)" by Scape into `tools/blender/source-art/realistic/scope2x/`). See "Package M part 2" at the end.
 - **Package M part 1 (2026-11-17, protocol 15): merged into `main` on the owner's word, NOT pushed.** Push only when the owner is at his PC to restart the game server, since the pushed client needs protocol 15. Rifle sights (iron, 1x red dot, 2x scope) chosen in a Loadout page and mounted at the next spawn, and the stuck-aim fix. Review: the shared, protocol, server and input diffs were read line by line; tests (447) and typecheck run on the branch and on merged `main`; two of 19 screenshots looked at. Reviewer's notes: the 2x scope blacks out everything outside its circle like a sniper scope, which should become an ACOG-style sight picture with part 2's real model; the warmup respawn edge (Known problems) predates this package. Part 2 waits for the owner's downloads. See "Package M part 1" below.
 - **Package N (real gunshots and breathing, 2026-11-18): merged into `main` on the owner's word 2026-11-18, NOT pushed; client audio only, no protocol change, 453 tests.** Review: `git diff main -- shared server` empty, `audio.ts` diff read (breathing keeps distance gain, occlusion, panner; recorded breaths add one source and gain node per breath, every couple of seconds per ghost), variant files checked distinct, tests and typecheck run on the branch and on merged `main`. The owner's sound files live in `tools/blender/source-art/realistic/sound/` in the main checkout; `tools/process-audio.mjs` reads `tools/audio-source/freesound/`, so copy them there before re-running it. Real AK-47 recordings (Freesound, CC0) are the gunshots, with a distant tail and filtered suppressed versions; the pistol is still an AK stand-in until the owner downloads real pistol files; ghost breathing is two real recordings cut into single breaths; hurt stays synthesised. Nothing has been listened to. See "Package N" below.
 - **Recommended next step:** the owner plays and listens to waves 3 and 4 before any new package is built; his findings come first and will likely change the briefs for K, I and J.
@@ -649,3 +650,122 @@ the sights in motion (reload with a sight mounted, switching, sway, kick); third
 players (only standing scripted players were seen) and whether the scope clips the helmet in some poses; the
 Loadout page by keyboard only; a sight change through a real death in a real round (the server rule and the respawn
 are tested in-process; the browser run changed it mid-life and checked the note and that the mounted sight stayed).
+
+## Package M part 2 (realistic weapons) in detail
+
+Built 2026-11-18 on branch `claude/realistic-weapons-804056` (from `main` at `97c342d`); **not merged, not pushed**.
+Art and presentation only: `git diff main -- shared server` is empty, no message change, protocol stays 15. 451 tests
+(4 new in `client/src/models.test.ts`), typecheck clean. Screenshots and how they were made:
+`docs/review/realistic-weapons/README.md` (headless Chrome, software GL, scratch ports 8094 and 5194). **Nothing was
+seen on a real GPU, in motion or with a mouse.** Package N (recorded sounds) ran in parallel and owns the audio files;
+this package touched none of them.
+
+**What changed for the player.** The rifle is an AK-105 (SpatialNeglect), the pistol a Makarov PM (TaigaForest), the
+knife (ghosts' and defenders') the "Tactical Knife" (Gerardo Justel), the 1x red dot the "Red Dot Sight" (Gerardo
+Justel), all CC-BY from Fab, credited in `client/public/models/CREDITS.md`. The 2x scope is generated (an ACOG-like
+combat scope) until the owner downloads "AR Scope (Game-Ready)" by Scape (below). Both suppressors are generated cans
+(the AK's slips over its muzzle brake). Sights stand on the Picatinny rail of the AK-105's dust cover. First and third
+person, both tiers.
+
+**Pipeline** (`tools/blender/`; run `weapons.py` then `viewmodel.py`, about 25 s and 2 min; Node must be on the PATH):
+- `realistic.py` (new, shared): imports the downloads from the git-ignored `source-art/realistic/<item>/` (zips are
+  extracted into `source-art/realistic/build/unzipped/`), puts them in the shipped frame, reduces them with
+  `decimate()` (collapse, then the source's own normals copied back with a data-transfer step, so the normal maps still
+  shade as baked), and builds **one atlas per gun** (`Atlas`, layouts in `LAYOUTS`): each source material gets a
+  rectangle and its UVs are scaled into it; generated parts and the arms use flat swatches whose colour comes from the
+  vertex colour. Writes `client/public/models/textures/<gun>_albedo_<size>.webp` (RGB base colour with ambient
+  occlusion multiplied in and metal lifted by `METAL_LIFT`; alpha = one "surface value" s, smoothed and stepped, read by
+  the client as both gloss and metalness: metal about 0.6 to 0.9, polymer 0.1 to 0.35) and `<gun>_normal_<size>.webp`
+  (OpenGL normal map; all four sources were checked to be OpenGL-style by rendering both ways), each at 2048 (High) and
+  1024 (Low).
+- `weapons.py` (rewritten): writes `weapons.glb` (third person: reduced meshes, the same node names as before plus
+  `gun_aim_<sight>` / `pistol_aim_iron`) and the git-ignored `source-art/realistic/build/weapons_fp.glb` (full-detail
+  parts, landmark empties `mark_*`, aim points) that `viewmodel.py` now builds the rigs from (it no longer reads
+  `weapons.glb`). Constants at the top: real sizes, triangle budgets, eye positions (`EYE_BEHIND_GRIP`,
+  `REDDOT_EYE_RELIEF`, `SCOPE_EYE_RELIEF`), the third-person pistol scale.
+- `viewmodel.py`: the rifle's moving parts are the real magazine and bolt carrier (charging handle on the right); the
+  pistol's the real slide (with its safety) and magazine (with its follower). The left hand holds the AK's handguard (it
+  held the magazine like a foregrip before) and racks the charging handle from under the gun (the gun rolls to show its
+  right side). Same cue times as before (rifle 0.3 / 1.4 / 1.9 to 2.07 s, pistol 0.15 / 0.7 / 1.0 to 1.17 s). Arms
+  unchanged apart from their UVs (a white swatch) and their vertex alpha (0: alpha is the emission channel now). The
+  armature is named `rig_<weapon>` (see the bug below).
+- `tools/quantize-glb.mjs` (new, run by both scripts): stores normals, UVs, colours and skin weights as small integers
+  (`KHR_mesh_quantization`; PlayCanvas reads them directly), about 40 % smaller files.
+- `tools/weapon-shots.mjs` (new): the review screenshots.
+
+**The 2x scope download (for the owner):** on Fab, "AR Scope (Game-Ready)" by Scape
+(fab.com/listings/346c6bbd-a204-4317-9e10-b25c653821a8). Put the downloaded file as it comes (the .zip, or the .glb /
+.gltf / .fbx inside it) into `tools/blender/source-art/realistic/scope2x/` of the main checkout; a session then runs
+`weapons.py` and `viewmodel.py` and looks at the result: the importer guesses the orientation (longest side = optical
+axis, wider end = front, the mount below) and drops glass and lens meshes. This path has **never run** (no file yet), so
+expect to check it. Credit Scape in `CREDITS.md` then.
+
+**Client** (`weapons.ts`, `characters.ts`, `presenter.ts`, `viewmodel.ts`):
+- `WeaponMaterials` (weapons.ts): one StandardMaterial per atlas (rifle, pistol, knife), shared by first person, third
+  person and the arms. Per pixel: the albedo atlas (colour; its alpha drives gloss and metalness), the normal map, and a
+  64x64 studio sphere map generated in code (no download) for metal reflections: **3 texture reads per weapon pixel on
+  both tiers**; Low and High differ only in atlas size. The atlases load on the first `setTier` (1024 on Low, 2048 on
+  High) and swap when the tier changes; until then the guns are flat dark grey. Emission = vertex alpha x red: only the
+  red dot's reticle glows.
+- Aiming: the presenter puts the sight's aim point (from `weapons.glb`) on the camera, so any model's sight lines up
+  without constants (`SIGHT_EYE` is gone; a fallback stands in until the model loads). **The 2x scope no longer hides
+  the gun or blacks out the screen:** the eye sits 6.8 cm behind the eyepiece, the scope's own ring frames a lens about
+  half the screen high, the zoom is unchanged (2x, applied to the whole view; no second render pass on either tier), and
+  a DOM chevron reticle fades in from 80 % aim. The scope's tube has no inner wall and nothing faces the eye inside its
+  lens cone, so the lens shows the world. The red dot needs no DOM reticle any more (its reticle is on the glass); the
+  DOM dot remains only while no model is loaded.
+- `Character.setWeapons(model, materials)`: third-person guns and the defender's knife use the textured materials; the
+  ghost's knife keeps the ghost shimmer.
+- **Bug fixed on the way:** the knife rig's armature was also named `vm_knife`, so `setVariant('vm_knife')` never
+  matched and a defender's knife drew both arm meshes (the ghost's dark sleeves over the orange ones, and one extra draw
+  call). The armature is now `rig_<weapon>`; a test checks the names.
+
+**Numbers** (before = `main` at `97c342d`):
+
+| | Before | After |
+|---|---|---|
+| Rifle rig (first person) triangles | 3,486 | 16,324 (AK about 12,000 incl. magazine and bolt, red dot 2,182, 2x scope about 650, suppressor 576, arms 1,500; the parts not mounted are scaled away but still processed) |
+| Pistol rig | 2,546 | 13,582 (Makarov 11,578, suppressor 504, arms 1,500) |
+| Knife rig (two meshes, one drawn) | 1,898 each | 4,099 each |
+| Third person (`weapons.glb`) | rifle 876, red dot 188, scope 736, pistol 990, knife 398 | rifle 3,198, red dot 380, scope 284, pistol 1,697, knife 800, suppressors 216 each |
+| Textures | none (vertex colours) | 3 atlases x (albedo + normal): Low 1024², 850 KB together; High 2048², 1.97 MB together |
+| Files | 1.31 MB (4 GLBs) | GLBs 2.30 MB (weapons 291 KB, rifle 856 KB, pistol 612 KB, knife 542 KB); a Low player downloads 3.15 MB, a High player 4.27 MB |
+| Draw calls, gun in hand | 1 (+1 flash) | 1 (+1 flash); frames measured with the other players hidden: 9 hip / 8 aimed with every sight, pistol 8, knife 10 (11 before the knife fix) |
+| Third person | at most 2 per armed player | unchanged |
+
+`models.test.ts` keeps the Low download (4 GLBs + the 1024 atlases) under 4 MB. High is slightly over 4 MB.
+
+**Decisions taken on my own judgment:** one material per gun, shared with the arms (they point at a white swatch and
+keep their vertex colours); gloss and metalness from one channel; textures as separate WebP files loaded by tier rather
+than inside the GLBs (a Low player never downloads the 2048 set); a generated studio reflection (`sphereMap`) so dark
+gun metal reads as metal without a scene environment map, and metal's base colour lifted (`METAL_LIFT` 0.7) for the
+same reason; the AK-105's raised cheek rest left out of first person only (with iron sights it stood 1 cm under the
+sight line right in front of the eye); the iron-sight eye 44 cm behind the grip (over the end of the stock), the red
+dot's 26 cm behind its glass, the scope's 6.8 cm behind its eyepiece; both sights on the dust-cover top rail (the model
+has one; a side mount would be a part the source does not have); the support hand on the handguard and the charging
+handle racked from under the gun; the third-person pistol drawn 1.35x (the cartoon fist swallowed a real-size Makarov;
+its muzzle points follow; first person stays real size); the generated 2x scope modelled on an ACOG (housing,
+fibre-optic pipe, rail clamp with thumb nuts) with an amber chevron; the red dot's reticle 1.1 mm on the glass; vertex
+alpha as the emission channel; glTF quantization to stay near the download budget.
+
+**Hip pose follow-up (review, owner-approved, 2026-11-18):** at the hip the AK sat small in the lower right, canted
+with its barrel pointing up and left at about 45 degrees, and the support arm ran diagonally across the screen. Now the
+rifle's hip pose is `[0.15, -0.165, -0.40, 0, 3, -3]` (was `[0.17, -0.32, -0.5, 4, 6, -6]`; `presenter.ts` VM_LOOKS and
+`viewmodel.py` HIP, which must match): higher and closer, no upward pitch, 3 degrees inward, so the barrel runs toward
+the crosshair and the receiver, magazine and handguard show. The support hand grips the handguard nearer the receiver
+(22 % along it instead of 42 %), and the left shoulder moved to `(0.06, 0.47, -0.34)` so the forearm comes in from the
+bottom edge. The reload's tilted poses were lowered and flattened (no muzzle-up pitch; magazine out and in and the
+charging handle still in view), and the belt point moved closer so the arm stays in reach. Pistol hip `[0.11, -0.15,
+-0.33, 0, 3, -2]` (was `[0.12, -0.175, -0.34, 2, 4, -3]`), same reasoning, smaller change. The knife was fine and is
+unchanged. The aimed poses come from the aim points and did not move. Every first-person screenshot (10 to 43) was
+re-taken. The folding stock now shows in the bottom right corner at the hip, as on a real AK held at the hip.
+
+**Not verified:** anything on a real GPU or in motion (software GL only); frame rate; how metal and polymer read on a
+real screen and in Warehouse's dark corners; the scope's lens size on other screen shapes (fixed geometry: wider
+screens show more scope body); the red dot reticle's visibility at 1080p and above; the reloads by ear against the
+sounds (same cue times as before); whether the left hand clips the magazine while racking the handle; the third-person
+support hand (the character's aim clip still holds the old SMG's magazine spot, which on the longer AK is the magazine
+well, not the handguard; package O rebuilds the characters); the downloaded-scope path (never ran); and
+`tools/blender/review.py` (its Blender renders assume vertex colours, so the new guns render untextured there). The
+arms are still the cartoon SWAT arms; package O replaces them. There is no in-game credits page: the CC-BY credits
+live in `client/public/models/CREDITS.md`, which the site serves at `/models/CREDITS.md`.

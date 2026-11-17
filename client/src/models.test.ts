@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { TICK_RATE } from '@shared/constants';
@@ -82,6 +82,63 @@ describe('rifle sights (package M)', () => {
             }
         }
         expect(g.meshes.length).toBe(1); // still one skinned mesh: one draw call
+    });
+});
+
+describe('realistic weapons (package M part 2)', () => {
+    const models = join(__dirname, '..', 'public', 'models');
+    type Prim = { attributes: Record<string, number> };
+    const primitives = (g: Gltf): Prim[] => g.meshes.flatMap(m => (m as { primitives?: Prim[] }).primitives ?? []);
+
+    it('weapons.glb has an aim point for every rifle sight and the pistol, and UVs and colours on every mesh', () => {
+        const g = readGlb('weapons.glb');
+        const names = nodeNames(g);
+        for (const s of SIGHTS) expect(names.has(`gun_aim_${s.id}`), s.id).toBe(true);
+        expect(names.has('pistol_aim_iron')).toBe(true);
+        for (const p of primitives(g)) {
+            expect(p.attributes.TEXCOORD_0).toBeDefined();
+            expect(p.attributes.COLOR_0).toBeDefined();
+        }
+    });
+
+    it('every rig has its moving parts, aim points (guns), UVs and colours', () => {
+        const parts: Record<string, string[]> = {
+            rifle: ['bolt', 'mag', 'sup', ...SIGHTS.map(s => `aim_${s.id}`)],
+            pistol: ['slide', 'mag', 'sup', 'aim_iron'],
+            knife: []
+        };
+        for (const [rig, want] of Object.entries(parts)) {
+            const g = readGlb(`viewmodel_${rig}.glb`);
+            const names = nodeNames(g);
+            for (const n of want) expect(names.has(n), `${rig} ${n}`).toBe(true);
+            for (const p of primitives(g)) {
+                expect(p.attributes.TEXCOORD_0, rig).toBeDefined();
+                expect(p.attributes.COLOR_0, rig).toBeDefined();
+            }
+        }
+    });
+
+    it('the knife rig names its two meshes exactly (the client shows one by node name)', () => {
+        const g = readGlb('viewmodel_knife.glb');
+        const meshNodes = g.nodes.filter(n => (n as { mesh?: number }).mesh !== undefined).map(n => n.name).sort();
+        expect(meshNodes).toEqual(['vm_ghost', 'vm_knife']);
+        // No other node may share those names (an armature called vm_knife hid the defender's mesh from setVariant).
+        expect(g.nodes.filter(n => n.name === 'vm_knife').length).toBe(1);
+    });
+
+    it('ships both atlas sizes per gun, and the Low tier download stays within 4 MB', () => {
+        let low = 0;
+        for (const f of ['weapons.glb', 'viewmodel_rifle.glb', 'viewmodel_pistol.glb', 'viewmodel_knife.glb']) low += statSync(join(models, f)).size;
+        for (const atlas of ['rifle', 'pistol', 'knife']) {
+            for (const kind of ['albedo', 'normal']) {
+                for (const size of [1024, 2048]) {
+                    const b = readFileSync(join(models, 'textures', `${atlas}_${kind}_${size}.webp`));
+                    expect(b.subarray(8, 12).toString('ascii'), `${atlas} ${kind} ${size}`).toBe('WEBP');
+                    if (size === 1024) low += b.length;
+                }
+            }
+        }
+        expect(low).toBeLessThan(4 * 1024 * 1024);
     });
 });
 

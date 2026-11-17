@@ -1,10 +1,13 @@
 import * as pc from 'playcanvas';
 import { SIGHTS, SIGHT_COUNT, SIGHT_IRON, type WeaponId } from '@shared/weapons';
+import type { Tier } from './graphics';
 
 /**
- * Weapon meshes: client/public/models/weapons.glb, built by tools/blender/weapons.py from Quaternius's CC0
- * "Character Soldier" props (an SMG with its integral suppressor split off, a pistol with a generated one, and a
- * combat knife). One vertex-coloured mesh each, one shared material.
+ * Weapon meshes: client/public/models/weapons.glb, built by tools/blender/weapons.py (package M part 2) from the
+ * realistic CC-BY models in client/public/models/CREDITS.md: an AK-105 (the rifle), a Makarov PM (the pistol) and a
+ * tactical knife, with a red dot sight, a 2x scope and generated suppressors. Third-person (reduced) meshes; the
+ * first-person rigs (viewmodel.ts) carry the full-detail ones. Every mesh has UVs into its gun's texture atlas and a
+ * vertex colour (RGB tints the atlas, A = emission: the red dot's reticle); `WeaponMaterials` below draws them.
  *
  * Node layout and axis convention (engine space, metres, origin at the centre of the hand's grip):
  *   gun        : -Z = muzzle direction, +Y = sights up (magazine and grip hang toward -Y), +X = right.
@@ -36,6 +39,9 @@ type GunName = Exclude<WeaponName, 'knife'>;
 /** Mesh node for each defender gun in the table (shared/weapons.ts); the rifle's node is still "gun". */
 export const WEAPON_MESH: Record<WeaponId, GunName> = { rifle: 'gun', pistol: 'pistol' };
 const GUN_NAMES: readonly GunName[] = ['gun', 'pistol'];
+/** Texture atlas (and material) per mesh: tools/blender/realistic.py writes <atlas>_{albedo,normal}_<size>.webp. */
+export type WeaponAtlas = 'rifle' | 'pistol' | 'knife';
+export const ATLAS_OF: Record<WeaponName, WeaponAtlas> = { gun: 'rifle', pistol: 'pistol', knife: 'knife' };
 
 export interface WeaponModel {
     asset: pc.Asset;
@@ -44,6 +50,11 @@ export interface WeaponModel {
      * model's own mesh), and the gun with its suppressor and/or a mounted sight merged in.
      */
     readonly looks: Map<GunName, pc.Mesh[]>;
+    /**
+     * Per gun, per sight (SIGHTS index; the pistol has only iron): where the eye sits when aiming with it, in the
+     * gun's own frame (engine axes, metres; the `<gun>_aim_<sight>` nodes), or null if the model has no such node.
+     */
+    readonly aims: Map<GunName, (pc.Vec3 | null)[]>;
 }
 
 /** Index into `WeaponModel.looks` of a gun's look with or without its suppressor and with sight `sight` (SIGHTS). */
@@ -69,8 +80,11 @@ function readStream(mesh: pc.Mesh, semantic: string): { data: number[]; componen
     const data: number[] = [];
     mesh.getVertexStream(semantic, data);
     if (el.normalize) {
-        const max = el.dataType === pc.TYPE_UINT8 ? 255 : el.dataType === pc.TYPE_UINT16 ? 65535 : 1;
-        for (let i = 0; i < data.length; i++) data[i] /= max;
+        // Normalised integers (tools/quantize-glb.mjs): unsigned map to 0..1, signed to -1..1.
+        const t = el.dataType;
+        const max = t === pc.TYPE_UINT8 ? 255 : t === pc.TYPE_UINT16 ? 65535 : t === pc.TYPE_INT8 ? 127 : t === pc.TYPE_INT16 ? 32767 : 1;
+        const signed = t === pc.TYPE_INT8 || t === pc.TYPE_INT16;
+        for (let i = 0; i < data.length; i++) data[i] = signed ? Math.max(-1, data[i] / max) : data[i] / max;
     }
     return { data, components: el.numComponents };
 }
@@ -80,10 +94,10 @@ interface MeshPart { mesh: pc.Mesh; toGun: pc.Mat4 | null }
 
 /**
  * One mesh from `parts` (each moved by its transform relative to the gun: the suppressor's, a sight's): positions,
- * normals and vertex colours, indexed triangles. Used at load only.
+ * normals, UVs and vertex colours, indexed triangles. Used at load only.
  */
 function mergedMesh(device: pc.GraphicsDevice, parts: readonly MeshPart[]): pc.Mesh {
-    const pos: number[] = [], nrm: number[] = [], col: number[] = [], idx: number[] = [];
+    const pos: number[] = [], nrm: number[] = [], uv: number[] = [], col: number[] = [], idx: number[] = [];
     const p = new pc.Vec3(), n = new pc.Vec3();
     const normalMat = new pc.Mat3();
     let base = 0;
@@ -92,6 +106,7 @@ function mergedMesh(device: pc.GraphicsDevice, parts: readonly MeshPart[]): pc.M
         const ps = readStream(m, pc.SEMANTIC_POSITION)!;
         const ns = readStream(m, pc.SEMANTIC_NORMAL);
         const cs = readStream(m, pc.SEMANTIC_COLOR);
+        const ts = readStream(m, pc.SEMANTIC_TEXCOORD0);
         const count = ps.data.length / ps.components;
         for (let i = 0; i < count; i++) {
             p.set(ps.data[i * 3], ps.data[i * 3 + 1], ps.data[i * 3 + 2]);
@@ -102,10 +117,12 @@ function mergedMesh(device: pc.GraphicsDevice, parts: readonly MeshPart[]): pc.M
                 if (xf) normalMat.transformVector(n, n).normalize();
                 nrm.push(n.x, n.y, n.z);
             } else nrm.push(0, 1, 0);
+            if (ts) uv.push(ts.data[i * ts.components], ts.data[i * ts.components + 1]);
+            else uv.push(0, 0);
             if (cs) {
                 const c = cs.components;
                 col.push(cs.data[i * c], cs.data[i * c + 1], cs.data[i * c + 2], c > 3 ? cs.data[i * c + 3] : 1);
-            } else col.push(1, 1, 1, 1);
+            } else col.push(1, 1, 1, 0);
         }
         const ind: number[] = [];
         m.getIndices(ind);
@@ -115,6 +132,7 @@ function mergedMesh(device: pc.GraphicsDevice, parts: readonly MeshPart[]): pc.M
     const mesh = new pc.Mesh(device);
     mesh.setPositions(pos);
     mesh.setNormals(nrm);
+    mesh.setUvs(0, uv);
     mesh.setColors(col);
     mesh.setIndices(idx);
     mesh.update(pc.PRIMITIVE_TRIANGLES);
@@ -134,13 +152,18 @@ export function loadWeaponModel(app: pc.Application, url: string, filename = 'we
             const probe = res.instantiateRenderEntity();
             let ok = !!(probe.findByName('knife') as pc.Entity | null)?.render;
             const looks = new Map<GunName, pc.Mesh[]>();
+            const aims = new Map<GunName, (pc.Vec3 | null)[]>();
             for (const name of GUN_NAMES) {
                 const gun = probe.findByName(name) as pc.Entity | null;
                 const sup = probe.findByName(`${name}_suppressor`) as pc.Entity | null;
                 const body = meshOf(gun), supMesh = meshOf(sup);
                 ok = ok && !!body && !!supMesh && !!probe.findByName(`${name}_muzzle`) && !!probe.findByName(`${name}_muzzle_bare`);
                 if (!ok || !body || !supMesh || !gun || !sup) continue;
-                const toGun = (e: pc.Entity): pc.Mat4 => new pc.Mat4().copy(gun.getWorldTransform()).invert().mul(e.getWorldTransform());
+                const toGun = (e: pc.GraphNode): pc.Mat4 => new pc.Mat4().copy(gun.getWorldTransform()).invert().mul(e.getWorldTransform());
+                aims.set(name, SIGHTS.map(def => {
+                    const node = probe.findByName(`${name}_aim_${def.id}`);
+                    return node ? toGun(node).getTranslation(new pc.Vec3()) : null;
+                }));
                 const supPart: MeshPart = { mesh: supMesh, toGun: toGun(sup) };
                 // The optional sights this gun's model carries (none for the pistol).
                 const sightParts: (MeshPart | null)[] = SIGHTS.map((def, i) => {
@@ -165,7 +188,7 @@ export function loadWeaponModel(app: pc.Application, url: string, filename = 'we
             }
             probe.destroy();
             if (!ok) { reject(new Error('weapon model lacks the gun / pistol (suppressors, muzzles) / knife nodes')); return; }
-            resolve({ asset, looks });
+            resolve({ asset, looks, aims });
         });
         asset.once('error', (err: unknown) => {
             app.assets.remove(asset);
@@ -218,13 +241,134 @@ export function instantiateWeapon(model: WeaponModel, name: WeaponName, material
     return inst;
 }
 
-/** Lit material for the weapon meshes (their colour is in the vertex colours). */
-export function makeWeaponMaterial(gloss = 0.35): pc.StandardMaterial {
-    const m = new pc.StandardMaterial();
-    m.diffuse = new pc.Color(1, 1, 1);
-    m.diffuseVertexColor = true;
-    m.diffuseVertexColorChannel = 'rgb';
-    m.gloss = gloss;
-    m.update();
-    return m;
+/** Emission colour of the red dot's reticle (vertex alpha 1 on its few triangles, 0 everywhere else). */
+const RETICLE_GLOW = new pc.Color(1, 0.1, 0.05);
+const RETICLE_GLOW_INTENSITY = 4;
+/** Strength of the studio reflection on metal (`sphereMap`). */
+const REFLECTIVITY = 0.55;
+/** Atlas size per graphics tier: at most 1024 on Low, 2048 on High. */
+export const ATLAS_SIZE: Record<Tier, number> = { low: 1024, high: 2048 };
+
+/**
+ * A small studio environment as a sphere map (a mirror ball seen from the viewer), generated here, nothing downloaded:
+ * bright overhead, a soft key light up and to the left, a darker floor. Metal reflects it; it is in view space, so it
+ * stays put relative to the camera, which suits a first-person weapon (players and weapons are lit by the same fixed
+ * sun and ambient everywhere on a map anyway).
+ */
+function makeStudioSphere(device: pc.GraphicsDevice): pc.Texture {
+    const n = 64;
+    const data = new Uint8Array(n * n * 4);
+    for (let y = 0; y < n; y++) {
+        for (let x = 0; x < n; x++) {
+            const u = ((x + 0.5) / n) * 2 - 1, v = 1 - ((y + 0.5) / n) * 2;
+            const nz = Math.sqrt(Math.max(0, 1 - u * u - v * v));
+            // Reflected view direction off a mirror ball at this point (y up).
+            const ry = 2 * nz * v, rx = 2 * nz * u;
+            const up = Math.max(-1, Math.min(1, ry));
+            let c = 0.22 + 0.5 * Math.max(0, up) - 0.12 * Math.max(0, -up);
+            c += 0.9 * Math.exp(-((rx + 0.45) ** 2 + (ry - 0.55) ** 2) * 6);
+            const g = Math.round(Math.max(0, Math.min(1, c)) * 255);
+            const i = (y * n + x) * 4;
+            data[i] = Math.round(g * 0.98); data[i + 1] = g; data[i + 2] = Math.min(255, Math.round(g * 1.04)); data[i + 3] = 255;
+        }
+    }
+    const t = new pc.Texture(device, { width: n, height: n, format: pc.PIXELFORMAT_RGBA8, mipmaps: false, name: 'weapon-studio' });
+    t.addressU = t.addressV = pc.ADDRESS_CLAMP_TO_EDGE;
+    t.minFilter = t.magFilter = pc.FILTER_LINEAR;
+    t.lock().set(data);
+    t.unlock();
+    return t;
+}
+
+/**
+ * The weapons' materials: one per atlas (rifle, pistol, knife), shared by first and third person (and by the arms in
+ * the rigs, whose UVs point at a flat white swatch so their vertex colours show). Each samples its gun's albedo atlas
+ * (RGB colour times the vertex colour; alpha = the surface value, read as both gloss and metalness), its normal map
+ * and the studio sphere map: 3 texture reads per weapon pixel on both tiers. The atlases load when the tier is first
+ * set (1024 on Low, 2048 on High, swapped when the tier changes); until then the guns are a flat dark grey.
+ */
+export class WeaponMaterials {
+    readonly byAtlas: Record<WeaponAtlas, pc.StandardMaterial>;
+    private tier: Tier | null = null;
+    private readonly loaded = new Map<string, Promise<pc.Texture>>();
+
+    constructor(private readonly app: pc.Application, private readonly baseUrl: string) {
+        const env = makeStudioSphere(app.graphicsDevice);
+        const make = (): pc.StandardMaterial => {
+            const m = new pc.StandardMaterial();
+            m.diffuse = new pc.Color(0.1, 0.1, 0.11);
+            m.diffuseVertexColor = true;
+            m.diffuseVertexColorChannel = 'rgb';
+            m.useMetalness = true;
+            m.metalness = 0.3;
+            m.gloss = 0.45;
+            m.sphereMap = env;
+            m.reflectivity = REFLECTIVITY;
+            m.emissive = RETICLE_GLOW;
+            m.emissiveIntensity = RETICLE_GLOW_INTENSITY;
+            m.emissiveVertexColor = true;
+            m.emissiveVertexColorChannel = 'a';
+            m.update();
+            return m;
+        };
+        this.byAtlas = { rifle: make(), pistol: make(), knife: make() };
+    }
+
+    /** The material for a weapon mesh. */
+    of(name: WeaponName): pc.StandardMaterial {
+        return this.byAtlas[ATLAS_OF[name]];
+    }
+
+    /** Loads (once per size) and applies the atlases for this tier. */
+    setTier(tier: Tier): void {
+        if (tier === this.tier) return;
+        this.tier = tier;
+        const size = ATLAS_SIZE[tier];
+        for (const atlas of Object.keys(this.byAtlas) as WeaponAtlas[]) {
+            const m = this.byAtlas[atlas];
+            Promise.all([this.texture(`${atlas}_albedo_${size}.webp`, true), this.texture(`${atlas}_normal_${size}.webp`, false)])
+                .then(([albedo, normal]) => {
+                    if (this.tier !== tier) return; // a later tier change won
+                    m.diffuse = new pc.Color(1, 1, 1);
+                    m.diffuseMap = albedo;
+                    m.metalness = 1;
+                    m.metalnessMap = albedo;
+                    m.metalnessMapChannel = 'a';
+                    m.gloss = 1;
+                    m.glossMap = albedo;
+                    m.glossMapChannel = 'a';
+                    m.normalMap = normal;
+                    m.bumpiness = 1;
+                    m.update();
+                })
+                .catch((err: unknown) => console.warn(`[stillblade] ${atlas} weapon textures failed to load; flat colour kept.`, err));
+        }
+    }
+
+    private texture(file: string, srgb: boolean): Promise<pc.Texture> {
+        const have = this.loaded.get(file);
+        if (have) return have;
+        const url = `${this.baseUrl}models/textures/${file}`;
+        const p = new Promise<pc.Texture>((resolve, reject) => {
+            const asset = new pc.Asset(file, 'texture', { url }, { srgb, mipmaps: true });
+            asset.once('load', () => {
+                const t = asset.resource as pc.Texture | undefined;
+                if (!t) { reject(new Error(`${file} loaded without a resource`)); return; }
+                t.minFilter = pc.FILTER_LINEAR_MIPMAP_LINEAR;
+                t.magFilter = pc.FILTER_LINEAR;
+                t.addressU = t.addressV = pc.ADDRESS_CLAMP_TO_EDGE;
+                t.anisotropy = Math.min(4, this.app.graphicsDevice.maxAnisotropy);
+                resolve(t);
+            });
+            asset.once('error', (err: unknown) => {
+                this.app.assets.remove(asset);
+                this.loaded.delete(file);
+                reject(new Error(`Failed to load ${url}: ${String(err)}`));
+            });
+            this.app.assets.add(asset);
+            this.app.assets.load(asset);
+        });
+        this.loaded.set(file, p);
+        return p;
+    }
 }
