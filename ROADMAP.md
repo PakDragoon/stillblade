@@ -45,9 +45,14 @@ The owner has no game development experience and expects the game to have every 
 | 4 | L. Menus and settings redesign, scoreboard ping column (owner's feedback on waves 1 to 3) (**built and reviewed; protocol 14; on `main` since 2026-11-17**) | Sonnet 5.5 | nothing |
 | 4 | G. Graphics tiers and effects (**built and reviewed; no protocol change; on `main` since 2026-11-17; frame rate unmeasured**) | Opus 5.5 | F merged |
 | 4 | H. Recorded sounds (**built and reviewed; no protocol change; on `main` since 2026-11-17; nobody has listened to it; gunshots still synthesised under a recorded layer**) | Sonnet 5.5 | A merged |
-| 5 | I. Grenades | Opus 5.5 | friends' feedback, G merged |
-| 6 | J. Accounts, saved stats, leaderboard | Opus 5.5 | always-on server |
-| 6 | K. Voice chat | Opus 5.5 | D merged |
+| 5 | M. Realistic rifle, pistol and knife; sights (iron, 1x red dot, 2x scope); the stuck-aim fix | Opus 5.5 | owner's downloads |
+| 5 | N. Real recorded gunshots, breathing and hurt sounds | Sonnet 5.5 | owner's downloads |
+| 6 | O. Realistic soldiers (defenders) and stealth operatives (ghosts), first-person arms to match, Mixamo animations | Opus 5.5 | M merged, owner's downloads |
+| later | J. Accounts, saved stats, leaderboard | Opus 5.5 | always-on server (the owner is still comparing VPS offers) |
+| later | I. Grenades | Opus 5.5 | not a priority (owner, 2026-11-17) |
+| later | K. Voice chat | Opus 5.5 | not a priority (owner, 2026-11-17) |
+
+**Owner's feedback, 2026-11-17, which set waves 5 and 6:** the rifle, the characters and the synthesised sounds look and sound cartoonish; he wants a realistic AK (AK-103 or AK-47) with sight choices (1x red dot, 2x), real recorded sounds, and soldiers with helmet, vest, boots, gloves and uniform. Holding to aim sometimes stays stuck aiming. Voice and grenades are not a priority. New download sources approved (see `HANDOFF.md`, Working method): Sketchfab CC0 or CC-BY, Mixamo, Freesound CC0.
 
 The owner's first friends test can happen at any point; after wave 2 is best, because the feedback button and error reports are in. Its results should adjust waves 4 and 5.
 
@@ -190,6 +195,24 @@ Everything is synthesised in `client/src/audio.ts` and nobody has listened to it
 - A sound test page (`?soundtest=1`) that plays each sound at chosen distances and angles, so the owner can judge it with headphones.
 
 **Done means:** every event has a sample or a stated reason to stay synthesised, sizes listed, and the owner has a checklist of what to listen for.
+
+## M. Realistic weapons and sights (Opus 5.5)
+
+- **Rifle:** a realistic AK-103 replacing the current rifle (same slot, same numbers). Chosen by the owner (2026-11-17): Sketchfab "AK-103 - Game Ready Assault Rifle Weapon" by bogdanzloy20280 (CC-BY, 12.5k triangles, 4K textures). Textures reduced to fit the budget (Low tier: one material, at most 1024-2048 px); still one draw call per gun in hand, first and third person. Pistol and knife replaced in the same realistic style so nothing looks out of place: recommended to the owner (2026-11-17) Sketchfab "G19 Pistol, Game Ready, Free version" by Rotuma (CC-BY, about 20k triangles) and "Fighting Ka-Bar knifes" by vitvitskyi (CC-BY, about 16k; the knife model is shared by ghosts and defenders). The owner downloads every file into the git-ignored `tools/blender/source-art/realistic/<item>/` and sounds into `tools/audio-source/freesound/`.
+- **Sights:** iron (default), 1x red dot, 2x scope. Chosen in a loadout page (menu and in game), applied at the next spawn, shown on the gun to everyone. Rules: the sight changes the aimed zoom and the aim-in time (2x zooms more and aims in slower); spread and recoil stay per weapon. The aim time is stepped in `shared/gun.ts`, so the sight choice must reach both sides exactly (server keeps it per player, the client predicts with it, `prediction.test.ts` covers every sight). Red dot drawn as a reticle on the sight glass; 2x as a zoomed full view with a scope ring (no second render pass). Red dot candidate: the Vzor-1 inside Sketchfab "low-poly AK-74M Zenitco" by D_U (CC-BY); a 2x scope may be generated in Blender if no free model fits.
+- **Stuck aiming:** `client/src/input.ts` stops aiming only on a `mouseup`; if the browser loses that event the aim stays on. Reconcile held mouse buttons with `MouseEvent.buttons` on every mouse event (and on regaining pointer lock), so a button that is no longer down is released. Cause not reproduced (no real mouse in automation).
+- Credits for every file in `client/public/models/CREDITS.md`.
+
+## N. Real recorded sounds (Sonnet 5.5)
+
+- Replace the synthesised gunshot body with recordings: rifle close, rifle distant tail, pistol close and distant, suppressed versions (recordings filtered, or real suppressed shots if found). Replace the synthesised breathing loop with recorded breaths, calm and exerted, keeping `breathDistanceGain`, occlusion and the 8 m range exactly. Replace the hurt sound. Upgrade footsteps where a better CC0 recording exists.
+- Approved by the owner (2026-11-17), Freesound, CC0: AK-47 felix.blume 136399 (close, outdoor range), ninebilly 520934 single and 520935 burst, serøutōnin--deprivəd 855842 and 855843 (with distant tail); breathing ThabzMalik 767046, Amekiano 516696 (exercising), movethemoon 205526 (after stairs). Pistol shots still to find. The owner downloads (login); the session gives him an exact list, then `tools/process-audio.mjs` processes them.
+
+## O. Realistic soldiers (Opus 5.5)
+
+- Defenders: helmet, plate carrier, uniform, gloves, boots. Ghosts: a dark close-fitting stealth suit and mask, a clearly different silhouette. First-person sleeves and gloves rebuilt to match.
+- Chosen by the owner (2026-11-17): Sketchfab "FREE [Military Soldier] RIGGED" by BAMEN (CC-BY, 11.1k triangles, rigged, FBX). He rejected "SF Operator" by britdawgmasterfunk. Models ripped from commercial games are excluded even when labelled CC. **The soldier is a stopgap:** the owner plans to replace it with a futuristic look when the maps are revamped, so keep the character pipeline model-agnostic (any rigged humanoid FBX in, same clips out) and do not over-invest in this model's specifics. Rigging and animations from Mixamo (the owner uploads the model for auto-rigging and downloads the animation list the session gives him).
+- Budget: at most 2 draw calls per armed player stays; a lighter version for the Low tier (target about 10-15k triangles per player); frame rate checked on the owner's laptop.
 
 ## I. Grenades (Opus 5.5)
 
