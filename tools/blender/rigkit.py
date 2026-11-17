@@ -36,10 +36,12 @@ def set_action(obj, action):
         ad.action_slot = action.slots[0]
 
 
-def write_action(arm, name, frames, bones=None):
+def write_action(arm, name, frames, bones=None, moving=None):
     """
     New action from per-frame armature-space pose matrices: frames = [(frame, {bone: Matrix}), ...]. Every bone in
-    `bones` (default: all) is keyed on every frame (location, quaternion, scale), parents before children.
+    `bones` (default: all) is keyed on every frame (location, quaternion, scale), parents before children. With
+    `moving` (a set of bone names), only those bones get location keys and no bone gets scale keys (the others keep
+    their rest offsets: rigid chains), which makes the exported clip much smaller.
     """
     pose, data = arm.pose, arm.data
     order = [bn.name for bn in data.bones if bones is None or bn.name in bones]
@@ -59,9 +61,11 @@ def write_action(arm, name, frames, bones=None):
             pb.location = loc
             pb.rotation_quaternion = rotq
             pb.scale = scl
-            pb.keyframe_insert('location', frame=f, group=n)
+            if moving is None or n in moving:
+                pb.keyframe_insert('location', frame=f, group=n)
             pb.keyframe_insert('rotation_quaternion', frame=f, group=n)
-            pb.keyframe_insert('scale', frame=f, group=n)
+            if moving is None:
+                pb.keyframe_insert('scale', frame=f, group=n)
     new.use_fake_user = True
     return new
 
