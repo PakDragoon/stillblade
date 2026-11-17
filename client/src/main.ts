@@ -7,7 +7,7 @@ import {
     GUN_DRY, GUN_RELOAD, MELEE_SLASH, MELEE_SWING, aimFraction, copyLoadout, createLoadout, heldGun, heldWeapon,
     fillReserves, justSwitched, recoilPitch, recoilScale, recoilYaw, resetLoadout, sameLoadout, shotDirectionFor, spreadAngle, stepLoadout
 } from '@shared/gun';
-import { DEFENDER_KNIFE, GUN_COUNT, SLOT_COUNT, SLOT_KNIFE, WEAPONS, slotLabel } from '@shared/weapons';
+import { DEFENDER_KNIFE, GUN_COUNT, SLOT_COUNT, SLOT_KNIFE, WEAPONS, adsZoomOf, slotLabel } from '@shared/weapons';
 import { DEFAULT_ROOM_OPTIONS, parseRoomOptions, roomOptionsQuery } from '@shared/room-options';
 import type { RoomListEntry, RoomListResponse } from '@shared/room-list';
 import {
@@ -32,6 +32,7 @@ import { createAudio } from './audio';
 import type { BombView, ListenerView } from './audio-api';
 import { bindings, inputMatches, mouseInput } from './bindings';
 import { Input } from './input';
+import { loadout as loadoutChoice } from './loadout';
 import { applyMapLook, type LookTuning, type MapLookHandle } from './maplook';
 import { measureTier, rendererName, resolveTier, tierFromRenderer, urlTier, type Tier, type TierChoice } from './graphics';
 import { Net } from './net';
@@ -349,6 +350,8 @@ async function start(): Promise<void> {
     if (choice.room) query.set('room', choice.room);
     if (choice.name) query.set('name', choice.name);
     if (choice.map) query.set('map', choice.map);
+    // The rifle sight for our first spawn (the loadout page; later changes go as `sight` messages).
+    query.set('sight', String(loadoutChoice().value.sight));
     // Options only matter when this join creates the room; an existing room keeps its own. Quick play (no room code)
     // asks the server for the fullest public room with space.
     if (choice.quick && !choice.room) query.set('quick', '1');
@@ -753,11 +756,16 @@ async function start(): Promise<void> {
     });
     reporter.mapName = welcome.mapName;
     ui.enterGame(roomCode, welcome.map, welcome.mapName, welcome.options, welcome.practice);
+    // The sight choice: sent on joining (the join query already carried it) and whenever the loadout page changes it.
+    // The server mounts it at our next spawn, never mid-life.
+    const sendSight = (): void => { if (net.isOpen) net.sendMsg({ type: 'sight', sight: loadoutChoice().value.sight }); };
+    sendSight();
+    loadoutChoice().watch(sendSight);
 
     const local: LocalView = {
         id: 0, team: 'ghosts', health: MAX_HEALTH, alive: false, respawnIn: 0, connected: false, ping: 0, firing: false, vis: 0,
         canAct: false, carrier: false, siteNoBomb: false, action: 0, showScores: false, weapon: 0, weapons: [] as WeaponSlotView[],
-        mag: WEAPONS[0].magSize, magSize: WEAPONS[0].magSize, reserve: 0, reload: 0, spread: 0, draw: 0, aim: 0,
+        mag: WEAPONS[0].magSize, magSize: WEAPONS[0].magSize, reserve: 0, reload: 0, spread: 0, draw: 0, aim: 0, sight: 0,
         yaw: 0, spectating: null, spectateId: -1, overview: false
     };
     const slotViews = local.weapons as WeaponSlotView[];
@@ -960,7 +968,8 @@ async function start(): Promise<void> {
         // Aiming down sights narrows the view by the held weapon's zoom, and slows mouse look to match.
         const held = heldWeapon(loadout);
         const aimNow = aimPrev + (aimCurr - aimPrev) * a;
-        const zoom = held ? 1 + (held.adsZoom - 1) * aimNow : 1;
+        // The rifle's zoom is its sight's (shared/weapons.ts SIGHTS); the pistol keeps its own.
+        const zoom = held ? 1 + (adsZoomOf(loadout.slot, loadout.sight) - 1) * aimNow : 1;
         const fov = zoom === 1 ? BASE_FOV : (2 * Math.atan(TAN_HALF_FOV / zoom)) / RAD;
         if (camera.camera!.fov !== fov) camera.camera!.fov = fov;
         input.lookScale = 1 / zoom;
@@ -1006,6 +1015,9 @@ async function start(): Promise<void> {
         local.spread = held ? spreadAngle(curr, held, aimFraction(loadout)) : 0;
         local.draw = loadout.draw / (held ? held.drawTicks : DEFENDER_KNIFE.drawTicks);
         local.aim = aimNow;
+        local.sight = loadout.sight;
+        // The loadout page says "applies at your next spawn" while the chosen sight is not the one in use.
+        ui.setActiveSight(alive && net.team === 'defenders' ? loadout.sight : -1);
         const remotes = net.interpolate();
         // Dead in a round: follow a living teammate in first person, or look at the whole map.
         let followed: RemoteView | null = null;

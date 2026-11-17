@@ -1,5 +1,5 @@
 import * as pc from 'playcanvas';
-import type { WeaponId } from '@shared/weapons';
+import { SIGHTS, SIGHT_COUNT, SIGHT_IRON, type WeaponId } from '@shared/weapons';
 
 /**
  * Weapon meshes: client/public/models/weapons.glb, built by tools/blender/weapons.py from Quaternius's CC0
@@ -12,6 +12,8 @@ import type { WeaponId } from '@shared/weapons';
  *   gun_suppressor     : child mesh of gun, in gun's own frame (identity local transform).
  *   gun_muzzle         : child of gun, centre of the suppressor's front face.
  *   gun_muzzle_bare    : child of gun, centre of the bare barrel's front face.
+ *   gun_sight_reddot / gun_sight_scope2x : child meshes of gun in its own frame (package M): the optional rifle
+ *                sights, one per SIGHTS entry but iron (shared/weapons.ts), named gun_sight_<SightId>.
  *   pistol     : same axes as gun; origin = middle of the grip. 0.17 m bare, 0.28 m with the suppressor.
  *   pistol_suppressor / pistol_muzzle / pistol_muzzle_bare : as for gun.
  *   knife      : -Z = blade tip, +Y = spine (cutting edge toward -Y). Origin = middle of the handle. 0.30 m.
@@ -22,6 +24,10 @@ import type { WeaponId } from '@shared/weapons';
  * mesh plus its suppressor (`mergedMesh`), so a gun is always ONE draw call; `setSuppressed` swaps the mesh and
  * which muzzle node tracers and flashes start from. Two muzzle nodes per gun, rather than one offset in code, so
  * the script that builds the model is the one place that knows where each variant's muzzle is.
+ *
+ * Sights (package M) work the same way: at load every suppressor and sight combination of a gun becomes one mesh
+ * (the rifle: 2 x 3), and `setSight` picks it, so a player's gun is still ONE draw call whatever is mounted. A gun
+ * with no `<gun>_sight_<id>` node (the pistol, or an older model file) draws its plain mesh for that sight.
  */
 
 export type WeaponName = 'gun' | 'pistol' | 'knife';
@@ -33,9 +39,16 @@ const GUN_NAMES: readonly GunName[] = ['gun', 'pistol'];
 
 export interface WeaponModel {
     asset: pc.Asset;
-    /** Per gun: its mesh with the suppressor merged in, built once at load. */
-    readonly suppressed: Map<GunName, pc.Mesh>;
+    /**
+     * Per gun: one mesh per look, built once at load, indexed by `lookIndex(suppressed, sight)`: the bare gun (the
+     * model's own mesh), and the gun with its suppressor and/or a mounted sight merged in.
+     */
+    readonly looks: Map<GunName, pc.Mesh[]>;
 }
+
+/** Index into `WeaponModel.looks` of a gun's look with or without its suppressor and with sight `sight` (SIGHTS). */
+export const lookIndex = (suppressed: boolean, sight: number): number =>
+    (suppressed ? SIGHT_COUNT : 0) + (sight >= 0 && sight < SIGHT_COUNT ? sight : SIGHT_IRON);
 
 export interface WeaponInstance {
     entity: pc.Entity;
@@ -44,6 +57,8 @@ export interface WeaponInstance {
     muzzle: pc.GraphNode | null;
     /** Guns only: switch between the bare and the suppressed look (mesh and muzzle); no-op for the knife. */
     setSuppressed(on: boolean): void;
+    /** Guns only: the sight mounted (index into SIGHTS); a gun that takes none ignores it. No-op for the knife. */
+    setSight(sight: number): void;
 }
 
 /** Reads one vertex attribute of `mesh` as floats (normalised integer formats mapped to 0..1). */
@@ -60,16 +75,20 @@ function readStream(mesh: pc.Mesh, semantic: string): { data: number[]; componen
     return { data, components: el.numComponents };
 }
 
+/** A mesh and its transform relative to the gun (null: already in the gun's frame). */
+interface MeshPart { mesh: pc.Mesh; toGun: pc.Mat4 | null }
+
 /**
- * One mesh from `a` and `b` (b's vertices moved by `bToA`, the suppressor's transform relative to the gun):
- * positions, normals and vertex colours, indexed triangles. Used once per gun at load.
+ * One mesh from `parts` (each moved by its transform relative to the gun: the suppressor's, a sight's): positions,
+ * normals and vertex colours, indexed triangles. Used at load only.
  */
-function mergedMesh(device: pc.GraphicsDevice, a: pc.Mesh, b: pc.Mesh, bToA: pc.Mat4): pc.Mesh {
+function mergedMesh(device: pc.GraphicsDevice, parts: readonly MeshPart[]): pc.Mesh {
     const pos: number[] = [], nrm: number[] = [], col: number[] = [], idx: number[] = [];
     const p = new pc.Vec3(), n = new pc.Vec3();
-    const normalMat = new pc.Mat3().setFromMat4(bToA);
+    const normalMat = new pc.Mat3();
     let base = 0;
-    for (const [m, xf] of [[a, null], [b, bToA]] as const) {
+    for (const { mesh: m, toGun: xf } of parts) {
+        if (xf) normalMat.setFromMat4(xf);
         const ps = readStream(m, pc.SEMANTIC_POSITION)!;
         const ns = readStream(m, pc.SEMANTIC_NORMAL);
         const cs = readStream(m, pc.SEMANTIC_COLOR);
@@ -111,22 +130,42 @@ export function loadWeaponModel(app: pc.Application, url: string, filename = 'we
         asset.once('load', () => {
             const res = asset.resource as pc.ContainerResource | undefined;
             if (!res) { reject(new Error('weapon model loaded without a resource')); return; }
-            // Check the layout once, and build the suppressed meshes, on a throwaway instance.
+            // Check the layout once, and build every look's mesh, on a throwaway instance.
             const probe = res.instantiateRenderEntity();
             let ok = !!(probe.findByName('knife') as pc.Entity | null)?.render;
-            const suppressed = new Map<GunName, pc.Mesh>();
+            const looks = new Map<GunName, pc.Mesh[]>();
             for (const name of GUN_NAMES) {
                 const gun = probe.findByName(name) as pc.Entity | null;
                 const sup = probe.findByName(`${name}_suppressor`) as pc.Entity | null;
                 const body = meshOf(gun), supMesh = meshOf(sup);
                 ok = ok && !!body && !!supMesh && !!probe.findByName(`${name}_muzzle`) && !!probe.findByName(`${name}_muzzle_bare`);
                 if (!ok || !body || !supMesh || !gun || !sup) continue;
-                const rel = new pc.Mat4().copy(gun.getWorldTransform()).invert().mul(sup.getWorldTransform());
-                suppressed.set(name, mergedMesh(app.graphicsDevice, body, supMesh, rel));
+                const toGun = (e: pc.Entity): pc.Mat4 => new pc.Mat4().copy(gun.getWorldTransform()).invert().mul(e.getWorldTransform());
+                const supPart: MeshPart = { mesh: supMesh, toGun: toGun(sup) };
+                // The optional sights this gun's model carries (none for the pistol).
+                const sightParts: (MeshPart | null)[] = SIGHTS.map((def, i) => {
+                    if (i === SIGHT_IRON) return null;
+                    const node = probe.findByName(`${name}_sight_${def.id}`) as pc.Entity | null;
+                    const m = meshOf(node);
+                    return node && m ? { mesh: m, toGun: toGun(node) } : null;
+                });
+                const list: pc.Mesh[] = [];
+                for (const withSup of [false, true]) {
+                    for (let i = 0; i < SIGHT_COUNT; i++) {
+                        const parts: MeshPart[] = [{ mesh: body, toGun: null }];
+                        if (withSup) parts.push(supPart);
+                        const sp = sightParts[i];
+                        if (sp) parts.push(sp);
+                        // Combinations that add nothing to the plain gun share one mesh.
+                        const same = i !== SIGHT_IRON && !sp ? list[lookIndex(withSup, SIGHT_IRON)] : null;
+                        list.push(same ?? (parts.length === 1 ? body : mergedMesh(app.graphicsDevice, parts)));
+                    }
+                }
+                looks.set(name, list);
             }
             probe.destroy();
             if (!ok) { reject(new Error('weapon model lacks the gun / pistol (suppressors, muzzles) / knife nodes')); return; }
-            resolve({ asset, suppressed });
+            resolve({ asset, looks });
         });
         asset.once('error', (err: unknown) => {
             app.assets.remove(asset);
@@ -157,21 +196,24 @@ export function instantiateWeapon(model: WeaponModel, name: WeaponName, material
     if (layers) r.layers = layers;
     const mi = r.meshInstances[0];
     mi.material = material;
-    if (name === 'knife') return { entity: e, meshInstance: mi, muzzle: null, setSuppressed: () => {} };
+    if (name === 'knife') return { entity: e, meshInstance: mi, muzzle: null, setSuppressed: () => {}, setSight: () => {} };
 
-    // The suppressor child is never drawn itself: its geometry is in the merged mesh.
+    // The suppressor and sight children are never drawn themselves: their geometry is in the merged meshes.
     (e.findByName(`${name}_suppressor`) as pc.Entity | null)?.destroy();
-    const bareMesh = mi.mesh;
-    const supMesh = model.suppressed.get(name)!;
+    for (const def of SIGHTS) (e.findByName(`${name}_sight_${def.id}`) as pc.Entity | null)?.destroy();
+    const looks = model.looks.get(name)!;
     const muzzleSup = e.findByName(`${name}_muzzle`)!;
     const muzzleBare = e.findByName(`${name}_muzzle_bare`)!;
+    let suppressed = false, sight = SIGHT_IRON;
+    const apply = (): void => {
+        const mesh = looks[lookIndex(suppressed, sight)];
+        if (mi.mesh !== mesh) mi.mesh = mesh;
+        inst.muzzle = suppressed ? muzzleSup : muzzleBare;
+    };
     const inst: WeaponInstance = {
         entity: e, meshInstance: mi, muzzle: muzzleBare,
-        setSuppressed(on: boolean): void {
-            const mesh = on ? supMesh : bareMesh;
-            if (mi.mesh !== mesh) mi.mesh = mesh;
-            inst.muzzle = on ? muzzleSup : muzzleBare;
-        }
+        setSuppressed(on: boolean): void { suppressed = on; apply(); },
+        setSight(n: number): void { sight = n >= 0 && n < SIGHT_COUNT ? n : SIGHT_IRON; apply(); }
     };
     return inst;
 }

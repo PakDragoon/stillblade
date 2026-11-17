@@ -26,8 +26,17 @@ What it does:
      in the gun's own frame, identity local transform), the empty "gun_muzzle" / "pistol_muzzle" at the centre of
      the suppressor's front face, and the empty "gun_muzzle_bare" / "pistol_muzzle_bare" at the centre of the bare
      barrel's front face.
-  5. Exports a GLB with nine nodes: gun (mesh) with gun_suppressor (mesh), gun_muzzle and gun_muzzle_bare (empties);
-     pistol (mesh) with pistol_suppressor (mesh), pistol_muzzle and pistol_muzzle_bare (empties); knife (mesh).
+  5. Adds the rifle's optional sights (package M) as more children of "gun": "gun_sight_reddot" (a 1x red dot) and
+     "gun_sight_scope2x" (a 2x scope), generated stand-ins on the receiver top (the iron sights are the gun's own and
+     need no node). One node per non-iron sight of SIGHTS in shared/weapons.ts, named gun_sight_<SightId>.
+  6. Exports a GLB with eleven nodes: gun (mesh) with gun_suppressor, gun_sight_reddot, gun_sight_scope2x (meshes),
+     gun_muzzle and gun_muzzle_bare (empties); pistol (mesh) with pistol_suppressor (mesh), pistol_muzzle and
+     pistol_muzzle_bare (empties); knife (mesh).
+
+Sights (client/src/weapons.ts, viewmodel.py): like the suppressor, a sight is merged into the gun's ONE mesh at load in
+third person (one merged mesh per suppressor and sight combination), and is a bone scaled away when not mounted in the
+first-person rig. They are placeholders: package M part 2 replaces the rifle with a realistic AK-103, and its sights
+need only the same node names and an optical axis height in RIFLE_SIGHTS (and presenter.ts SIGHT_EYE) to re-point.
 
 Suppressor option (rooms choose it; client/src/weapons.ts): the client draws a gun either bare (the gun mesh alone,
 tracers and flash from *_muzzle_bare) or suppressed (gun + its suppressor, merged into ONE mesh at load so a gun is
@@ -59,6 +68,21 @@ PISTOL_SUPPRESSOR = (0.11, 0.015)            # length, radius (m)
 GUN_BARREL_STUB = (0.045, 0.0105)            # bare SMG barrel: length, radius (m)
 KNIFE_LENGTH = 0.30
 KNIFE_MAX_TRIS = 400
+
+# Rifle sights (package M), in the gun's shipped frame (Blender X right, Y forward, Z up, metres, origin at the grip).
+# The receiver top is flat at z = 0.194 from y = -0.03 to 0.32 on the bore line (x = 0.0133); the iron sight line
+# (the eye height of the aimed pose in presenter.ts) is z = 0.226. `axis` is each sight's optical axis height: the
+# client lowers the aimed gun by (axis - 0.226) so the sight's centre sits on the screen centre (presenter.ts SIGHT_EYE).
+RECEIVER_TOP = 0.194
+RIFLE_SIGHTS = {
+    # A short tube red dot (Aimpoint-like) on a low mount, its axis on the iron sight line.
+    'reddot': {'axis': 0.226, 'back': 0.085, 'length': 0.042, 'r_out': 0.0185, 'r_in': 0.0150,
+               'mount': (0.11, 0.05, 0.026)},
+    # A 2x scope: a slim tube with eyepiece and objective bells on two rings, its axis 1 cm higher.
+    'scope2x': {'axis': 0.236, 'back': -0.035, 'length': 0.235, 'r_out': 0.0125, 'r_in': 0.0100,
+                'eyepiece': (-0.065, 0.045, 0.0175, 0.0140), 'objective': (0.175, 0.055, 0.0200, 0.0165),
+                'rings': (0.02, 0.135)},
+}
 
 # Linear RGB per source material (matched by name prefix).
 GUN_PALETTE = {
@@ -211,6 +235,109 @@ def cylinder(name, centre_x, back_y, centre_z, length, radius, material):
     return obj
 
 
+def ring_tube(name, centre_x, back_y, centre_z, length, r_out, r_in, material, segments=16):
+    """
+    A thick open tube along +Y (shipped frame) from back_y to back_y + length: outer wall facing out, inner wall facing
+    in, and the two end rings, so it can be looked through from behind and reads solid from every side.
+    """
+    me = bpy.data.meshes.new(name)
+    bm = bmesh.new()
+    rings = []
+    for y in (back_y, back_y + length):
+        for r in (r_out, r_in):
+            rings.append([bm.verts.new((centre_x + r * math.cos(2 * math.pi * k / segments), y,
+                                        centre_z + r * math.sin(2 * math.pi * k / segments))) for k in range(segments)])
+    ob, ib, of, if_ = rings
+    for k in range(segments):
+        n = (k + 1) % segments
+        bm.faces.new((ob[k], ob[n], of[n], of[k]))      # outer wall
+        bm.faces.new((ib[k], if_[k], if_[n], ib[n]))    # inner wall
+        bm.faces.new((ob[k], ib[k], ib[n], ob[n]))      # back ring
+        bm.faces.new((of[k], of[n], if_[n], if_[k]))    # front ring
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(me)
+    bm.free()
+    me.materials.append(bpy.data.materials.new(material))
+    obj = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
+
+
+def block(name, centre, size, material):
+    """An axis-aligned box (shipped frame) as its own object."""
+    me = bpy.data.meshes.new(name)
+    bm = bmesh.new()
+    bmesh.ops.create_cube(bm, size=1.0)
+    bmesh.ops.scale(bm, vec=size, verts=bm.verts)
+    bmesh.ops.translate(bm, verts=bm.verts, vec=centre)
+    bm.to_mesh(me)
+    bm.free()
+    me.materials.append(bpy.data.materials.new(material))
+    obj = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
+
+
+def make_sight(sight_id, bore_x):
+    """One rifle sight stand-in as one object named gun_sight_<id>, in the gun's frame (RIFLE_SIGHTS)."""
+    d = RIFLE_SIGHTS[sight_id]
+    ax, back, length = d['axis'], d['back'], d['length']
+    if sight_id == 'reddot':
+        body = ring_tube('sight', bore_x, back, ax, length, d['r_out'], d['r_in'], 'Black')
+        my, ml, mw = d['mount']
+        # Mount: from the receiver top up to the tube's underside.
+        mount_h = ax - d['r_out'] + 0.003 - RECEIVER_TOP
+        join_into(body, block('mount', (bore_x, my, RECEIVER_TOP + mount_h / 2), (mw, ml, mount_h), 'DarkGrey'))
+        # Brightness knob on the right and an adjustment cap on top.
+        join_into(body, cylinder_x('knob', bore_x + d['r_out'] + 0.004, back + length * 0.5, ax, 0.008, 0.007, 'Grey2'))
+        join_into(body, block('cap', (bore_x, back + length * 0.5, ax + d['r_out'] + 0.003), (0.012, 0.012, 0.007), 'Grey2'))
+    else:
+        body = ring_tube('sight', bore_x, back, ax, length, d['r_out'], d['r_in'], 'Black')
+        ey, el, er, eri = d['eyepiece']
+        join_into(body, ring_tube('eyepiece', bore_x, ey, ax, el, er, eri, 'Black'))
+        oy, ol, orr, ori = d['objective']
+        join_into(body, ring_tube('objective', bore_x, oy, ax, ol, orr, ori, 'Black'))
+        # Turrets: elevation on top, windage on the right.
+        join_into(body, cylinder_z('elev', bore_x, back + length * 0.42, ax + d['r_out'], 0.012, 0.0085, 'Grey2'))
+        join_into(body, cylinder_x('wind', bore_x + d['r_out'], back + length * 0.42, ax, 0.012, 0.0085, 'Grey2'))
+        # Two rings with their bases down to the receiver.
+        for ry in d['rings']:
+            join_into(body, ring_tube('ring', bore_x, ry - 0.006, ax, 0.012, d['r_out'] + 0.004, d['r_out'] - 0.0005, 'DarkGrey'))
+            base_h = ax - d['r_out'] - RECEIVER_TOP
+            join_into(body, block('ringbase', (bore_x, ry, RECEIVER_TOP + base_h / 2), (0.016, 0.012, base_h), 'DarkGrey'))
+    body.name = f'gun_sight_{sight_id}'
+    lo_z = min(v.co.z for v in body.data.vertices)
+    log(f'sight {sight_id}: tris', tris(body.data), 'optical axis z', ax, 'lowest z', round(lo_z, 4),
+        'length', round(max(v.co.y for v in body.data.vertices) - min(v.co.y for v in body.data.vertices), 4))
+    return body
+
+
+def _turned_cylinder(name, centre, length, radius, material, rot):
+    me = bpy.data.meshes.new(name)
+    bm = bmesh.new()
+    bmesh.ops.create_cone(bm, cap_ends=True, cap_tris=False, segments=10, radius1=radius, radius2=radius, depth=length)
+    if rot is not None:
+        bmesh.ops.rotate(bm, verts=bm.verts, cent=(0, 0, 0), matrix=rot)
+    bmesh.ops.translate(bm, verts=bm.verts, vec=centre)
+    bm.to_mesh(me)
+    bm.free()
+    me.materials.append(bpy.data.materials.new(material))
+    obj = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
+
+
+def cylinder_z(name, cx, cy, base_z, length, radius, material):
+    """A capped cylinder standing up (+Z) from base_z."""
+    return _turned_cylinder(name, (cx, cy, base_z + length / 2), length, radius, material, None)
+
+
+def cylinder_x(name, base_x, cy, cz, length, radius, material):
+    """A capped cylinder pointing right (+X) from base_x."""
+    return _turned_cylinder(name, (base_x + length / 2, cy, cz), length, radius, material,
+                            Matrix.Rotation(math.radians(90), 3, 'Y'))
+
+
 def join_into(obj, part):
     for o in bpy.context.scene.objects:
         o.select_set(o in (obj, part))
@@ -306,6 +433,8 @@ def main():
     muzzles['gun_muzzle_bare'] = (bore_x, front - 0.004 + stub_len, bore_z)
     log('gun: receiver front', round(front, 4), 'bore', round(bore_x, 4), round(bore_z, 4),
         'suppressor front', round(ymax, 4))
+    # Optional sights on the receiver top (package M), each its own child mesh like the suppressor.
+    sights = [make_sight(sid, bore_x) for sid in RIFLE_SIGHTS]
 
     # --- Pistol ---------------------------------------------------------------------------------
     me = pistol.data
@@ -377,10 +506,12 @@ def main():
     # --- Colours, weld, budget, one material ---------------------------------------------------
     bake_colours(gun, GUN_PALETTE)
     bake_colours(gun_sup, GUN_PALETTE)
+    for sight in sights:
+        bake_colours(sight, GUN_PALETTE)
     bake_colours(pistol, PISTOL_PALETTE)
     bake_colours(pistol_sup, PISTOL_PALETTE)
     bake_colours(knife, KNIFE_PALETTE)
-    for o in (gun, gun_sup, pistol, pistol_sup, knife):
+    for o in (gun, gun_sup, pistol, pistol_sup, knife, *sights):
         weld(o)
     decimate(knife, KNIFE_MAX_TRIS)
 
@@ -394,7 +525,7 @@ def main():
     bsdf.inputs['Roughness'].default_value = 0.55
     bsdf.inputs['Metallic'].default_value = 0.0
     for o, name in ((gun, 'gun'), (gun_sup, 'gun_suppressor'), (pistol, 'pistol'), (pistol_sup, 'pistol_suppressor'),
-                    (knife, 'knife')):
+                    (knife, 'knife'), *((sg, sg.name) for sg in sights)):
         o.name = name
         o.data.name = name
         o.data.materials.append(mat)
@@ -404,12 +535,14 @@ def main():
     # Both meshes are in the gun's own frame and the gun object sits at the origin, so the child keeps an
     # identity local transform (the client merges the two meshes for the suppressed look).
     gun_sup.parent = gun
+    for sight in sights:
+        sight.parent = gun
     pistol_sup.parent = pistol
     empties = [add_empty(gun, n, muzzles[n]) for n in ('gun_muzzle', 'gun_muzzle_bare')]
     empties += [add_empty(pistol, n, muzzles[n]) for n in ('pistol_muzzle', 'pistol_muzzle_bare')]
 
     # --- Report ---------------------------------------------------------------------------------
-    for o in (gun, gun_sup, pistol, pistol_sup, knife):
+    for o in (gun, gun_sup, pistol, pistol_sup, knife, *sights):
         p = [v.co for v in o.data.vertices]
         lo = Vector((min(v.x for v in p), min(v.y for v in p), min(v.z for v in p)))
         hi = Vector((max(v.x for v in p), max(v.y for v in p), max(v.z for v in p)))
