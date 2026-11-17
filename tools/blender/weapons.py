@@ -180,7 +180,7 @@ def build_rifle():
         'mark_rifle_grip': (Vector((0, 0, 0)), grip_ax),
         'mark_rifle_mag': ((mag_lo + mag_hi) / 2, mag_ax),
         'mark_rifle_mag_bottom': (mag_lo, mag_ax),
-        'mark_rifle_handguard': (Vector((bore_x, hlo.y + (hhi.y - hlo.y) * 0.42, (hlo.z + hhi.z) / 2)),
+        'mark_rifle_handguard': (Vector((bore_x, hlo.y + (hhi.y - hlo.y) * 0.22, (hlo.z + hhi.z) / 2)),
                                  Vector((0, 0, 1))),
         'mark_rifle_handguard_size': (Vector(((hhi.x - hlo.x) / 2, (hhi.y - hlo.y) / 2, (hhi.z - hlo.z) / 2)),
                                       Vector((0, 0, 1))),

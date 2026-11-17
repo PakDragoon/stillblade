@@ -82,13 +82,13 @@ PALETTES = {
 
 # Hip poses of the guns in PlayCanvas camera space (position, Euler degrees): presenter.ts VM_LOOKS[..].hip.
 HIP = {
-    'rifle': ((0.17, -0.32, -0.5), (4, 6, -6)),
-    'pistol': ((0.12, -0.175, -0.34), (2, 4, -3)),
+    'rifle': ((0.15, -0.165, -0.40), (0, 3, -3)),
+    'pistol': ((0.11, -0.15, -0.33), (0, 3, -2)),
 }
 
 # Shoulders and elbow pole directions in camera space (Blender axes: X right, Y forward, Z up).
 SHOULDERS = {
-    'rifle': {'R': (0.2, 0.12, -0.3), 'L': (0.0, 0.5, -0.42)},
+    'rifle': {'R': (0.2, 0.12, -0.3), 'L': (0.06, 0.47, -0.34)},
     'pistol': {'R': (0.19, -0.02, -0.27), 'L': (-0.04, 0.17, -0.34)},
     'knife': {'R': (0.18, 0.08, -0.3), 'L': (-0.2, -0.02, -0.28)},
 }
@@ -552,13 +552,13 @@ def build_gun_clips(rig):
 
     if rifle:
         # Brought in toward the middle of the view, muzzle up, canted so the magazine well faces the left hand.
-        G1 = (-0.11, -0.05, 0.03, 6, 8, 35)
-        G1b = (-0.11, -0.05, 0.038, 9, 8, 35)             # magazine seated: a small jolt up
-        G2 = (-0.07, -0.03, 0.03, 6, 4, -14)               # rolled the other way: the charging handle faces the hand
-        G2c = (-0.075, -0.045, 0.03, 4, 6, -17)            # bolt pulled: the gun rocks back
+        G1 = (-0.09, -0.03, -0.02, -2, 8, 32)
+        G1b = (-0.09, -0.03, -0.012, 1, 8, 32)             # magazine seated: a small jolt up
+        G2 = (-0.06, -0.02, -0.02, -2, 4, -14)             # rolled the other way: the charging handle faces the hand
+        G2c = (-0.065, -0.035, -0.02, -4, 6, -17)           # bolt pulled: the gun rocks back
         gun_keys = [(0.0, (0, 0, 0, 0, 0, 0)), (0.25, G1), (1.36, G1), (1.42, G1b), (1.55, G1), (1.8, G2), (1.9, G2),
                     (1.97, G2c), (2.07, G2c), (2.1, G2), (2.2, (0, 0, 0, 0, 0, 0))]
-        belt = rig.cam(Matrix.Translation(Vector((-0.1, 0.3, -0.75))) @ Matrix.Rotation(math.radians(-30), 4, 'X'))
+        belt = rig.cam(Matrix.Translation(Vector((-0.02, 0.4, -0.66))) @ Matrix.Rotation(math.radians(-30), 4, 'X'))
         bolt_keys = [(0.0, (0.0,)), (1.9, (0.0,)), (1.97, (-BOLT_TRAVEL,)), (2.07, (-BOLT_TRAVEL,)), (2.1, (0.0,))]
 
         def gunm(t):

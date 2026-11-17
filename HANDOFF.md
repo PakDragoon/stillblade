@@ -683,6 +683,18 @@ its muzzle points follow; first person stays real size); the generated 2x scope 
 fibre-optic pipe, rail clamp with thumb nuts) with an amber chevron; the red dot's reticle 1.1 mm on the glass; vertex
 alpha as the emission channel; glTF quantization to stay near the download budget.
 
+**Hip pose follow-up (review, owner-approved, 2026-11-18):** at the hip the AK sat small in the lower right, canted
+with its barrel pointing up and left at about 45 degrees, and the support arm ran diagonally across the screen. Now the
+rifle's hip pose is `[0.15, -0.165, -0.40, 0, 3, -3]` (was `[0.17, -0.32, -0.5, 4, 6, -6]`; `presenter.ts` VM_LOOKS and
+`viewmodel.py` HIP, which must match): higher and closer, no upward pitch, 3 degrees inward, so the barrel runs toward
+the crosshair and the receiver, magazine and handguard show. The support hand grips the handguard nearer the receiver
+(22 % along it instead of 42 %), and the left shoulder moved to `(0.06, 0.47, -0.34)` so the forearm comes in from the
+bottom edge. The reload's tilted poses were lowered and flattened (no muzzle-up pitch; magazine out and in and the
+charging handle still in view), and the belt point moved closer so the arm stays in reach. Pistol hip `[0.11, -0.15,
+-0.33, 0, 3, -2]` (was `[0.12, -0.175, -0.34, 2, 4, -3]`), same reasoning, smaller change. The knife was fine and is
+unchanged. The aimed poses come from the aim points and did not move. Every first-person screenshot (10 to 43) was
+re-taken. The folding stock now shows in the bottom right corner at the hip, as on a real AK held at the hip.
+
 **Not verified:** anything on a real GPU or in motion (software GL only); frame rate; how metal and polymer read on a
 real screen and in Warehouse's dark corners; the scope's lens size on other screen shapes (fixed geometry: wider
 screens show more scope body); the red dot reticle's visibility at 1080p and above; the reloads by ear against the
