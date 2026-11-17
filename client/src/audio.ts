@@ -1,6 +1,10 @@
 /**
- * Spatial audio for Stillblade. Everything is synthesised with Web Audio from three pre-generated
- * noise buffers plus oscillators, filters and gain envelopes: there are no sound files.
+ * Spatial audio for Stillblade. Every sound can be synthesised with Web Audio from three pre-generated noise
+ * buffers plus oscillators, filters and gain envelopes. Package H adds recorded CC0 samples (client/public/audio,
+ * loaded in the background after the game is playable): a sound plays its sample when one has loaded and the
+ * synthesised sound otherwise, so the game is never silent, and gunshots layer the sample over the synthesised
+ * shot. Which sound plays is decided by the pure rules in audio-logic.ts; distance, direction, occlusion, ranges
+ * and volumes below do not care which kind of source a voice holds.
  *
  * Defenders find ghosts by ear, so the priorities are: clear direction (HRTF on the cues that matter),
  * honest distance (every sound fades to exactly silence at its gameplay range), and walls you can hear
@@ -21,8 +25,13 @@ import { BOMB_SOUND_RANGE } from '@shared/bomb';
 import { rayWorld } from '@shared/raycast';
 import { DEFENDER_KNIFE, SLOT_KNIFE, WEAPONS, type WeaponId } from '@shared/weapons';
 import type { Box, Vec3 } from '@shared/types';
-import type { AudioEngine, BombView, CreateAudio, CueKind, ListenerView } from './audio-api';
+import type { AudioEngine, AudioOptions, BombView, CreateAudio, CueKind, ListenerView } from './audio-api';
 import type { RemoteView } from './presenter-api';
+import {
+    DEFAULT_SOUND_MODE, RELOAD_CUES, SAMPLE_GAIN, SAMPLE_SETS, pickVariant, sampleFiles, stepVariation,
+    surfaceUnder, useRecorded, varied, type SoundMode
+} from './audio-logic';
+import { faceAt, type Surface } from './effects';
 
 // ---------------------------------------------------------------------------------------------
 // Tuning
@@ -122,6 +131,10 @@ class Voice {
     end = 0;
     /** Estimated loudness at the listener when started, for voice stealing. */
     priority = 0;
+    /** What the event is about, for samples: the surface of a step or impact, or the weapon of a switch. */
+    tag = '';
+    /** The loaded samples and the mode, or null for a voice that must stay synthesised. */
+    samples: SampleBank | null = null;
     private pending = 0;
 
     constructor(readonly ctx: BaseAudioContext, readonly bank: NoiseBank) {
@@ -156,6 +169,28 @@ class Voice {
         s.stop(t + dur);
         this.track(s, t + dur);
         return s;
+    }
+
+    /** A variant of recorded set `set`, or null when recorded sounds are off or none has loaded (play the synth). */
+    pick(set: string): AudioBuffer | null {
+        return this.samples ? this.samples.pick(set) : null;
+    }
+
+    /** Are recorded sounds on and loaded for every one of these sets (see `useRecorded`)? */
+    has(parts: readonly string[]): boolean {
+        return this.samples ? this.samples.usable(parts) : false;
+    }
+
+    /** Plays a sample at time `t`, at `level` (times the set's calibration) and playback `rate`. */
+    play(set: string, buf: AudioBuffer, t: number, level: number, rate: number): void {
+        const g = this.gain(this.input);
+        g.gain.value = level * (SAMPLE_GAIN[set] ?? 1);
+        const s = this.ctx.createBufferSource();
+        s.buffer = buf;
+        s.playbackRate.value = rate;
+        s.connect(g);
+        s.start(t);
+        this.track(s, t + buf.duration / rate);
     }
 
     osc(type: OscillatorType, freq: number, t: number, dur: number, dest: AudioNode): OscillatorNode {
@@ -208,6 +243,69 @@ function env(p: AudioParam, t: number, attack: number, peak: number, decay: numb
 
 function jitter(amount: number): number {
     return 1 + (Math.random() * 2 - 1) * amount;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Recorded samples
+// ---------------------------------------------------------------------------------------------
+
+/** The decoded samples of one audio context, by set; a slot stays empty until its file has loaded (or for good if it never does). */
+class SampleBank {
+    readonly sets = new Map<string, (AudioBuffer | null)[]>();
+    private readonly last = new Map<string, number>();
+    mode: SoundMode = { ...DEFAULT_SOUND_MODE };
+    loaded = 0;
+    total = 0;
+
+    constructor() {
+        for (const set of Object.keys(SAMPLE_SETS)) {
+            this.sets.set(set, new Array<AudioBuffer | null>(SAMPLE_SETS[set]).fill(null));
+            this.total += SAMPLE_SETS[set];
+        }
+    }
+
+    has(set: string): boolean {
+        const a = this.sets.get(set);
+        if (!a) return false;
+        for (let i = 0; i < a.length; i++) if (a[i]) return true;
+        return false;
+    }
+
+    usable(parts: readonly string[]): boolean {
+        return useRecorded(this.mode, s => this.has(s), parts);
+    }
+
+    /** A variant of `set` (never the same one twice running), or null to play the synthesised sound. */
+    pick(set: string): AudioBuffer | null {
+        if (!this.mode.recorded) return null;
+        const a = this.sets.get(set);
+        if (!a) return null;
+        const i = pickVariant(a, Math.random(), this.last.get(set) ?? -1);
+        if (i < 0) return null;
+        this.last.set(set, i);
+        return a[i];
+    }
+}
+
+/** Fetches and decodes every sample file in small batches. A file that is missing or will not decode is skipped. */
+async function loadSamples(ctx: BaseAudioContext, bank: SampleBank, base: string): Promise<void> {
+    const jobs: { set: string; index: number; url: string }[] = [];
+    for (const set of Object.keys(SAMPLE_SETS)) {
+        const files = sampleFiles(set);
+        for (let i = 0; i < files.length; i++) jobs.push({ set, index: i, url: base + files[i] });
+    }
+    const one = async (j: { set: string; index: number; url: string }): Promise<void> => {
+        try {
+            const r = await fetch(j.url);
+            if (!r.ok) return;
+            const type = r.headers.get('content-type') ?? '';
+            if (type.includes('text/html')) return; // a dev server answering a missing file with its index page
+            const buf = await ctx.decodeAudioData(await r.arrayBuffer());
+            const arr = bank.sets.get(j.set);
+            if (arr && !arr[j.index]) { arr[j.index] = buf; bank.loaded++; }
+        } catch { /* missing or undecodable: that sound stays synthesised */ }
+    };
+    for (let i = 0; i < jobs.length; i += 6) await Promise.all(jobs.slice(i, i + 6).map(one));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -718,12 +816,102 @@ const synthLose: Synth = (v, t) => {
 
 const CUES: Record<CueKind, { synth: Synth; gain: number }> = {
     roundStart: { synth: synthRoundStart, gain: 0.8 },
-    planted: { synth: synthPlanted, gain: 0.9 },
-    defused: { synth: synthDefused, gain: 0.85 },
-    exploded: { synth: synthExploded, gain: 0.85 },
+    planted: { synth: sampled('bomb_planted', synthPlanted, 1, 0), gain: 0.9 },
+    defused: { synth: sampled('bomb_defused', synthDefused, 1, 0), gain: 0.85 },
+    exploded: { synth: sampled('explosion', synthExploded, 1, 0.03), gain: 0.85 },
     win: { synth: synthWin, gain: 0.8 },
     lose: { synth: synthLose, gain: 0.8 },
 };
+
+// Recorded versions. Each is a Synth that plays a sample when `Voice.pick` finds one and the synthesised sound
+// otherwise (or, for gunshots, over it), so every event keeps working with no sample loaded.
+
+/** A variant of `set` in place of `synth`; `pitch` is the +-fraction of random playback-rate variation. */
+function sampled(set: string, synth: Synth, level = 1, pitch = 0.05): Synth {
+    return (v, t, x, flag) => {
+        const b = v.pick(set);
+        if (!b) { synth(v, t, x, flag); return; }
+        v.play(set, b, t, level * varied(0.12, Math.random()), varied(pitch, Math.random()));
+    };
+}
+
+/** The synthesised shot with a recorded layer over it (when the layer is on and a sample is loaded). */
+function layered(set: string, synth: Synth, level: number): Synth {
+    return (v, t, x, flag) => {
+        synth(v, t, x, flag);
+        const b = v.samples && v.samples.mode.gunLayer ? v.pick(set) : null;
+        if (b) v.play(set, b, t, level * varied(0.08, Math.random()), varied(0.04, Math.random()));
+    };
+}
+
+const STEP_SETS: Record<string, string> = { concrete: 'step_concrete', metal: 'step_metal', wood: 'step_wood' };
+const IMPACT_SETS: Record<string, string> = { concrete: 'impact_concrete', metal: 'impact_metal', wood: 'impact_wood' };
+
+/** Footstep on the surface in `v.tag`; x = loud. */
+const sampledStep: Synth = (v, t, loud, flag) => {
+    const set = STEP_SETS[v.tag] ?? 'step_concrete';
+    const b = v.pick(set);
+    if (!b) { synthStep(v, t, loud, flag); return; }
+    const sv = stepVariation(loud, Math.random(), Math.random());
+    v.play(set, b, t, sv.gain, sv.rate);
+};
+
+/** Bullet impact on the surface in `v.tag`. */
+const sampledImpact: Synth = (v, t, x, flag) => {
+    const set = IMPACT_SETS[v.tag] ?? 'impact_concrete';
+    const b = v.pick(set);
+    if (!b) { synthImpact(v, t, x, flag); return; }
+    v.play(set, b, t, 0.9 * varied(0.15, Math.random()), varied(0.08, Math.random()));
+};
+
+/** A reload from three recorded parts at the animation's times; all three or none (the whole synthesised reload). */
+function sampledReload(kind: 'rifle' | 'pistol', fallback: Synth): Synth {
+    const cue = RELOAD_CUES[kind];
+    return (v, t, x, flag) => {
+        if (!v.has(cue.parts)) { fallback(v, t, x, flag); return; }
+        for (let i = 0; i < cue.parts.length; i++) {
+            const b = v.pick(cue.parts[i]);
+            if (b) v.play(cue.parts[i], b, t + cue.times[i], 1, 1);
+        }
+    };
+}
+
+const SLASH_PARTS = ['knife_slash'];
+const SLASH_HIT_PARTS = ['knife_slash', 'knife_hit'];
+/** Knife slash: the swing sample, and on a hit the hit sample 50 ms in (as the synthesised thud). flag = hit. */
+const sampledSlash: Synth = (v, t, x, hit) => {
+    if (!v.has(hit ? SLASH_HIT_PARTS : SLASH_PARTS)) { synthSlash(v, t, x, hit); return; }
+    const a = v.pick('knife_slash');
+    if (a) v.play('knife_slash', a, t, varied(0.1, Math.random()), varied(0.05, Math.random()));
+    const h = hit ? v.pick('knife_hit') : null;
+    if (h) v.play('knife_hit', h, t + 0.05, varied(0.1, Math.random()), varied(0.05, Math.random()));
+};
+
+const sampledHitBody = sampled('hit_body', synthHit, 1, 0.02);
+const sampledHitHead = sampled('hit_head', synthHit, 1, 0.02);
+const sampledHitKill = sampled('hit_kill', synthHit, 1, 0.02);
+const SWITCH_SETS: Record<string, string> = { rifle: 'switch_rifle', pistol: 'switch_pistol', knife: 'switch_knife' };
+const sampledSwitch: Synth = (v, t, draw, pistol) => {
+    const set = SWITCH_SETS[v.tag] ?? 'switch_rifle';
+    const b = v.pick(set);
+    if (!b) { synthSwitch(v, t, draw, pistol); return; }
+    v.play(set, b, t, varied(0.1, Math.random()), varied(0.04, Math.random()));
+};
+/** A UI click: a recorded tick, or a short synthesised blip. */
+const synthUi: Synth = (v, t) => {
+    const g = v.gain(v.input);
+    const o = v.osc('sine', 1700, t, 0.04, g);
+    o.frequency.setValueAtTime(1700, t);
+    o.frequency.exponentialRampToValueAtTime(1100, t + 0.03);
+    env(g.gain, t, 0.002, 0.5, 0.025);
+};
+const sampledUi = sampled('ui_click', synthUi, 1, 0.04);
+
+const sampledBeep = sampled('bomb_beep', synthBeep, 1, 0);
+const sampledWindup = sampled('knife_windup', synthWindup, 1, 0.03);
+const sampledDry = sampled('dry', synthDry, 1, 0.03);
+const sampledDrop = sampled('bomb_drop', synthBombDrop, 1, 0.05);
+const sampledPickup = sampled('bomb_pickup', synthBombPickup, 1, 0.05);
 
 /** Seconds between bomb beeps: ~1 s above 20 s left, shrinking smoothly to ~0.15 s at zero. */
 function beepInterval(timeLeft: number): number {
@@ -856,8 +1044,14 @@ const stepCfg: ShotCfg = { ...STEP_CFG };
 
 /** Each gun's suppressed and unsuppressed shot and its reload, by id, then per slot of the weapon table. */
 const WEAPON_SOUNDS: Record<WeaponId, { shot: Synth; loud: Synth; reload: Synth }> = {
-    rifle: { shot: synthGun, loud: synthLoudRifle, reload: synthReload },
-    pistol: { shot: synthPistol, loud: synthLoudPistol, reload: synthPistolReload }
+    rifle: {
+        shot: layered('shot_rifle_supp', synthGun, 0.9), loud: layered('shot_rifle_loud', synthLoudRifle, 0.9),
+        reload: sampledReload('rifle', synthReload)
+    },
+    pistol: {
+        shot: layered('shot_pistol_supp', synthPistol, 0.9), loud: layered('shot_pistol_loud', synthLoudPistol, 0.9),
+        reload: sampledReload('pistol', synthPistolReload)
+    }
 };
 const SLOT_SOUNDS = WEAPONS.map(w => WEAPON_SOUNDS[w.id]);
 
@@ -865,8 +1059,12 @@ function slotOf(weapon: number): number {
     return weapon >= 0 && weapon < WEAPONS.length ? weapon | 0 : 0;
 }
 
-export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => {
+export const createAudio: CreateAudio = (boxes: readonly Box[], opts?: AudioOptions): AudioEngine => {
     let ctx: AudioContext | null = null;
+    const samples = new SampleBank();
+    let loadDone: () => void = () => { /* replaced below */ };
+    const loadedPromise = new Promise<void>(res => { loadDone = res; });
+    const faceScratch = { axis: 0, sign: 0, surface: 'concrete' as Surface };
     let failed = false;
     let master: GainNode | null = null;
     let bank: NoiseBank | null = null;
@@ -918,7 +1116,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
 
     /** Builds and starts one sound; returns its voice, or null when nothing was started. */
     function oneShot(pos: Vec3 | null, cfg: ShotCfg, gain: number, synth: Synth, x: number, flag: boolean,
-        weight = 1): Voice | null {
+        weight = 1, tag = ''): Voice | null {
         if (!ctx || !master || !bank) return null;
         const now = ctx.currentTime;
         gain *= stepMode ? volSteps : volEffects;
@@ -948,6 +1146,8 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
         const t = now + LEAD;
         const v = new Voice(ctx, bank);
         v.start = t;
+        v.tag = tag;
+        v.samples = samples;
         v.priority = priority;
         v.input.gain.value = gain;
         synth(v, t, x, flag);
@@ -1136,28 +1336,28 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
     function stepSound(pos: Vec3, l: number, isLocal: boolean): void {
         if (isLocal) {
             // Own footsteps: present for feedback, but subdued so they never mask enemies.
-            oneShot(null, STEP_CFG, 0.3, synthStep, l, false);
+            oneShot(null, STEP_CFG, 0.3, sampledStep, l, false, 1, surfaceUnder(boxes, pos));
             return;
         }
         // The gameplay range is measured along the ground, but the listener is at eye height and
         // the step at the feet: stretch the 3D range so a step on the same floor dies exactly at it.
         const r = Math.max(STEP_RANGE * l, 1.5);
         stepCfg.range = Math.sqrt(r * r + EYE_HEIGHT * EYE_HEIGHT);
-        oneShot(pos, stepCfg, 1, synthStep, l, false);
+        oneShot(pos, stepCfg, 1, sampledStep, l, false, 1, surfaceUnder(boxes, pos));
     }
 
     return {
         unlock(): void {
             if (failed) return;
             if (ctx) {
-                if (ctx.state !== 'running') ctx.resume().catch(() => { /* retried on next gesture */ });
+                if (!opts?.context && ctx.state !== 'running') ctx.resume().catch(() => { /* retried on next gesture */ });
                 return;
             }
             try {
                 const Ctor: typeof AudioContext | undefined = window.AudioContext
                     ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-                if (!Ctor) { failed = true; return; }
-                const c = new Ctor({ latencyHint: 'interactive' });
+                if (!Ctor && !opts?.context) { failed = true; loadDone(); return; }
+                const c = opts?.context ? opts.context as AudioContext : new Ctor!({ latencyHint: 'interactive' });
                 // Gentle glue compressor, then a fast high-ratio limiter so pile-ups never clip.
                 // Thresholds sit well above normal single-sound levels so quiet breathing is never pumped.
                 const comp = c.createDynamicsCompressor();
@@ -1180,8 +1380,12 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
                 bank = makeNoiseBank(c);
                 master = m;
                 ctx = c;
-                if (c.state !== 'running') c.resume().catch(() => { /* retried on next gesture */ });
+                if (!opts?.context && c.state !== 'running') c.resume().catch(() => { /* retried on next gesture */ });
+                // The samples load after the game is playable: a moment after the first unlock, a few at a time.
+                const base = (import.meta.env?.BASE_URL ?? './') + 'audio/';
+                setTimeout(() => { void loadSamples(c, samples, base).finally(loadDone); }, opts?.loadDelayMs ?? 1500);
             } catch {
+                loadDone();
                 failed = true;
                 ctx = null;
                 master = null;
@@ -1206,7 +1410,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
                     beepPos[0] = bomb.pos[0];
                     beepPos[1] = bomb.pos[1] + BOMB_LIFT;
                     beepPos[2] = bomb.pos[2];
-                    oneShot(beepPos, BOMB_CFG, BEEP_GAIN, synthBeep, 0, false, BEEP_PRIORITY);
+                    oneShot(beepPos, BOMB_CFG, BEEP_GAIN, sampledBeep, 0, false, BEEP_PRIORITY);
                 }
             } else {
                 beeping = false;
@@ -1286,11 +1490,11 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
         weaponSwitch(weapon: number): void {
             // The knife: the light holster sound, over its own draw time.
             if (weapon === SLOT_KNIFE) {
-                oneShot(null, CUE_CFG, 0.4, synthSwitch, DEFENDER_KNIFE.drawTicks / TICK_RATE, true);
+                oneShot(null, CUE_CFG, 0.4, sampledSwitch, DEFENDER_KNIFE.drawTicks / TICK_RATE, true, 1, 'knife');
                 return;
             }
             const s = slotOf(weapon);
-            oneShot(null, CUE_CFG, 0.4, synthSwitch, WEAPONS[s].drawTicks / TICK_RATE, WEAPONS[s].id === 'pistol');
+            oneShot(null, CUE_CFG, 0.4, sampledSwitch, WEAPONS[s].drawTicks / TICK_RATE, WEAPONS[s].id === 'pistol', 1, WEAPONS[s].id);
         },
 
         reload(pos: Vec3, isLocal: boolean, weapon: number, id: number): void {
@@ -1315,23 +1519,43 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
         },
 
         dryFire(): void {
-            oneShot(null, CUE_CFG, 0.5, synthDry, 0, false);
+            oneShot(null, CUE_CFG, 0.5, sampledDry, 0, false);
         },
 
         impact(pos: Vec3): void {
-            oneShot(pos, IMPACT_CFG, 0.8, synthImpact, 0, false);
+            // The surface is the box face the bullet ended on (no face: a player or the range's end, played as concrete).
+            const surf = faceAt(boxes, pos, faceScratch) ? faceScratch.surface : 'concrete';
+            oneShot(pos, IMPACT_CFG, 0.8, sampledImpact, 0, false, 1, surf);
         },
 
         knifeWindup(pos: Vec3, isLocal: boolean): void {
-            oneShot(isLocal ? null : pos, KNIFE_CFG, isLocal ? 0.45 : 1, synthWindup, 0, false);
+            oneShot(isLocal ? null : pos, KNIFE_CFG, isLocal ? 0.45 : 1, sampledWindup, 0, false);
         },
 
         knifeSlash(pos: Vec3, hit: boolean, isLocal: boolean): void {
-            oneShot(isLocal ? null : pos, KNIFE_CFG, isLocal ? 0.6 : 1, synthSlash, 0, hit);
+            oneShot(isLocal ? null : pos, KNIFE_CFG, isLocal ? 0.6 : 1, sampledSlash, 0, hit);
         },
 
         hitMarker(kind: 'body' | 'head' | 'kill'): void {
-            oneShot(null, CUE_CFG, 0.55, synthHit, kind === 'kill' ? 1 : 0, kind === 'head');
+            oneShot(null, CUE_CFG, 0.55, kind === 'kill' ? sampledHitKill : kind === 'head' ? sampledHitHead : sampledHitBody,
+                kind === 'kill' ? 1 : 0, kind === 'head');
+        },
+
+        uiClick(): void {
+            oneShot(null, CUE_CFG, 0.35, sampledUi, 0, false);
+        },
+
+        whenLoaded(): Promise<void> {
+            return loadedPromise;
+        },
+
+        sampleStatus(): { loaded: number; total: number } {
+            return { loaded: samples.loaded, total: samples.total };
+        },
+
+        setSoundMode(mode: Partial<SoundMode>): void {
+            if (mode.recorded !== undefined) samples.mode.recorded = mode.recorded;
+            if (mode.gunLayer !== undefined) samples.mode.gunLayer = mode.gunLayer;
         },
 
         setVolumes(v: { master: number; effects: number; footsteps: number }): void {
@@ -1346,7 +1570,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[]): AudioEngine => 
         },
 
         bomb(kind: 'drop' | 'pickup', pos: Vec3, isLocal: boolean): void {
-            oneShot(isLocal ? null : pos, BOMB_HANDLE_CFG, isLocal ? 0.5 : 1, kind === 'drop' ? synthBombDrop : synthBombPickup, 0, false);
+            oneShot(isLocal ? null : pos, BOMB_HANDLE_CFG, isLocal ? 0.5 : 1, kind === 'drop' ? sampledDrop : sampledPickup, 0, false);
         },
 
         cue(kind: CueKind): void {

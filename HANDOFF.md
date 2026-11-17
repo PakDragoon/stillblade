@@ -398,3 +398,94 @@ Built on `claude/menus-redesign-bad369` (from `main` at `91e9671`), 2026-11-17. 
 - **Verified** in headless Chrome (software GL, scratch ports 8090 and 5190, driven over the DevTools protocol; the owner's 8080 and 5173 were not touched): every page and every settings tab at 1366x768 and 1920x1080 (`docs/review/menus/`, files `<width>-NN-<page>.png`); first visit lands on the how-to, "Got it" goes home, Esc steps back page by page, create form defaults to Private, Public changes the button, bot skill enables with fill on; each settings tab fits its card at both sizes; rebinding Reload to V then "Reset controls to defaults" back to R in the menu; a private room made from the form is not listed and a public one is (list shows 1 row, then Join lands in its lobby); creator's and joiner's lobby panels; the pause menu and in-game settings on the Controls tab, Esc returning to the pause menu; the invite home page; "FIRST TO 3"; the scoreboard's vote buttons with three people, a click starting a vote (banner on the other clients), and the buttons disappearing while it runs. 
 - **Not verified.** Real pointer lock (so the scoreboard buttons by mouse in play, Esc as pause, the mouse released for menus), the phone notice, `sb-rejoin` after a dropped connection (code untouched, not run), `?auto=1` runs of the practice range and Quick play from the new buttons (the choice they return is built exactly as before; only the lobby and room pages were joined), the feedback panel from the General tab, the map vote on the result card (untouched), a real person using the keyboard only, a real touch screen, and the look on a real GPU. Several game pages at once lose their WebGL context in software GL (as in earlier packages); the flows were run with `?res=0.3` and one or two game pages at a time.
 - **Scoreboard ping column (protocol 14; the server must be restarted together with the client).** New JSON message `{type:'pings', pings:[[playerId, ms], ...]}` (`PingsMsg`, `PING_MAX` 999 in `shared/protocol.ts`), a separate message rather than a roster field so the roster is not re-sent every few seconds. `server/src/main.ts` sends a WebSocket ping to every connection every 2 s (one outstanding at a time) carrying a 4-byte token (`PingProbe`, `server/src/ping-probe.ts`); only a pong echoing that token gives a sample, so the keep-alive heartbeat's own pings and pongs are never mistaken for it. The sample goes to `Game.setPing`; `smoothPing` (`server/src/game.ts`) keeps about the last three samples, whole milliseconds, 0 to 999; every 3 s each room's `Game.sendPings()` broadcasts every measured human (bots and unmeasured players are absent). Transport measurement only: no rule, timer or snapshot reads it, and the binary formats are unchanged (`prediction.test.ts` passes). A client cannot set it: no client message carries a ping (tested that `decodeClient` rejects `pings` and `ping`). Client: `Presenter.setPings`, a right-aligned PING column on both teams on the Tab scoreboard, "BOT" for bots and "-" until measured. The Vote out button sits in its own grid column inside the panel (empty for yourself and for bots); screenshot `docs/review/menus/1366-15-scoreboard-ping-and-vote-out.png`. Seen in headless Chrome against the scratch server (localhost reads 0 to 5 ms); real internet values were not seen.
+
+## Package H (recorded sounds) in detail
+
+Built on branch `claude/recorded-sounds-3cfd34` (client audio only: `git diff main -- shared server` is empty, `PROTOCOL_VERSION` stays 14, 415 tests, typecheck clean). **Nothing here has been listened to by anyone.** Everything below was checked by script, by measurement and by reading. The owner's ears are the missing half.
+
+### What changed
+
+- `client/src/audio-logic.ts` (new, pure, tested): the sample manifest (`SAMPLE_SETS`, 53 files), `pickVariant` (never the same file twice running), the fallback rule `useRecorded`, `stepVariation` (level and pitch of a footstep), `surfaceUnder` (which surface a step is on), the reload cue times, and `SAMPLE_GAIN` (the per-set mix knobs).
+- `client/src/audio.ts`: every event is now a `Synth` wrapper that plays a sample when `Voice.pick` finds one and the old synthesised sound otherwise. Distance, HRTF, wall muffling, ranges, volumes, voice stealing and the breathing loop are untouched (`breathDistanceGain` has tests that pin its curve; 8 m range unchanged). Gunshots are the synthesised shot with the recorded sample layered over it. Reloads play three recorded parts at 0.3 / 1.4 / 1.9 s (rifle) and 0.15 / 0.7 / 1.0 s (pistol), all in one voice, so `cancelReload` cuts them off exactly as before. A reload is all recorded or all synthesised (never half and half).
+- `client/src/audio-api.ts`: added `uiClick()`, `whenLoaded()`, `sampleStatus()`, `setSoundMode()` (test page only), and an optional second argument to `createAudio` (`context`, `loadDelayMs`) used by the test page and the measuring script. `step`, `impact` and the rest keep their signatures: the surface is found inside the audio layer from the map boxes it already holds (steps: the box whose top the feet stand on; impacts: `faceAt`, the same lookup package G's decals use; concrete when nothing is found).
+- Loading: after the first `unlock()` (a click or key press) the engine waits 1.5 s, then fetches and decodes the files six at a time in the background. A file that is missing, answered with an HTML page by a dev server, or will not decode is skipped and its sound stays synthesised. Nothing blocks the loading screen.
+- Every `<button>` in the game now makes a quiet click (`main.ts`: one document-level listener calling `audio.uiClick()`).
+- `client/src/entry.ts` (new) is the page's script: `?soundtest=1` loads `client/src/soundtest.ts`, anything else loads `main.ts` as before. `index.html` points at `entry.ts`.
+- Tools: `tools/process-audio.mjs` (raw packs to shipped files; needs ffmpeg), `tools/audio-map.json` (which raw file becomes which sound; a test checks it names exactly the manifest's sets), `tools/sound-check.mjs` (level measurements and the screenshot in headless Chrome). Raw packs live in `tools/audio-source/` (git-ignored), one folder per unzipped pack.
+
+### Format and size
+
+Mono MP3, 64 kbit/s, 44.1 kHz, trimmed of leading silence, cut to a per-sound length with a 30 ms fade, peak-normalised to -4.5 dBFS. MP3 because every current browser decodes it (Ogg Vorbis only arrived in Safari 18.4). **53 files, 138,076 bytes (134.8 KiB) in all**, well under the 1.5 MB aim, plus `client/public/audio/CREDITS.md` (every file, its Kenney pack and original file, CC0, what was done). Re-run `node tools/process-audio.mjs` to rebuild everything; it also rewrites CREDITS.md.
+
+### Every event: sample or synthesised, and why
+
+Packs used: Impact Sounds (IS), RPG Audio (RPG), Interface Sounds (UI), Digital Audio (DA), Sci-Fi Sounds (SF). All CC0. Sizes are per file in bytes (variants listed as n x size).
+
+| Event | Sound | Source and size |
+| --- | --- | --- |
+| Footstep, concrete | recorded, 4 variants | IS `footstep_concrete_000..003`; 1.3-1.5 KB each |
+| Footstep, wood | recorded, 4 | IS `footstep_wood_000..003`; 2.6-2.8 KB each |
+| Footstep, metal | recorded, 4 (**a stand-in**) | IS `impactPlate_light_000..003`, slowed to 0.9x and low-passed at 7 kHz; the packs have no metal footstep, so this is a plate knock; 3.0 KB each |
+| Own footsteps | same sets, quieter (`0.3` base level as before) | as above |
+| Bullet impact, concrete / metal / wood | recorded, 3 variants each | IS `impactMining`, `impactMetal_medium`, `impactWood_light`; 1.5-2.8 KB each |
+| Gunshot, unsuppressed rifle / pistol | synthesised shot **plus** recorded layer, 2 variants each | IS `impactPunch_heavy` (rifle, slowed 0.8x) and `impactPunch_medium` (pistol); 4.2 KB and 3.4 KB each |
+| Gunshot, suppressed rifle / pistol | synthesised shot **plus** a quiet recorded layer | IS `impactSoft_heavy_000` and `impactSoft_medium_000`; 2.6 KB, 1.5 KB |
+| Reload, rifle (out, in, bolt) | recorded, 3 parts | RPG `metalClick`, RPG `metalLatch`, IS `impactMetal_heavy_000`; 2.6 / 2.8 / 1.9 KB |
+| Reload, pistol (out, in, slide) | recorded, 3 parts | RPG `metalClick` and `metalLatch` sped up 1.1x, IS `impactMetal_light_000` sped up; 2.1 / 2.6 / 2.6 KB |
+| Knife windup | recorded | RPG `drawKnife1`; 3.0 KB |
+| Knife slash (miss / hit) | recorded slash, 2 variants; hit adds a recorded hit at +50 ms, 2 variants | RPG `knifeSlice`, `knifeSlice2`; IS `impactSoft_heavy_000..001`; 3.0 / 2.6 KB each |
+| Bomb planted announcement | recorded | DA `threeTone1`; 6.7 KB |
+| Bomb beep (the ticking) | recorded | DA `tone1`; 1.5 KB |
+| Bomb defused | recorded | DA `highUp`; 3.8 KB |
+| Bomb exploded | recorded | SF `explosionCrunch_000`; 6.7 KB |
+| Bomb dropped / picked up | recorded | IS `impactSoft_heavy_000` (3.0 KB); RPG `beltHandle1` (2.8 KB) |
+| Hit marker body / head / kill | recorded | UI `tick_001` (0.9 KB), `tick_002` (0.7 KB), `confirmation_001` (3.0 KB) |
+| Dry fire | recorded | RPG `metalClick`; 1.5 KB |
+| Weapon switch rifle / pistol / knife | recorded | RPG `handleSmallLeather2`, `handleSmallLeather`, `drawKnife1`; 2.6 / 3.0 / 3.0 KB |
+| UI click | recorded, 2 variants | UI `click_001`, `click_003`; 1.3 / 0.7 KB |
+| Ghost breathing | **synthesised** | none of the packs has a breath; the loop is shaped per exertion in real time and its distance curve is pinned by tests |
+| Hurt | **synthesised** | no suitable sound in the packs (a felt-not-heard thump) |
+| Round start, round won, round lost | **synthesised** | short melodic cues; Kenney's Digital Audio could do them if the owner dislikes the synthesised chimes |
+| Gunshot body itself | **synthesised under the layer** | the five packs contain no gunshot (impact punches and thumps only); a real recording needs an approved source (Kenney's separate "Shooting Sounds" or similar is not in the five packs the owner supplied) |
+
+### Measured levels (not heard)
+
+`node tools/sound-check.mjs` renders each event through the real engine (HRTF, wall, compressor, volumes) into an `OfflineAudioContext` and prints peak and RMS in dBFS. Straight ahead, listener standing, run of 2026-11-17 (the synthesised sounds use random noise, so repeat runs differ by about 3 dB):
+
+| Case | Synthesised peak | Recorded peak |
+| --- | --- | --- |
+| Running step, concrete, 1 m / 5 m / 10 m / 15 m / 17.5 m | -19.6 / -21.1 / -23.6 / -32.8 / -48.5 | -22.1 / -22.8 / -26.1 / -33.7 / -50.0 |
+| Walking step 2 m / 5 m (5.4 m is its limit) | -25.5 / -41.1 | -28.6 / -44.8 |
+| Crouched step 1.5 m / 3 m (3.2 m is its limit) | -28.6 / -42.5 | -30.1 / -48.8 |
+| Running step 5 m: metal / wood / behind a wall | -18.6 / -20.1 / -29.1 | -22.6 / -17.4 / -30.9 |
+| Rifle, unsuppressed, 5 / 20 / 50 / 59 m | -11.7 / -15.3 / -27.8 / -46.1 | -10.9 / -11.2 / -21.1 / -43.4 |
+| Rifle, suppressed, 5 / 15 m | -23.8 / -34.2 | -22.7 / -33.4 |
+| Pistol unsuppressed / suppressed, 5 m | -14.4 / -27.0 | -12.2 / -25.2 |
+| Rifle reload 3 m / 9 m | -5.8 / -25.7 | -6.3 / -23.3 |
+| Knife windup 5 m / 13 m | -8.4 / -27.3 | -10.0 / -28.1 |
+| Bullet impact 5 m / 20 m | -31.6 / -42.7 | -26.9 / -37.7 |
+| Bomb beep 10 m / 30 m | -11.5 / -25.5 | -10.6 / -24.8 |
+
+Reading it: a recorded running step at 5 m is about 11 dB louder than at 15 m and silent at the 18 m limit; a wall costs about 8 dB; an unsuppressed rifle shot at 50 m is about 10 dB below the same shot at 5 m and fades to near silence by 59 m; a suppressed rifle shot sits about 12 dB below an unsuppressed one at the same range (the first mix put the suppressed layer 10 dB too hot, so `SAMPLE_GAIN` pulls the gun layers, impacts and reloads down and the knife windup up; these gains are measured, not heard). Footsteps peak around -22 dBFS while a gunshot peaks around -11: that 11 dB gap is the same as it was synthesised, and is the number to judge by ear.
+
+### What the owner should listen for
+
+Open `http://localhost:5173/?soundtest=1` (or the same query on the hosted address) with headphones on, click anything once (the browser needs a click), and wait for the status line to say 53 of 53 loaded. No server and no map are needed. In order of importance:
+
+1. **Can a defender tell where a ghost is?** Set Step to run, then walk, then crouch; Distance 3, 6, 10, 15 m; Direction front, left, right, behind. Press "Six steps in a row". Judge: can you point to it with your eyes shut, and can you tell run from walk from crouch by sound alone (running should be clearly the loudest and brightest; walking audible only to about 5 m; crouching only to about 3 m)? Try all three surfaces; metal is a stand-in (a plate knock) and the most likely to need replacing.
+2. **Breathing** (it is still synthesised): switch on "Ghost breathing" at 2 m, 5 m and 8 m, standing and running. It should be unmistakable at 2 m, faint but findable at 5 m, barely there at 8 m, and gone beyond. Tick "Behind a wall": it should get duller and quieter.
+3. **Gunshots**: Suppressed off, rifle shot at 5 m and 50 m: loud and punchy but not painful, a clear fade by 60 m. Suppressed on: much quieter, gone by 20 m. Untick "Gunshot layer" to hear the old synthesised shot alone and decide which you prefer; the layer is only a thump over the old shot because the packs contain no gunshot. If neither is convincing, a real gunshot recording is the single most valuable sound still missing, and it needs the owner's approval to download.
+4. **Reloads against the animation**: Rifle reload then Pistol reload: three clicks and clunks at 0.3 / 1.4 / 1.9 s and 0.15 / 0.7 / 1.0 s. Then in a practice match watch your own reload (R) and the first-person hands: does the magazine click when it comes out, clunk when it goes in, and clack with the bolt or slide? "Reload, cut off after 1 s" must go completely silent at once. The files are trimmed at the start but their internal timing was never matched to the animation by eye or ear.
+5. **Harsh, too quiet or too alike**: hit markers (body, head and kill should be three clearly different ticks), UI clicks (quiet, not annoying after fifty), knife windup versus slash (the windup must stand out as a warning), bomb beep (ticks at 1 s, speeding up), explosion, impacts on the three surfaces (concrete and wood should differ), "Five impacts" and "Six steps" (variants should not sound like a machine gun of the same sample). Untick "Recorded samples" to compare every sound with the old synthesised one.
+6. **In a match** (practice range with bots is enough): can you hear a bot ghost behind a wall; do your own footsteps stay subdued; is anything missing or startlingly loud when many things happen at once?
+
+If a sound is too loud or quiet, the knob is `SAMPLE_GAIN` in `client/src/audio-logic.ts` (one number per sound set, 1 = as normalised). If a sound is the wrong one, change its patterns in `tools/audio-map.json`, run `node tools/process-audio.mjs`, and `tools/sound-check.mjs` will print the new levels.
+
+### What was not verified
+
+- Nothing was heard, ever. The mapping of raw files to events was chosen by file name and by duration and level measurements, not by listening.
+- Whether the recorded reload parts line up with the animation, and whether the metal-footstep stand-in sounds like metal.
+- Safari and Firefox (decoding MP3 through `decodeAudioData` is standard, but only Chrome was run). iOS is not a target.
+- Loading inside a real match was not timed; the test page's own engine loaded all 53 files (checked by script), and the game boots with no console errors at `?auto=1` against a scratch server. The game's own `audio` instance reaching "53 of 53" in a live match was not checked.
+- Level numbers come from an offline render of one event at a time at the listener's feet, standing, straight ahead; many overlapping sounds and the player's volume sliders were not measured.
+- Voice stealing (24 voices) was left unchanged; recorded sounds hold a voice only as long as the sample (0.1 to 2 s).

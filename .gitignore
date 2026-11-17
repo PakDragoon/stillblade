@@ -16,3 +16,6 @@ tools/blender/source-art/
 
 # Python bytecode from the map builder
 __pycache__/
+
+# Raw Kenney audio packs (unzipped by hand; only the processed files in client/public/audio are shipped)
+tools/audio-source/
