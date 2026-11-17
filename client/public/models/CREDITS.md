@@ -24,6 +24,9 @@ suppressor, pistol 0.20 m, knife 0.30 m), gave the pistol a generated 12-sided s
 baked a dark tactical palette into vertex colours (1 shared material, no textures), decimated the
 knife from 687 to 398 triangles (gun kept at 1,006, pistol 1,034 with the suppressor), and added
 `gun_muzzle` / `pistol_muzzle` nodes at the front of each suppressor.
+Package M part 1 added two rifle sights generated in `weapons.py` from boxes and tubes (no third-party
+source): `gun_sight_reddot` (a 1x red dot, 188 triangles) and `gun_sight_scope2x` (a 2x scope on two rings, 736
+triangles). They are stand-ins until part 2 replaces the rifle with a realistic model.
 
 What `viewmodel.py` does (package F, first-person hands): cuts both arms (upper arm to fingertips, 2,426
 triangles, decimated to 1,500) out of the SWAT body with their skin weights, thins the sleeves toward the bone

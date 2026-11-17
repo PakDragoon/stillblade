@@ -73,6 +73,9 @@ export class Input {
             const code = mouseInput(e.button);
             if (code === null) return;
             if (e.button !== 0 && e.button !== 2) e.preventDefault(); // middle-click scroll, side buttons going back
+            // A press of a button we still count as held proves its release was lost: release it first, so this
+            // press acts (in toggle mode it would otherwise be swallowed), whatever `buttons` says.
+            this.keys.delete(code);
             this.press(code);
         });
         document.addEventListener('mouseup', e => {
