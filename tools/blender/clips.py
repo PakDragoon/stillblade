@@ -51,7 +51,7 @@ for _S in 'LR':
     for _F in ('Index', 'Middle', 'Ring', 'Pinky'):
         SAME_AS[f'{_F}4.{_S}'] = f'{_F}3.{_S}'
 
-# Crouch (metres, degrees), as characters.py had them.
+# Crouch (metres, degrees), as the old SWAT pipeline (characters.py, removed in package O) had them.
 CROUCH_DROP = {'crouch_idle': 0.50, 'crouch_walk': 0.40}
 CROUCH_LEAN = 22.0
 CROUCH_HEAD_COUNTER = 0.8
@@ -555,6 +555,8 @@ def build(arm, looks, static=False):
         rest = {b.name: b.matrix_local.copy() for b in arm.data.bones}
         rk.write_action(arm, 'idle', [(0, rest), (1, rest)])
         return
+    # The FBX importer sets the scene to the file's 30 fps; the clips are sampled and written at FPS.
+    bpy.context.scene.render.fps = FPS
     src, acts = import_swat(soldier.SWAT)
     rt = Retarget(src, arm)
     frames = {}
@@ -618,6 +620,7 @@ def ground_speed(arm, action):
 
 
 def export(arm, looks, out):
+    bpy.context.scene.render.fps = FPS
     h, zmin = measure(arm, looks)
     import soldier
     s = soldier.TARGET_HEIGHT / h

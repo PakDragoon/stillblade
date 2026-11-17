@@ -132,6 +132,7 @@ SWATCHES = (0.75, 0.0, 1.0, 0.125)
 # Team colour: the shirt dyed orange (sRGB), keeping the fabric's shading; and the ghost suit's vertex colour.
 TEAM_ORANGE = (0.86, 0.38, 0.09)
 GHOST_SUIT = (0.05, 0.052, 0.06, 0.0)
+CHARACTER_NORMAL_QUALITY = 60
 BALACLAVA_SMOOTH = 18
 BALACLAVA_INFLATE = 0.006
 BOOT_TOP = 0.13
@@ -607,6 +608,9 @@ def main():
         cl.build(arm, looks, static)
         cl.export(arm, looks, os.path.join(OUT_DIR, f'character_{tier}.glb'))
         if not no_atlas and tier == tiers[0]:
+            # Cloth normals are fine-grained noise that WebP spends many bytes on; a lower quality is not visible at
+            # character distances and keeps the Low download near budget.
+            rl.WEBP_QUALITY['normal'] = CHARACTER_NORMAL_QUALITY
             atlas.write(sizes=rl.ATLAS_SIZES)
 
 

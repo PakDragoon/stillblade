@@ -42,6 +42,11 @@ const GUN_NAMES: readonly GunName[] = ['gun', 'pistol'];
 /** Texture atlas (and material) per mesh: tools/blender/realistic.py writes <atlas>_{albedo,normal}_<size>.webp. */
 export type WeaponAtlas = 'rifle' | 'pistol' | 'knife';
 export const ATLAS_OF: Record<WeaponName, WeaponAtlas> = { gun: 'rifle', pistol: 'pistol', knife: 'knife' };
+/**
+ * Every textured atlas the client loads by tier: the three guns' and (package O) the characters' (tools/blender/
+ * soldier.py writes character_{albedo,normal}_<size>.webp; the defender's mesh samples it, the ghost's never does).
+ */
+export type AtlasName = WeaponAtlas | 'character';
 
 export interface WeaponModel {
     asset: pc.Asset;
@@ -288,7 +293,7 @@ function makeStudioSphere(device: pc.GraphicsDevice): pc.Texture {
  * set (1024 on Low, 2048 on High, swapped when the tier changes); until then the guns are a flat dark grey.
  */
 export class WeaponMaterials {
-    readonly byAtlas: Record<WeaponAtlas, pc.StandardMaterial>;
+    readonly byAtlas: Record<AtlasName, pc.StandardMaterial>;
     private tier: Tier | null = null;
     private readonly loaded = new Map<string, Promise<pc.Texture>>();
 
@@ -311,7 +316,18 @@ export class WeaponMaterials {
             m.update();
             return m;
         };
-        this.byAtlas = { rifle: make(), pistol: make(), knife: make() };
+        this.byAtlas = { rifle: make(), pistol: make(), knife: make(), character: make() };
+        // Characters: no glowing reticle; a mid grey until the atlas arrives.
+        const ch = this.byAtlas.character;
+        ch.emissive = new pc.Color(0, 0, 0);
+        ch.emissiveVertexColor = false;
+        ch.diffuse = new pc.Color(0.35, 0.33, 0.3);
+        ch.update();
+    }
+
+    /** The characters' material (the defender look; package O). */
+    character(): pc.StandardMaterial {
+        return this.byAtlas.character;
     }
 
     /** The material for a weapon mesh. */
@@ -324,15 +340,16 @@ export class WeaponMaterials {
         if (tier === this.tier) return;
         this.tier = tier;
         const size = ATLAS_SIZE[tier];
-        for (const atlas of Object.keys(this.byAtlas) as WeaponAtlas[]) {
+        for (const atlas of Object.keys(this.byAtlas) as AtlasName[]) {
             const m = this.byAtlas[atlas];
             Promise.all([this.texture(`${atlas}_albedo_${size}.webp`, true), this.texture(`${atlas}_normal_${size}.webp`, false)])
                 .then(([albedo, normal]) => {
                     if (this.tier !== tier) return; // a later tier change won
                     m.diffuse = new pc.Color(1, 1, 1);
                     m.diffuseMap = albedo;
-                    m.metalness = 1;
-                    m.metalnessMap = albedo;
+                    // Cloth and skin: the surface value is read as gloss only (no metal).
+                    m.metalness = atlas === 'character' ? 0 : 1;
+                    m.metalnessMap = atlas === 'character' ? null : albedo;
                     m.metalnessMapChannel = 'a';
                     m.gloss = 1;
                     m.glossMap = albedo;

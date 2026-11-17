@@ -15,7 +15,7 @@ Writes:
   tools/blender/source-art/realistic/build/weapons_fp.glb   full-detail parts, landmarks and aim points for
                                                    viewmodel.py (git-ignored, rebuilt from the sources)
 
-Node layout of weapons.glb (unchanged names, so the client and characters.py keep working):
+Node layout of weapons.glb (unchanged names, so the client and soldier.py keep working):
   gun (mesh) with children gun_suppressor, gun_sight_reddot, gun_sight_scope2x (meshes in gun's own frame), the
       empties gun_muzzle (suppressor front), gun_muzzle_bare (muzzle brake front) and gun_aim_<sight> (where the eye
       sits when aiming with that sight: on its optical axis, at its eye relief; presenter.ts aims the gun by them);
@@ -28,7 +28,7 @@ knife.
 Axis convention (glTF / engine space), origin = centre of the hand's grip (a third of the way down the pistol grip
 for the guns, the middle of the handle for the knife):
   -Z forward (gun: muzzle; knife: blade tip), +Y up (gun: sights; knife: spine), +X right.
-The gun and pistol share the character's "socket_gun"; the knife sits in "socket_knife" (characters.py).
+The character (soldier.py, clips.py) holds the rifle in "socket_gun", the pistol in "socket_pistol" and the knife in "socket_knife".
 
 Suppressors (room option): a realistic can generated here (the AK's slips over its muzzle brake; the pistol's screws
 on its muzzle), its own node, merged into the gun's one mesh by the client when the room has suppressors.

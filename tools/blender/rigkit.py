@@ -1,5 +1,5 @@
 """
-Helpers shared by the Blender scripts that pose arms and write clips (viewmodel.py, characters.py users, review.py).
+Helpers shared by the Blender scripts that pose arms and write clips (viewmodel.py, clips.py, review.py).
 
 Plain functions on armature-space pose matrices: a pose is a dict {bone name: 4x4 Matrix in armature space}, the
 same thing Blender's PoseBone.matrix holds. `write_action` turns a list of such poses into a keyed action.

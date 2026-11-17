@@ -526,7 +526,7 @@ def knife_frame(pos, blade, spine):
 
 
 def knife_grip(k):
-    """Right-hand grip frame for a knife frame (characters.py socket_knife): the handle runs pinky to index, the
+    """Right-hand grip frame for a knife frame (clips.py KNIFE_IN_HAND, socket_knife): the handle runs pinky to index, the
     blade out of the index side, the spine toward the wrist."""
     x, y, z = (k.col[i].to_3d() for i in range(3))
     up, fwd = y, -z

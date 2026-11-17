@@ -628,17 +628,41 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     const defenderMats = { body: makeMaterial(0.95, 0.5, 0.15, false), head: makeMaterial(0.85, 0.32, 0.12, false) };
     const ghostMat = makeGhostMaterial();
     const ghostSkinMat = makeSkinnedGhostMaterial(ENEMY_TINT);
-    // The animated character loads in the background; until then (and for good if it fails)
-    // remote players keep drawing as the box stand-ins below.
-    let charModel: CharacterModel | null = null;
-    loadCharacterModel(app, `${import.meta.env.BASE_URL}models/character.glb`, ghostSkinMat)
-        .then(m => { charModel = m; })
-        .catch((err: unknown) => {
-            console.warn('[stillblade] Character model failed to load; drawing box players instead.', err);
-        });
     // Weapons load independently: the viewmodel keeps its boxes and characters stay unarmed until then. Their
     // textured materials (weapons.ts) exist from the start; the atlases load with the first setTier.
     const weaponMats = new WeaponMaterials(app, import.meta.env.BASE_URL);
+    // The animated characters (package O) load with the first setTier, one file per tier (character_low.glb about
+    // 6.6k triangles a look, character_high.glb about 13k); until then (and for good if it fails) remote players
+    // keep drawing as the box stand-ins below. A later tier change loads the other file and swaps every character.
+    let charModel: CharacterModel | null = null;
+    let charTier: Tier | null = null;
+    const loadCharacters = (t: Tier): void => {
+        if (t === charTier) return;
+        charTier = t;
+        const file = `character_${t}.glb`;
+        loadCharacterModel(app, `${import.meta.env.BASE_URL}models/${file}`, ghostSkinMat, weaponMats.character(), file)
+            .then(m => {
+                if (charTier !== t) return; // a later tier change won
+                const old = charModel;
+                charModel = m;
+                if (!old) return;
+                // Drop every character made from the old file; updateRemotes attaches new ones on its next pass.
+                for (const list of [active, free]) {
+                    for (const r of list) {
+                        if (!r.char) continue;
+                        r.char.entity.destroy();
+                        r.char = null;
+                        r.body.enabled = true;
+                        r.neck.enabled = true;
+                    }
+                }
+                app.assets.remove(old.asset);
+                old.asset.unload();
+            })
+            .catch((err: unknown) => {
+                console.warn(`[stillblade] ${file} failed to load; drawing box players instead.`, err);
+            });
+    };
     let weaponModel: WeaponModel | null = null;
     loadWeaponModel(app, `${import.meta.env.BASE_URL}models/weapons.glb`)
         .then(m => {
@@ -2099,6 +2123,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             tier = t;
             effects.setTier(t);
             weaponMats.setTier(t);
+            loadCharacters(t);
             fxLight.enabled = t === 'high';
             if (t !== 'high') boomT = Math.min(boomT, BOOM_TIME);
         },
