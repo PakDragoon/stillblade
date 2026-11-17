@@ -44,7 +44,7 @@ The owner has no game development experience and expects the game to have every 
 | 3 | F. Hands and animations: first-person hands, real reloads, pistol pose, knife (**built and reviewed; merged into branch `wave-3`, no protocol change; on `main` since 2026-11-17; seen only in Blender renders, never in the game**) | Opus 5.5 | A merged |
 | 4 | L. Menus and settings redesign, scoreboard ping column (owner's feedback on waves 1 to 3) (**built and reviewed; protocol 14; on `main` since 2026-11-17**) | Sonnet 5.5 | nothing |
 | 4 | G. Graphics tiers and effects (**built and reviewed; no protocol change; on `main` since 2026-11-17; frame rate unmeasured**) | Opus 5.5 | F merged |
-| 4 | H. Recorded sounds | Sonnet 5.5 | A merged |
+| 4 | H. Recorded sounds (**built and reviewed; no protocol change; on `main` since 2026-11-17; nobody has listened to it; gunshots still synthesised under a recorded layer**) | Sonnet 5.5 | A merged |
 | 5 | I. Grenades | Opus 5.5 | friends' feedback, G merged |
 | 6 | J. Accounts, saved stats, leaderboard | Opus 5.5 | always-on server |
 | 6 | K. Voice chat | Opus 5.5 | D merged |
@@ -180,6 +180,8 @@ The game looks flat because of a deliberately strict budget (unlit world, no pos
 **Done means:** before and after screenshots of the same views on both maps in both tiers, draw calls and frame times for each, and the download size of each map.
 
 ## H. Recorded sounds (Sonnet 5.5)
+
+**Status (2026-11-17): built, reviewed and on `main`; client audio only, no protocol change. 53 Kenney CC0 samples (138 KB) with a synthesised fallback, and the test page at `?soundtest=1`. `HANDOFF.md` ("Package H (recorded sounds) in detail") has the table of every event, the measured levels and the owner's listening checklist. Open: nobody has listened to anything; the five Kenney packs hold no gunshot, so gunshots are the synthesised shot under a recorded thump (a real recording needs the owner to approve another CC0 source); metal footsteps are a stand-in; breathing, hurt and the round chimes stay synthesised. Kenney's site refuses scripted downloads: the owner downloads packs by hand into the git-ignored `tools/audio-source/`.** The specification below is kept as written.
 
 Everything is synthesised in `client/src/audio.ts` and nobody has listened to it. Sound is how defenders find ghosts, so this is gameplay.
 
