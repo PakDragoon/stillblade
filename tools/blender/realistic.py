@@ -250,6 +250,29 @@ def transfer_normals(src, dst):
         bpy.ops.object.modifier_apply(modifier=m.name)
 
 
+def uv_crop(objs, material, pad=0.01):
+    """Bounding box (u0, v0, u1, v1) of the UVs of `material`'s faces over `objs`, padded; None if none."""
+    lo, hi = None, None
+    for o in objs:
+        me = o.data
+        if not me.uv_layers:
+            continue
+        uv = np.zeros(len(me.loops) * 2, np.float32)
+        me.uv_layers.active.data.foreach_get('uv', uv)
+        uv = uv.reshape(-1, 2)
+        mats = [m.name if m else '' for m in me.materials]
+        for p in me.polygons:
+            if p.material_index < len(mats) and mats[p.material_index] == material:
+                sel = uv[p.loop_start:p.loop_start + p.loop_total]
+                a, b = sel.min(axis=0), sel.max(axis=0)
+                lo = a if lo is None else np.minimum(lo, a)
+                hi = b if hi is None else np.maximum(hi, b)
+    if lo is None:
+        return None
+    return (max(0.0, float(lo[0]) - pad), max(0.0, float(lo[1]) - pad), min(1.0, float(hi[0]) + pad),
+            min(1.0, float(hi[1]) + pad))
+
+
 def new_mesh_object(name, bm, material):
     me = bpy.data.meshes.new(name)
     bm.to_mesh(me)
