@@ -5,6 +5,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { TICK_RATE } from '../../shared/constants';
 import { DEFAULT_PORT, decodeClient, encodeServer, type Team } from '../../shared/protocol';
 import { parseRoomOptions } from '../../shared/room-options';
+import { cleanSight } from '../../shared/weapons';
 import { defaultMapId, loadMaps } from './maps';
 import { handleReportRequest } from './report-http';
 import { handleRoomsRequest } from './rooms-http';
@@ -76,7 +77,7 @@ wss.on('connection', (ws, req) => {
     const open = perIp.get(ip) ?? 0;
     if (open >= MAX_CONNECTIONS_PER_IP) { ws.close(1013, 'Too many connections'); return; }
 
-    // ws://host:port/?room=CODE&name=NICK&map=ID&suppressed=1&public=1&max=6&rounds=3&bots=1&level=hard (map and options only matter to
+    // ws://host:port/?room=CODE&name=NICK&sight=0..2&map=ID&suppressed=1&public=1&max=6&rounds=3&bots=1&level=hard (map and options only matter to
     // whoever creates the room); quick=1 without a room picks the fullest public room, or makes a public one.
     const query = new URL(req.url ?? '/', 'ws://localhost').searchParams;
     const conn = {
@@ -95,7 +96,8 @@ wss.on('connection', (ws, req) => {
         roomId = found ?? rooms.newQuickCode();
         if (!found) options.public = true;
     }
-    const joined = rooms.join(roomId, query.get('map'), conn, name, ticks * TICK_MS, options, practice);
+    // sight=N: the rifle sight for the first spawn (validated by cleanSight; later changes come as `sight` messages).
+    const joined = rooms.join(roomId, query.get('map'), conn, name, ticks * TICK_MS, options, practice, cleanSight(query.get('sight')));
     if (!joined.ok) { ws.close(joined.reason === 'Unknown map' ? 1008 : 1013, joined.reason); return; }
 
     perIp.set(ip, open + 1);

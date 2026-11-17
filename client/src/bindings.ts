@@ -10,6 +10,8 @@
  * weapon cycling. Nothing here touches the DOM except `BindingsStore`, which uses localStorage.
  */
 
+import { MOUSE_CODES } from './mouse-buttons';
+
 /**
  * When an action can be used: `lobby` only in warmup, `round` only outside warmup, `any` always.
  * Two actions conflict on a shared input only if their contexts can be active at the same time.
@@ -91,7 +93,7 @@ export function isBindableInput(code: unknown): code is string {
 }
 
 export function mouseInput(button: number): string | null {
-    return Number.isInteger(button) && button >= 0 && button <= 4 ? `Mouse${button}` : null;
+    return Number.isInteger(button) && button >= 0 && button <= 4 ? MOUSE_CODES[button] : null;
 }
 
 export function isMouseInput(code: string): boolean {

@@ -1,0 +1,34 @@
+{
+ "drawCalls": {
+  "iron": {
+   "hip": 13,
+   "aimed": 13,
+   "hipWithoutOtherPlayers": 9,
+   "aimedWithoutOtherPlayers": 9
+  },
+  "reddot": {
+   "hip": 13,
+   "aimed": 13,
+   "hipWithoutOtherPlayers": 9,
+   "aimedWithoutOtherPlayers": 9
+  },
+  "scope2x": {
+   "hip": 13,
+   "aimed": 10,
+   "hipWithoutOtherPlayers": 9,
+   "aimedWithoutOtherPlayers": 7
+  }
+ },
+ "notes": [
+  "menu: clicking the 2x scope saved sb-loadout = {\"sight\":\"scope2x\"}",
+  "iron: predicted loadout.sight after spawn = 0",
+  "iron: aim counter 12 when fully aimed, camera fov 60.20 degrees",
+  "reddot: predicted loadout.sight after spawn = 1",
+  "reddot: aim counter 12 when fully aimed, camera fov 56.58 degrees",
+  "scope2x: predicted loadout.sight after spawn = 2",
+  "scope2x: aim counter 16 when fully aimed, camera fov 41.29 degrees",
+  "pause loadout note after picking the red dot with the scope mounted: \"Applies at your next spawn. This life keeps the 2x scope.\"",
+  "still mounted after the change (mid-life): 2 (2 = 2x scope)",
+  "roster seen by the scripted players: [{\"name\":\"Filler\",\"team\":\"ghosts\",\"sight\":0},{\"name\":\"Scope\",\"team\":\"defenders\",\"sight\":2},{\"name\":\"Watcher\",\"team\":\"ghosts\",\"sight\":1},{\"name\":\"RedDot\",\"team\":\"defenders\",\"sight\":1}]"
+ ]
+}

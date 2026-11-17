@@ -14,14 +14,16 @@ each holds only its own clips). Sources, both CC0 and already on disk (nothing n
 Each rig is ONE skinned mesh (arms + weapon), so it is one draw call:
   - bones UpperArm / LowerArm / Wrist / finger chains (.L and .R) copied from the SWAT rig at the character's 1.8 m
     scale, plus "weapon" (the weapon's own frame, origin at the grip) and, under it, the moving parts:
-      rifle  : mag (the magazine), bolt (a small generated cocking knob at the front left of the receiver), sup (suppressor)
+      rifle  : mag (the magazine), bolt (a small generated cocking knob at the front left of the receiver), sup (suppressor),
+               sight_reddot and sight_scope2x (the optional sights, weapons.py's gun_sight_<id>; package M)
       pistol : mag (the base plate plus a generated magazine body), slide, sup (suppressor)
       knife  : no parts
   - empties "muzzle" (suppressor front) and "muzzle_bare" (bare barrel front) under the weapon bone, guns only.
   - the knife file holds two meshes on the same armature: "vm_knife" (defender sleeves) and "vm_ghost" (the ghost
     suit); the client shows one.
 The suppressor is part of the mesh; the client hides it by scaling the "sup" bone to almost nothing (no extra draw
-call and no mesh swap). The magazine is hidden the same way inside the reload clip while it is off screen.
+call and no mesh swap). The sights not mounted are hidden the same way (every clip keys them on the gun, at full size),
+and the magazine inside the reload clip while it is off screen.
 
 Rig space (glTF/engine): -Z forward, +Y up, +X right, metres. For the guns the rig's origin is the gun's grip at the
 hip pose, where client/src/presenter.ts places it (its per-weapon `hip` pose, the same numbers as HIP below): the
@@ -380,7 +382,7 @@ def import_weapons():
     bpy.ops.import_scene.gltf(filepath=WEAPONS_GLB)
     objs = {o.name: o for o in bpy.data.objects if o.name in (
         'gun', 'gun_suppressor', 'gun_muzzle', 'gun_muzzle_bare', 'pistol', 'pistol_suppressor', 'pistol_muzzle',
-        'pistol_muzzle_bare', 'knife')}
+        'pistol_muzzle_bare', 'knife') or o.name.startswith('gun_sight_')}
     bpy.context.view_layer.update()
     for o in objs.values():
         if o.type == 'MESH':
@@ -412,7 +414,11 @@ def weapon_parts(rig, w):
         marks['knob'] = Vector((-0.036, 0.31, 0.15))
         log('rifle: magazine', len(mag), 'parts, axis', tuple(round(c, 3) for c in ax), 'centre',
             tuple(round(c, 3) for c in marks['mag_centre']), 'grip axis', tuple(round(c, 3) for c in marks['grip_axis']))
-        return {'weapon': [gun], 'mag': [mag_obj], 'bolt': [knob], 'sup': [w['gun_suppressor']]}, marks
+        parts = {'weapon': [gun], 'mag': [mag_obj], 'bolt': [knob], 'sup': [w['gun_suppressor']]}
+        # Optional sights (package M): one bone each, named after weapons.py's node (gun_sight_<id> -> sight_<id>).
+        for name in sorted(n for n in w if n.startswith('gun_sight_')):
+            parts[name[len('gun_'):]] = [w[name]]
+        return parts, marks
     if rig == 'pistol':
         p = w['pistol']
         comps = components(p)
@@ -561,6 +567,10 @@ def build_gun_clips(rig):
     max_ = mk['mag_axis']
     mag_rest = Matrix.Translation(mk['mag_centre'])
     rest_parts = {'mag': mag_rest.copy(), 'sup': Matrix.Translation(rig.rest['sup'].translation)}
+    # Sights ride on the gun like the suppressor (the client scales away the ones not mounted).
+    sight_bones = [b for b in rig.rest if b.startswith('sight_')]
+    for b in sight_bones:
+        rest_parts[b] = Matrix.Translation(rig.rest[b].translation)
     moving = 'bolt' if rifle else 'slide'
     rest_parts[moving] = Matrix.Translation(rig.rest[moving].translation)
 
@@ -627,6 +637,8 @@ def build_gun_clips(rig):
             left = rk.keyed(left_keys, t)
             parts = {'sup': gun @ rest_parts['sup'],
                      'bolt': gun @ Matrix.Translation(Vector((0, bolt_off(t), 0))) @ rest_parts['bolt']}
+            for b in sight_bones:
+                parts[b] = gun @ rest_parts[b]
             if t < 0.3 or t >= 1.4:
                 parts['mag'] = gun @ mag_rest
             elif 0.62 <= t < 0.85:

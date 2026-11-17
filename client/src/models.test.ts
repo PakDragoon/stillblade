@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { TICK_RATE } from '@shared/constants';
-import { DEFENDER_KNIFE, WEAPONS } from '@shared/weapons';
+import { DEFENDER_KNIFE, SIGHTS, SIGHT_IRON, WEAPONS } from '@shared/weapons';
 
 /**
  * The shipped model files (built by tools/blender/*.py) carry what the client asks for by name, and their timed
@@ -11,9 +11,9 @@ import { DEFENDER_KNIFE, WEAPONS } from '@shared/weapons';
  */
 
 interface Gltf {
-    nodes: { name?: string }[];
+    nodes: { name?: string; children?: number[] }[];
     meshes: { name?: string }[];
-    animations?: { name: string; channels: { sampler: number }[]; samplers: { input: number }[] }[];
+    animations?: { name: string; channels: { sampler: number; target: { node: number; path: string } }[]; samplers: { input: number }[] }[];
     accessors: { max?: number[] }[];
 }
 
@@ -57,6 +57,31 @@ describe('first-person viewmodels', () => {
         expect(DEFENDER_KNIFE.windupTicks / TICK_RATE).toBeCloseTo(0.2, 3);
         expect(c.get('knife_swing')).toBeGreaterThan(0.5);
         expect(g.meshes.map(m => m.name).sort()).toEqual(['vm_ghost', 'vm_knife']);
+    });
+});
+
+describe('rifle sights (package M)', () => {
+    const others = SIGHTS.filter((_, i) => i !== SIGHT_IRON);
+
+    it('weapons.glb has a gun_sight_<id> mesh node under the gun for every sight but iron', () => {
+        const g = readGlb('weapons.glb');
+        const gun = g.nodes.find(n => n.name === 'gun')!;
+        const children = new Set((gun.children ?? []).map(i => g.nodes[i].name));
+        for (const s of others) expect(children.has(`gun_sight_${s.id}`), s.id).toBe(true);
+        expect(children.has('gun_sight_iron')).toBe(false); // the iron sights are the gun's own
+    });
+
+    it('the rifle rig has a sight_<id> bone for every sight but iron, keyed by both clips (so it follows the reload)', () => {
+        const g = readGlb('viewmodel_rifle.glb');
+        for (const s of others) {
+            const node = g.nodes.findIndex(n => n.name === `sight_${s.id}`);
+            expect(node, s.id).toBeGreaterThanOrEqual(0);
+            for (const clip of ['rifle_idle', 'rifle_reload']) {
+                const a = g.animations!.find(x => x.name === clip)!;
+                expect(a.channels.some(c => c.target.node === node && c.target.path === 'translation'), `${clip} ${s.id}`).toBe(true);
+            }
+        }
+        expect(g.meshes.length).toBe(1); // still one skinned mesh: one draw call
     });
 });
 

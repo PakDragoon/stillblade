@@ -15,6 +15,8 @@ import { PageNav, canCallVoteKick, type PageId } from './menu-logic';
 import { button, h } from './dom';
 import { reporter } from './report';
 import type { Settings, SettingsStore } from './settings';
+import { loadout } from './loadout';
+import { SIGHTS } from '@shared/weapons';
 
 /**
  * `options` apply only when this join creates the room ("Create room"); `quick` asks the server for the fullest
@@ -72,6 +74,8 @@ export class Ui {
     private readonly lobby = h('div', 'screen', '', this.root);
     private readonly pause = h('div', 'screen', '', this.root);
     private readonly settingsScreen = h('div', 'screen', '', this.root);
+    /** The in-game loadout screen (from the pause menu); before a match the same panel is a menu page. */
+    private readonly loadoutScreen = h('div', 'screen', '', this.root);
     private readonly settingsPanel = h('div', 'card settings');
     private readonly result = h('div', 'screen', '', this.root);
     private readonly feedback = h('div', 'screen', '', this.root);
@@ -130,7 +134,7 @@ export class Ui {
         document.body.appendChild(this.root);
         this.menu.id = 'menu-screen'; this.loading.id = 'loading-screen'; this.error.id = 'error-screen';
         this.lobby.id = 'lobby-screen'; this.pause.id = 'pause-screen'; this.settingsScreen.id = 'settings-screen';
-        this.result.id = 'result-screen'; this.feedback.id = 'feedback-screen';
+        this.result.id = 'result-screen'; this.feedback.id = 'feedback-screen'; this.loadoutScreen.id = 'loadout-screen';
         this.strip.id = 'lobby-strip'; this.chatLog.id = 'chat-log'; this.chatForm.id = 'chat-form'; this.hint.id = 'click-hint';
         this.toastEl.id = 'toast';
         this.voteBanner.id = 'vote-banner';
@@ -159,13 +163,13 @@ export class Ui {
 
     /** True while something on screen needs the mouse pointer (so the game must not hold it). */
     get cursorNeeded(): boolean {
-        return this.typing || [this.menu, this.loading, this.error, this.lobby, this.pause, this.settingsScreen, this.result, this.feedback]
+        return this.typing || [this.menu, this.loading, this.error, this.lobby, this.pause, this.settingsScreen, this.loadoutScreen, this.result, this.feedback]
             .some(s => s.classList.contains('open'));
     }
 
     /** A game-only overlay is open (not the pre-game menu, loading or error screens). */
     private get modalOpen(): boolean {
-        return [this.lobby, this.pause, this.settingsScreen, this.result, this.feedback].some(s => s.classList.contains('open'));
+        return [this.lobby, this.pause, this.settingsScreen, this.loadoutScreen, this.result, this.feedback].some(s => s.classList.contains('open'));
     }
 
     private open(screen: HTMLElement): void {
@@ -183,7 +187,7 @@ export class Ui {
     /** The mouse was captured or released (pointerlockchange). Losing it with nothing else open means Esc: pause. */
     onLockChange(locked: boolean): void {
         if (locked) {
-            for (const s of [this.pause, this.settingsScreen, this.lobby, this.feedback]) s.classList.remove('open');
+            for (const s of [this.pause, this.settingsScreen, this.loadoutScreen, this.lobby, this.feedback]) s.classList.remove('open');
             this.refreshHint();
             return;
         }
@@ -199,7 +203,7 @@ export class Ui {
 
     private resume(): void {
         this.cancelBinding();
-        for (const s of [this.pause, this.settingsScreen, this.lobby, this.feedback]) s.classList.remove('open');
+        for (const s of [this.pause, this.settingsScreen, this.loadoutScreen, this.lobby, this.feedback]) s.classList.remove('open');
         this.refreshHint();
         this.hooks.lock();
     }
@@ -263,6 +267,9 @@ export class Ui {
         if (this.summaryOpen) return;
         if (this.settingsScreen.classList.contains('open')) {
             this.settingsBack();
+        } else if (this.loadoutScreen.classList.contains('open')) {
+            this.close(this.loadoutScreen);
+            this.open(this.pause);
         } else if (this.pause.classList.contains('open') || this.lobby.classList.contains('open')) this.resume();
         else this.open(this.pause);
     }
@@ -323,6 +330,10 @@ export class Ui {
         const quick = menuBtn(invite ? '' : 'primary', 'Quick play', 'Join the fullest public room with space', () => go('', state.map, undefined, true));
         menuBtn('', 'Rooms', 'Browse public rooms, join by code, or create your own', () => open('rooms'));
         menuBtn('', 'Practice range', 'Aim at targets on your own', () => open('practice'));
+        const loadoutBtn = menuBtn('', 'Loadout', '', () => open('loadout'));
+        const loadoutHint = loadoutBtn.querySelector('small')!;
+        const showLoadoutHint = (): void => { loadoutHint.textContent = `Rifle sight: ${SIGHTS[loadout().value.sight].label}`; };
+        showLoadoutHint();
         menuBtn('', 'Settings', 'Controls, video and audio', () => open('settings'));
         menuBtn('', 'How to play', 'A short guide to a match', () => open('howto'));
         name.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); (invite ?? quick).click(); } });
@@ -389,6 +400,12 @@ export class Ui {
         h('span', 'sp', '', pfoot);
         button('Start', 'primary', pfoot, () => go('', state.map, undefined, false, state.side));
 
+        // ---- loadout (the same panel as the pause menu's Loadout screen)
+        const loadoutPage = page('loadout', 'Loadout');
+        const loadoutHost = h('div', '', '', loadoutPage);
+        const lfoot = footer(loadoutPage);
+        button('Back', '', lfoot, () => { showLoadoutHint(); back(); });
+
         // ---- settings (the panel is built once and moves between here and the pause menu)
         const settings = h('div', 'settingshost', '', shell);
         settings.dataset.page = 'settings';
@@ -415,12 +432,14 @@ export class Ui {
         });
 
         // ---- navigation
-        const pages = [home, rooms, create, practice, settings, how];
+        const pages = [home, rooms, create, practice, loadoutPage, settings, how];
         const render = (): void => {
             for (const p of pages) p.classList.toggle('active', p.dataset.page === nav.page);
             shell.classList.toggle('sub', nav.page !== 'home');
             if (nav.page === 'create') renderCreate();
             if (nav.page === 'practice') pmap.value = state.map;
+            if (nav.page === 'loadout') this.renderLoadout(loadoutHost);
+            if (nav.page === 'home') showLoadoutHint();
             // Focus the first useful control of the page that opened, so the keyboard starts there.
             const active = pages.find(p => p.dataset.page === nav.page);
             const first = nav.page === 'home' ? (defaults.room ? invite : name)
@@ -771,11 +790,67 @@ export class Ui {
         const stack = h('div', 'stack', '', card);
         stack.style.marginTop = '16px';
         button('Resume', 'primary', stack, () => this.resume());
+        button('Loadout', '', stack, () => this.openLoadout());
         button('Settings', '', stack, () => this.openSettings());
         button('Controls', '', stack, () => this.openSettings('controls'));
         button('Send feedback', '', stack, () => this.openFeedback());
         button('Leave room', 'danger', stack, () => this.hooks.leave());
         this.pausePlayers = h('div', 'plist', '', card);
+    }
+
+    /** The in-game loadout screen (from the pause menu); Back or Esc returns to the pause menu. */
+    private openLoadout(): void {
+        this.loadoutScreen.replaceChildren();
+        const card = h('div', 'card loadout', '', this.loadoutScreen);
+        h('h2', '', 'Loadout', card);
+        this.renderLoadout(h('div', '', '', card));
+        const foot = h('div', 'row foot', '', card);
+        button('Back', 'primary', foot, () => { this.close(this.loadoutScreen); this.open(this.pause); });
+        this.close(this.pause);
+        this.open(this.loadoutScreen);
+    }
+
+    /**
+     * The rifle sight this life uses (the predicted loadout's, from the spawn), or -1 when not alive as a defender:
+     * the loadout panel says when the choice differs from it ("applies at your next spawn").
+     */
+    setActiveSight(sight: number): void {
+        if (sight === this.activeSight) return;
+        this.activeSight = sight;
+        this.updateLoadoutNote();
+    }
+
+    private activeSight = -1;
+    private loadoutNote: HTMLElement | null = null;
+
+    /**
+     * The loadout panel: three rifle sights, one line each on what it does, saved at once (sb-loadout) and sent to
+     * the server, which mounts the choice at the next spawn. The menu page and the pause menu's screen both draw it.
+     */
+    private renderLoadout(host: HTMLElement): void {
+        host.replaceChildren();
+        h('h3', 'group', 'Rifle sight', host);
+        h('p', 'dim small', 'Only the rifle takes a sight. The pistol keeps its own aim, and spread and recoil do not change.', host);
+        const choices = SIGHTS.map((s, i) => ({ value: String(i), title: s.label, hint: s.blurb }));
+        const seg = segmented(host, choices, String(loadout().value.sight), v => {
+            loadout().setSight(Number(v));
+            this.updateLoadoutNote();
+        }, 'Rifle sight');
+        seg.el.classList.add('stacked');
+        seg.el.id = 'sight-choice';
+        this.loadoutNote = h('p', 'loadout-note', '', host);
+        this.updateLoadoutNote();
+    }
+
+    private updateLoadoutNote(): void {
+        const el = this.loadoutNote;
+        if (!el) return;
+        const chosen = loadout().value.sight;
+        if (!this.inGame) el.textContent = 'Used from your first spawn in a match.';
+        else if (this.activeSight < 0) el.textContent = 'Applies at your next spawn as a defender.';
+        else if (this.activeSight === chosen) el.textContent = 'Mounted on your rifle now.';
+        else el.textContent = `Applies at your next spawn. This life keeps the ${SIGHTS[this.activeSight].label.toLowerCase()}.`;
+        el.classList.toggle('pending', this.inGame && this.activeSight !== chosen);
     }
 
     /** The in-game settings screen (from the pause menu), on `tab` if given. */
@@ -1125,7 +1200,7 @@ export class Ui {
 
     showSummary(sum: SummaryMsg, localId: number): void {
         this.summaryOpen = true;
-        for (const s of [this.pause, this.settingsScreen, this.lobby, this.feedback]) s.classList.remove('open');
+        for (const s of [this.pause, this.settingsScreen, this.loadoutScreen, this.lobby, this.feedback]) s.classList.remove('open');
         if (this.typing) this.closeChat(false);
         this.result.replaceChildren();
         const card = h('div', 'card', '', this.result);

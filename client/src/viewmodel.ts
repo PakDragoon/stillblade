@@ -1,4 +1,5 @@
 import * as pc from 'playcanvas';
+import { SIGHTS, SIGHT_IRON } from '@shared/weapons';
 
 /**
  * First-person rigs: arms and hands holding one weapon, built by tools/blender/viewmodel.py into
@@ -17,7 +18,8 @@ import * as pc from 'playcanvas';
  * interpolation over the exported keys (every bone is keyed on every frame at 30 fps), with no allocation.
  *
  * The suppressor is hidden by shrinking the "sup" bone after each sample (no second mesh, no extra draw call); the
- * reload clips hide the magazine the same way while it is off screen.
+ * reload clips hide the magazine the same way while it is off screen. The rifle's optional sights (package M) are
+ * bones "sight_<SightId>" (one per SIGHTS entry but iron); every one but the mounted sight is shrunk the same way.
  */
 
 const P_POS = 0, P_ROT = 1, P_SCALE = 2;
@@ -76,6 +78,9 @@ export class VmRig {
     readonly muzzle: pc.GraphNode | null;
     readonly muzzleBare: pc.GraphNode | null;
     private readonly sup: pc.GraphNode | null;
+    /** Per sight (SIGHTS index): its bone, or null (iron sights, or a rig without that sight). */
+    private readonly sightBones: (pc.GraphNode | null)[];
+    private sight = SIGHT_IRON;
     private readonly variants = new Map<string, pc.Entity>();
     private suppressed = true;
     private variant = '';
@@ -99,6 +104,7 @@ export class VmRig {
             this.variants.set(r.entity.name, r.entity);
         }
         this.sup = e.findByName('sup');
+        this.sightBones = SIGHTS.map((d, i) => (i === SIGHT_IRON ? null : e.findByName(`sight_${d.id}`)));
         this.muzzle = e.findByName('muzzle');
         this.muzzleBare = e.findByName('muzzle_bare');
         for (const a of res.animations) {
@@ -136,6 +142,13 @@ export class VmRig {
         this.lastTime = -1;
     }
 
+    /** The sight mounted (index into SIGHTS); the others are shrunk away at the next pose. */
+    setSight(sight: number): void {
+        if (sight === this.sight) return;
+        this.sight = sight;
+        this.lastTime = -1;
+    }
+
     /** Muzzle point of the look in use. */
     activeMuzzle(): pc.GraphNode | null {
         return this.suppressed ? this.muzzle : this.muzzleBare;
@@ -151,6 +164,8 @@ export class VmRig {
         const ch = clip.channels;
         for (let i = 0; i < ch.length; i++) sampleChannel(ch[i], t);
         if (this.sup && !this.suppressed) this.sup.setLocalScale(HIDDEN, HIDDEN, HIDDEN);
+        const sb = this.sightBones;
+        for (let i = 0; i < sb.length; i++) if (sb[i] && i !== this.sight) sb[i]!.setLocalScale(HIDDEN, HIDDEN, HIDDEN);
     }
 }
 

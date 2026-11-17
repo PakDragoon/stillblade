@@ -324,6 +324,7 @@ export class Character {
     private knifeMi: pc.MeshInstance | null = null;
     private defenderKnife: pc.Entity | null = null;
     private suppressed = false;
+    private sight = 0;
     private readonly pitchBones: pc.GraphNode[] = [];
     private readonly pitchShare: number[] = [];
     private readonly crouchLean: number[] = [];
@@ -404,6 +405,7 @@ export class Character {
             for (let i = 0; i < WEAPONS.length; i++) {
                 const g = instantiateWeapon(w, WEAPON_MESH[WEAPONS[i].id], this.model.defenderMat);
                 g.setSuppressed(this.suppressed);
+                g.setSight(this.sight);
                 gs.addChild(g.entity);
                 this.guns.push(g.entity);
                 this.gunInstances.push(g);
@@ -419,6 +421,13 @@ export class Character {
             this.defenderKnife = dk.entity;
         }
         this.applyWeaponLook();
+    }
+
+    /** The rifle sight this player's current life uses (the roster's `sight`), drawn on their rifle. */
+    setSight(sight: number): void {
+        if (sight === this.sight) return;
+        this.sight = sight;
+        for (const g of this.gunInstances) g.setSight(sight);
     }
 
     /** The room's suppressed-weapons option: suppressors on both guns, or bare muzzles. */

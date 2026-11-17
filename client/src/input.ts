@@ -1,6 +1,7 @@
 import type { LoadoutInput } from '@shared/gun';
 import type { InputCmd } from '@shared/types';
 import { ACTIONS, bindings, defaultBindings, mouseInput, type ActionId, type BindingMap } from './bindings';
+import { buttonsConsistent, releaseMissingButtons } from './mouse-buttons';
 
 const BASE_SENSITIVITY = 0.0022; // radians per pixel of mouse movement at multiplier 1
 const PITCH_LIMIT = (89 * Math.PI) / 180;
@@ -42,6 +43,12 @@ export class Input {
     /** The bindings in use, replaced (not edited) when they change. */
     private b: BindingMap = defaultBindings();
     private bound = new Set<string>();
+    /**
+     * Whether this browser's `MouseEvent.buttons` agrees with its presses and releases: 0 not known yet,
+     * 1 yes (held buttons are reconciled with it on every mouse event), -1 no (never reconciled, so a
+     * browser reporting 0 inside pointer lock cannot cancel aim on every move).
+     */
+    private buttonsTrust = 0;
 
     /** Attack (any bound button or key). */
     get fire(): boolean {
@@ -60,18 +67,29 @@ export class Input {
         window.addEventListener('keyup', e => this.keys.delete(e.code));
         window.addEventListener('blur', () => this.keys.clear());
         document.addEventListener('mousedown', e => {
+            this.judgeButtons('mousedown', e);
+            this.reconcileButtons(e.buttons); // before the press: a button whose release was lost goes first
             if (!this.locked || this.suspended) return;
             const code = mouseInput(e.button);
             if (code === null) return;
             if (e.button !== 0 && e.button !== 2) e.preventDefault(); // middle-click scroll, side buttons going back
+            // A press of a button we still count as held proves its release was lost: release it first, so this
+            // press acts (in toggle mode it would otherwise be swallowed), whatever `buttons` says.
+            this.keys.delete(code);
             this.press(code);
         });
         document.addEventListener('mouseup', e => {
+            this.judgeButtons('mouseup', e);
             const code = mouseInput(e.button);
-            if (code === null) return;
-            if (this.locked && e.button !== 0 && e.button !== 2) e.preventDefault();
-            this.keys.delete(code);
+            if (code !== null) {
+                if (this.locked && e.button !== 0 && e.button !== 2) e.preventDefault();
+                this.keys.delete(code);
+            }
+            this.reconcileButtons(e.buttons);
         });
+        // Gaining or losing pointer lock: a press made while the mouse was free was never recorded, and a
+        // release made around the change may never arrive. Whatever is held now is stale.
+        document.addEventListener('pointerlockchange', () => releaseMissingButtons(this.keys, 0));
         document.addEventListener('auxclick', e => { if (this.locked) e.preventDefault(); });
         document.addEventListener('contextmenu', e => { if (this.locked) e.preventDefault(); });
         document.addEventListener('wheel', e => {
@@ -79,11 +97,24 @@ export class Input {
             this.wheelSteps += e.deltaY > 0 ? 1 : -1;
         }, { passive: true });
         document.addEventListener('mousemove', e => {
+            this.reconcileButtons(e.buttons);
             if (!this.locked || this.suspended) return;
             const k = BASE_SENSITIVITY * this.sensitivity * this.lookScale * (this.aim ? this.aimSensitivity : 1);
             this.yaw -= e.movementX * k;
             this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch - e.movementY * k * (this.invertY ? -1 : 1)));
         });
+    }
+
+    /** Learns from a press or release whether `buttons` can be trusted (see `buttonsTrust`). */
+    private judgeButtons(type: 'mousedown' | 'mouseup', e: MouseEvent): void {
+        if (this.buttonsTrust < 0) return;
+        const ok = buttonsConsistent(type, e.button, e.buttons);
+        if (ok !== null) this.buttonsTrust = ok ? 1 : -1;
+    }
+
+    /** Releases held mouse inputs the mouse no longer holds (the stuck-aim fix). Allocates nothing. */
+    private reconcileButtons(buttons: number): void {
+        if (this.buttonsTrust > 0) releaseMissingButtons(this.keys, buttons);
     }
 
     /** Resolves a new set of bindings; the next tick uses it. */

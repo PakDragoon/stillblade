@@ -209,6 +209,10 @@ body.no-stats #hud, body.no-stats #sb-info .ping { display: none; }
 #ui .optgrid.readonly .optfield { padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
 #ui .optrow { margin: 0 0 12px; }
 #ui .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+#ui .seg.stacked { grid-template-columns: 1fr; }
+#ui .loadout-note { margin: 12px 0 0; font-size: 13px; color: var(--dim); }
+#ui .loadout-note.pending { color: #ffd36b; }
+#ui .card.loadout { width: min(560px, calc(100vw - 32px)); }
 #ui button.segopt { display: grid; gap: 4px; text-align: left; padding: 10px 14px; background: transparent; }
 #ui button.segopt b { font-size: 15px; letter-spacing: .08em; text-transform: uppercase; }
 #ui button.segopt small { font: 500 12px/1.3 var(--face); letter-spacing: 0; color: var(--dim); }

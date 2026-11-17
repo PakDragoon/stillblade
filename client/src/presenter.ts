@@ -10,7 +10,7 @@ import type { CreatePresenter, CrosshairConfig, KillKind, LocalView, MatchView, 
 import { Character, CharLook, loadCharacterModel, makeSkinnedGhostMaterial, type CharacterModel } from './characters';
 import { TICK_RATE } from '@shared/constants';
 import { bindings } from './bindings';
-import { SLOT_COUNT, SLOT_KNIFE, WEAPONS, slotLabel, type WeaponId } from '@shared/weapons';
+import { SIGHT_IRON, SLOT_COUNT, SLOT_KNIFE, WEAPONS, isGunSlot, sightDef, slotLabel, type SightId, type WeaponId } from '@shared/weapons';
 import type { HitZone } from '@shared/zones';
 import {
     instantiateWeapon, loadWeaponModel, makeWeaponMaterial, WEAPON_MESH, type WeaponInstance, type WeaponModel
@@ -60,6 +60,17 @@ const AIM_SWAY = 0.2;
 const RELOAD_RETURN = 12;
 /** The spread ticks fade to this opacity when fully aimed (the dot stays). */
 const XHAIR_AIM_OPACITY = 0.15;
+
+/**
+ * Rifle sights (package M): height of each sight's optical axis above the grip, in metres (tools/blender/weapons.py
+ * RIFLE_SIGHTS `axis`; iron = the eye line of the rifle's aimed pose, VM_LOOKS.rifle.aim). Aimed, the gun is lowered
+ * by the difference from iron so the sight's centre sits on the screen centre. Re-point these for a new rifle model.
+ */
+const SIGHT_EYE: Record<SightId, number> = { iron: 0.226, reddot: 0.226, scope2x: 0.236 };
+/** The sight overlay (red dot reticle, scope ring) starts to show at this aim progress and is full at 1. */
+const SIGHT_OVERLAY_FROM = 0.55;
+/** From this aim progress the 2x scope's view is the overlay alone: the gun in first person is hidden. */
+const SCOPE_HIDE_GUN = 0.92;
 
 /**
  * First-person look of each defender weapon, by WeaponId (shared/weapons.ts). Positions are metres in
@@ -469,6 +480,19 @@ body.sb-lowhp #sb-low { display: block; }
     filter: drop-shadow(0 0 1px #000); }
 #crosshair.x-ring { width: calc(var(--s, 4px) * 3); height: calc(var(--s, 4px) * 3); background: none;
     margin: calc(var(--s, 4px) * -1.5) 0 0 calc(var(--s, 4px) * -1.5); border: 2px solid var(--c); box-shadow: 0 0 0 1px rgba(0,0,0,.55); box-sizing: border-box; }
+#sb-reddot { left: 50%; top: 50%; width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; border-radius: 50%; display: none;
+    opacity: 0; background: #ff3324; box-shadow: 0 0 3px 1px rgba(255,51,36,.85), 0 0 9px 3px rgba(255,51,36,.25); text-shadow: none; }
+#sb-scope { inset: 0; display: none; opacity: 0; text-shadow: none;
+    background: radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 0, rgba(0,0,0,0) 37vmin, rgba(0,0,0,.35) 40vmin,
+        rgba(0,0,0,.9) 41vmin, #000 42.5vmin, #000 100%); }
+#sb-scope i { position: absolute; left: 50%; top: 50%; background: rgba(0,0,0,.85); }
+#sb-scope i.h { width: 82vmin; height: 1px; margin: -.5px 0 0 -41vmin;
+    background: linear-gradient(to right, #000 0 30%, rgba(0,0,0,.85) 30% 47%, rgba(0,0,0,0) 47% 53%, rgba(0,0,0,.85) 53% 70%, #000 70% 100%); }
+#sb-scope i.v { width: 1px; height: 82vmin; margin: -41vmin 0 0 -.5px;
+    background: linear-gradient(to bottom, rgba(0,0,0,.85) 0 47%, rgba(0,0,0,0) 47% 53%, rgba(0,0,0,.85) 53% 70%, #000 70% 100%); }
+#sb-scope i.h.thick { height: 4px; margin-top: -2px; background: linear-gradient(to right, #000 0 30%, rgba(0,0,0,0) 30% 70%, #000 70% 100%); }
+#sb-scope i.v.thick { width: 4px; margin-left: -2px; background: linear-gradient(to bottom, rgba(0,0,0,0) 0 70%, #000 70% 100%); }
+#sb-scope i.dot { width: 3px; height: 3px; margin: -1.5px 0 0 -1.5px; border-radius: 50%; background: #c8241b; }
 #sb-xhair { mix-blend-mode: normal; } #sb-xhair i { background: var(--c, #e8eaed); box-shadow: 0 0 0 1px rgba(0,0,0,.5); }
 #sb-banner { left: 50%; top: 22%; transform: translateX(-50%); text-align: center; display: none; white-space: nowrap; }
 #sb-banner div:empty { display: none; }
@@ -775,6 +799,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             if (r.look !== look) setLook(r, look);
             if (!r.char && charModel) attachCharacter(r, charModel);
             const ch = r.char;
+            // The sight on their rifle: the one their current life uses (roster), iron until told.
+            if (ch) ch.setSight(rosterSight.get(v.id) ?? SIGHT_IRON);
             // The character also shows a brief death; boxes simply vanish when dead.
             let visible = ch ? ch.update(dt, v) : v.alive;
             if (look === Look.EnemyGhost) {
@@ -880,6 +906,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             const v = vmGuns[i];
             const g = instantiateWeapon(m, WEAPON_MESH[WEAPONS[i].id], vmMat, VM);
             g.setSuppressed(suppressedLook);
+            g.setSight(vmSight);
             v.model = g;
             v.root.addChild(g.entity);
             if (v.rig) { g.entity.enabled = false; continue; } // the arms rig arrived first and carries the gun
@@ -920,6 +947,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                 v.rig = rig;
                 v.root.addChild(rig.root);
                 rig.setSuppressed(suppressedLook);
+                rig.setSight(vmSight);
                 rigMuzzle(v);
                 const fx = SLOT_LOOKS[i].fx;
                 v.flash.setLocalScale(0.05 * fx, 0.05 * fx, 0.085 * fx);
@@ -980,6 +1008,11 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     let kickSlot = 0;
     /** A defender has the knife drawn (slot SLOT_KNIFE): the knife viewmodel instead of a gun. */
     let vmKnifeHeld = false;
+    /** The rifle sight drawn in first person (LocalView.sight). */
+    let vmSight = SIGHT_IRON;
+    const applyVmSight = (): void => {
+        for (const v of vmGuns) { v.rig?.setSight(vmSight); v.model?.setSight(vmSight); }
+    };
 
     /** Draw offset weight 0..1 for the defender knife (0 for ghosts and once drawn). */
     let knifeDraw = 0;
@@ -1004,7 +1037,11 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             vmKnifeHeld = knifeHeld;
             swingT = -1; // a switch cancels a swing in progress (the rule cancels its windup too)
         }
-        gun.enabled = localAlive && defender && !knifeHeld;
+        if (defender && local.sight !== vmSight) { vmSight = local.sight; applyVmSight(); }
+        // Fully into a 2x scope the view is the scope overlay alone (presenter HUD): no gun in front of it.
+        const scoped = defender && vmSight !== SIGHT_IRON && sightDef(vmSight).id === 'scope2x' && isGunSlot(local.weapon) &&
+            WEAPONS[local.weapon].takesSights && local.aim >= SCOPE_HIDE_GUN;
+        gun.enabled = localAlive && defender && !knifeHeld && !scoped;
         knife.enabled = localAlive && (!defender || knifeHeld);
         if (defender && !knifeHeld) {
             // The weapon in hand changes the moment a switch starts: the old one simply disappears.
@@ -1054,6 +1091,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             const a = a0 * a0 * (3 - 2 * a0) * (1 - w);
             const ha = 1 - a;
             const hip = look.hip, aim = look.aim, rl = look.reload, dr = look.draw;
+            // A taller sight lowers the aimed gun so its optical centre, not the iron line, meets the screen centre.
+            const sightDrop = WEAPONS[slot].takesSights ? SIGHT_EYE[sightDef(vmSight).id] - SIGHT_EYE.iron : 0;
             // Switch: rises from below, rotated, easing into place as draw falls from 1 to 0.
             const d0 = local.draw > 0 ? Math.min(1, local.draw) : 0;
             const d = d0 * d0;
@@ -1063,7 +1102,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             const sy = Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6 * s;
             gun.setLocalPosition(
                 hip[0] * ha + aim[0] * a + sx + rl[0] * rw + dr[0] * d,
-                hip[1] * ha + aim[1] * a + sy + kick.kick[0] * e + rl[1] * rw + 0.012 * jolt + dr[1] * d,
+                hip[1] * ha + (aim[1] - sightDrop) * a + sy + kick.kick[0] * e + rl[1] * rw + 0.012 * jolt + dr[1] * d,
                 hip[2] * ha + aim[2] * a + kick.kick[1] * e + rl[2] * rw + dr[2] * d);
             gun.setLocalEulerAngles(
                 hip[3] * ha + aim[3] * a + kick.kick[2] * e + sy * 120 + rl[3] * rw + 5 * jolt + dr[3] * d,
@@ -1283,6 +1322,13 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     style.textContent = HUD_CSS;
     document.head.appendChild(style);
     const crosshair = document.getElementById('crosshair');
+    // Rifle sight overlays (package M): DOM over the canvas, so no draw call. Made first: the rest of the HUD sits above.
+    const scopeEl = div('sb-scope');
+    for (const c of ['h thick', 'v thick', 'h', 'v', 'dot']) scopeEl.appendChild(document.createElement('i')).className = c;
+    const redDotEl = div('sb-reddot');
+    const OVERLAY_OPACITY: string[] = [];
+    for (let i = 0; i <= 20; i++) OVERLAY_OPACITY.push((i / 20).toFixed(2));
+    let shownOverlay = '', shownOverlayOp = -1, shownXhairHidden = false;
     const vignette = div('sb-vignette');
     const stats = div('sb-stats');
     // "You have the bomb", above the visibility meter (ghost carriers only).
@@ -1412,6 +1458,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     // Roster, copied (the caller may reuse its array).
     const roster: RosterEntry[] = [];
     const names = new Map<number, string>();
+    /** Each player's active rifle sight (RosterEntry.sight), for drawing it on their gun. */
+    const rosterSight = new Map<number, number>();
     let rosterVersion = 0;
     const playerName = (id: number): string => names.get(id) ?? `Player ${id}`;
 
@@ -1510,7 +1558,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         if (deadShown !== shownDeadEl) { shownDeadEl = deadShown; deadEl.style.display = deadShown ? 'block' : 'none'; }
         if (local.alive !== shownAlive) {
             shownAlive = local.alive;
-            if (crosshair) crosshair.style.visibility = local.alive ? '' : 'hidden';
+            if (crosshair) crosshair.style.visibility = local.alive && !shownXhairHidden ? '' : 'hidden';
             shownDeadKey = NaN;
             if (local.alive && shownRecap) { shownRecap = false; recapEl.style.display = 'none'; }
         }
@@ -1620,8 +1668,37 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         }
         const op = Math.round(Math.min(1, Math.max(0, local.aim)) * 20);
         if (op !== shownXhairOp) { shownXhairOp = op; xhairEl.style.opacity = XHAIR_OPACITY[op]; }
+        updateSightOverlay(local);
         const gap = 3 + Math.round(Math.tan(Math.max(0, local.spread)) * pxPerTan);
         if (gap !== shownGap) { shownGap = gap; xhairEl.style.setProperty('--g', `${gap}px`); }
+    };
+
+    /**
+     * The mounted rifle sight's overlay while aiming the rifle: the red dot's reticle or the 2x scope's ring and
+     * darkened edge, fading in with aim progress; the hip crosshair and spread ticks hide once it is half in.
+     */
+    const updateSightOverlay = (local: LocalView): void => {
+        const rifle = local.alive && local.team === 'defenders' && isGunSlot(local.weapon) && WEAPONS[local.weapon].takesSights;
+        const kind = rifle && local.sight !== SIGHT_IRON ? sightDef(local.sight).id : '';
+        const f = kind ? (Math.min(1, Math.max(0, local.aim)) - SIGHT_OVERLAY_FROM) / (1 - SIGHT_OVERLAY_FROM) : 0;
+        const op = f > 0 ? Math.round(f * 20) : 0;
+        const show = op > 0 ? kind : '';
+        if (show !== shownOverlay) {
+            shownOverlay = show;
+            redDotEl.style.display = show === 'reddot' ? 'block' : 'none';
+            scopeEl.style.display = show === 'scope2x' ? 'block' : 'none';
+            shownOverlayOp = -1;
+        }
+        if (show && op !== shownOverlayOp) {
+            shownOverlayOp = op;
+            (show === 'reddot' ? redDotEl : scopeEl).style.opacity = OVERLAY_OPACITY[op];
+        }
+        const hide = op >= 10;
+        if (hide !== shownXhairHidden) {
+            shownXhairHidden = hide;
+            if (crosshair) crosshair.style.visibility = local.alive && !hide ? '' : 'hidden';
+            xhairEl.style.visibility = hide ? 'hidden' : '';
+        }
     };
 
     const updateMatchBar = (local: LocalView, match: MatchView): void => {
@@ -1840,10 +1917,12 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         roster(players: readonly RosterEntry[]): void {
             roster.length = 0;
             names.clear();
+            rosterSight.clear();
             for (let i = 0; i < players.length; i++) {
                 const p = players[i];
                 roster.push({ ...p });
                 if (p.name) names.set(p.id, p.name);
+                rosterSight.set(p.id, p.sight ?? SIGHT_IRON);
             }
             rosterVersion++;
             aliveCount.ghosts = aliveCount.defenders = totalCount.ghosts = totalCount.defenders = 0;

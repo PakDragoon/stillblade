@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TICK_DT, TICK_RATE } from '../../shared/constants';
-import { MELEE_SLASH, MELEE_SWING, copyLoadout, createLoadout, resetLoadout, sameLoadout, stepLoadout } from '../../shared/gun';
+import { MELEE_SLASH, MELEE_SWING, aimFraction, copyLoadout, createLoadout, resetLoadout, sameLoadout, stepLoadout } from '../../shared/gun';
 import {
     CARRY_DROPPED, CARRY_PICKED, copyCarry, createCarry, resetCarry, restingPoint, sameCarry, stepCarry
 } from '../../shared/bomb';
@@ -45,14 +45,30 @@ interface Pending extends NetCmd { live: boolean; armed: boolean }
  * replayed on every snapshot), talking to the real server through the binary wire format with a
  * fixed one-way delay each way. Every snapshot whose replay disagrees with the prediction counts.
  */
-function playThrough(opts: { seed: number; ticks: number; upTicks: number; downTicks: number; seqJump?: () => number }) {
+function playThrough(opts: {
+    seed: number; ticks: number; upTicks: number; downTicks: number; seqJump?: () => number;
+    /**
+     * Rifle sights (package M): the first is chosen at join (join query), then every `lifeTicks` the client
+     * sends the next one as a `sight` message (mid-life, through the JSON wire) and the server kills it a
+     * moment later; it respawns 3 s after (warmup) with the new sight mounted.
+     */
+    sights?: number[]; lifeTicks?: number;
+}) {
     const game = new Game(map, { rounds: false });
     // A still ghost far away, so the defender has a team to play against.
     const ghostId = game.join({ send: () => {} });
     const down: { at: number; wire: Wire }[] = [];
     const up: { at: number; wire: Wire }[] = [];
     let tick = 0;
-    const id = game.join({ send: (m: ServerMsg) => down.push({ at: tick + opts.downTicks, wire: encodeServer(m) }) });
+    const sights = opts.sights ?? [];
+    const id = game.join({ send: (m: ServerMsg) => down.push({ at: tick + opts.downTicks, wire: encodeServer(m) }) }, '',
+        sights.length ? { sight: sights[0] } : {});
+    // Test-only reach into the server's damage rule, to end a life on cue.
+    const kill = (): void => {
+        (game as unknown as { damage(v: unknown, amount: number, by: unknown, kind: 'knife'): boolean })
+            .damage(game.players.get(id), 1000, game.players.get(ghostId), 'knife');
+    };
+    let sightIndex = 0, lifeAt = 0, spawnHeardAt = -1e9;
 
     const curr = createPlayerState([0, 0, 0]);
     const loadout = createLoadout();
@@ -61,7 +77,9 @@ function playThrough(opts: { seed: number; ticks: number; upTicks: number; downT
     let alive = false, started = false, yaw = 0, seq = 0, ghostSeq = 0;
     const result = {
         snapshots: 0, gunMismatches: 0, knifeMismatches: 0, posMismatches: 0, shots: [0, 0], switches: 0, reloads: 0, aimedShots: 0,
-        swings: 0, slashes: 0, knifeSnapshots: 0
+        swings: 0, slashes: 0, knifeSnapshots: 0,
+        /** Snapshots of a living defender fully aimed with the rifle, per active sight; and lives started. */
+        aimedBySight: [0, 0, 0], spawns: 0, spawnSights: [] as number[]
     };
 
     const rand = rng(opts.seed);
@@ -82,7 +100,10 @@ function playThrough(opts: { seed: number; ticks: number; upTicks: number; downT
                 copyPlayerState(curr, createPlayerState(msg.pos));
                 yaw = Math.fround(msg.yaw);
                 alive = true;
-                resetLoadout(loadout);
+                resetLoadout(loadout, msg.sight);
+                spawnHeardAt = tick;
+                result.spawns++;
+                result.spawnSights.push(msg.sight);
             } else if (msg.type === 'snap') {
                 result.snapshots++;
                 alive = msg.me.alive;
@@ -102,17 +123,29 @@ function playThrough(opts: { seed: number; ticks: number; upTicks: number; downT
                 if (!sameLoadout(loadout, before)) result.gunMismatches++;
                 if (!sameKnifeState(loadout.knife, before.knife)) result.knifeMismatches++;
                 if (loadout.slot === SLOT_KNIFE) result.knifeSnapshots++;
+                if (loadout.slot === SLOT_RIFLE && aimFraction(loadout) === 1) result.aimedBySight[loadout.sight]++;
                 if (curr.pos[0] !== px || curr.pos[1] !== py || curr.pos[2] !== pz) result.posMismatches++;
             }
         }
 
         // Like the real client, which starts its simulation only once the welcome and spawn are in.
-        if (!started) { if (!alive) continue; started = true; }
+        if (!started) { if (!alive) continue; started = true; lifeAt = tick; }
+
+        // Sights: choose the next one mid-life, then die a little later and come back with it.
+        if (sights.length && opts.lifeTicks) {
+            const age = tick - lifeAt;
+            if (alive && age === opts.lifeTicks) {
+                sightIndex = (sightIndex + 1) % sights.length;
+                up.push({ at: tick + opts.upTicks, wire: encodeClient({ type: 'sight', sight: sights[sightIndex] }) });
+            }
+            if (alive && age === opts.lifeTicks + 30) kill();
+            if (!alive && age > opts.lifeTicks) lifeAt = tick + 1; // counts again from the respawn
+        }
 
         // A restless player: bursts and taps, knife swings, switches by key (1, 2, 3, and a slot that does not
         // exist) and by Q, aiming, reloads, moving about.
         if (fireHold > 0) fireHold--; else if (rand() < 0.04) fireHold = rand() < 0.5 ? 1 + Math.floor(rand() * 3) : Math.floor(rand() * 60);
-        if (aimHold > 0) aimHold--; else if (rand() < 0.01) aimHold = Math.floor(rand() * 90);
+        if (aimHold > 0) aimHold--; else if (rand() < (sights.length ? 0.03 : 0.01)) aimHold = Math.floor(rand() * 90); // sight runs aim more
         if (moveHold > 0) moveHold--; else {
             moveHold = Math.floor(rand() * 40);
             forward = Math.floor(rand() * 3) - 1;
@@ -121,10 +154,17 @@ function playThrough(opts: { seed: number; ticks: number; upTicks: number; downT
         }
         yaw = Math.fround(yaw + (rand() - 0.5) * 0.02);
         const r = rand();
+        // Dead (as far as the client knows): hands off everything, like the scripts around phase edges. The server
+        // simulates commands sent just before the client hears of its respawn; idle ones step nothing.
+        // Just respawned: also still for one round trip. A warmup respawn has a known edge (HANDOFF.md, Known
+        // problems): the server has already landed the new body with those idle commands while the client starts
+        // from the airborne spawn state, so the first move after it is corrected once. Not a sight rule.
+        const settling = tick - spawnHeardAt < opts.upTicks + opts.downTicks + 2 && result.spawns > 1;
+        if (!alive || settling) { fireHold = 0; aimHold = 0; moveHold = 0; forward = 0; right = 0; crouch = false; }
         const cmd: Pending = {
-            seq, forward, right, yaw, pitch: Math.fround(0.5 + rand() * 0.2), jump: rand() < 0.01, walk: rand() < 0.2, crouch,
-            fire: fireHold > 0, use: false, reload: rand() < 0.01,
-            slot: r < 0.006 ? 1 : r < 0.012 ? 2 : r < 0.018 ? 3 : r < 0.019 ? 7 : 0, swap: rand() < 0.005, aim: aimHold > 0,
+            seq, forward, right, yaw, pitch: Math.fround(0.5 + rand() * 0.2), jump: alive && !settling && rand() < 0.01, walk: rand() < 0.2, crouch,
+            fire: fireHold > 0, use: false, reload: alive && rand() < 0.01,
+            slot: !alive ? 0 : r < 0.006 ? 1 : r < 0.012 ? 2 : r < 0.018 ? 3 : r < 0.019 ? 7 : 0, swap: alive && rand() < 0.005, aim: aimHold > 0,
             drop: seq % 97 === 0, viewTime: game.now, live: alive, armed: true
         };
         seq += opts.seqJump ? opts.seqJump() : 1;
@@ -141,8 +181,9 @@ function playThrough(opts: { seed: number; ticks: number; upTicks: number; downT
         }
         up.push({ at: tick + opts.upTicks, wire: encodeClient({ type: 'cmd', cmd }) });
         while (up.length && up[0].at <= tick) {
-            const msg = decodeClient(up.shift()!.wire as Uint8Array);
-            game.handleCmd(id, (msg as { cmd: NetCmd }).cmd);
+            const msg = decodeClient(up.shift()!.wire);
+            if (msg.type === 'cmd') game.handleCmd(id, msg.cmd);
+            else game.handleMessage(id, msg);
         }
     }
     return result;
@@ -183,6 +224,45 @@ describe('client prediction of the loadout through the wire', () => {
         expect(r.swings).toBeGreaterThan(3);
         expect(r.gunMismatches).toBe(0);
         expect(r.knifeMismatches).toBe(0);
+    });
+});
+
+describe('client prediction with every rifle sight (package M)', () => {
+    it('never disagrees with any sight, or when the sight changes across respawns', () => {
+        // Iron, red dot, 2x scope, and back: each life chooses the next mid-life and gets it at the respawn.
+        for (const [seed, upTicks, downTicks] of [[5, 4, 5], [3, 9, 9], [4, 0, 15], [2, 1, 1]]) {
+            const r = playThrough({ seed, ticks: 150 * TICK_RATE, upTicks, downTicks, sights: [0, 1, 2], lifeTicks: 20 * TICK_RATE });
+            expect(r.spawns).toBeGreaterThanOrEqual(5);
+            // Every life after the first mounts the sight chosen during the life before it.
+            for (let i = 0; i < r.spawnSights.length; i++) expect(r.spawnSights[i]).toBe([0, 1, 2][i % 3]);
+            for (let sight = 0; sight < 3; sight++) expect(r.aimedBySight[sight]).toBeGreaterThan(15);
+            expect(r.shots[SLOT_RIFLE]).toBeGreaterThan(30);
+            expect(r.aimedShots).toBeGreaterThan(5);
+            expect(r.gunMismatches).toBe(0);
+            expect(r.knifeMismatches).toBe(0);
+            expect(r.posMismatches).toBe(0);
+        }
+    });
+
+    it('never disagrees with each sight held for a whole session', () => {
+        for (let sight = 0; sight < 3; sight++) {
+            const r = playThrough({ seed: 7 + sight, ticks: 40 * TICK_RATE, upTicks: 4, downTicks: 5, sights: [sight] });
+            expect(r.spawnSights).toEqual([sight]);
+            expect(r.aimedBySight[sight]).toBeGreaterThan(30);
+            expect(r.gunMismatches).toBe(0);
+            expect(r.posMismatches).toBe(0);
+        }
+    });
+
+    it('never disagrees across respawns when the client jumps its command numbers', () => {
+        const jumpy = rng(13);
+        const r = playThrough({
+            seed: 6, ticks: 90 * TICK_RATE, upTicks: 4, downTicks: 5, sights: [2, 0, 1], lifeTicks: 15 * TICK_RATE,
+            seqJump: () => 1 + Math.floor(jumpy() * 1000)
+        });
+        expect(r.spawns).toBeGreaterThanOrEqual(3);
+        expect(r.gunMismatches).toBe(0);
+        expect(r.posMismatches).toBe(0);
     });
 });
 

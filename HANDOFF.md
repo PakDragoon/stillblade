@@ -1,6 +1,6 @@
 # Stillblade — handoff
 
-Last rewritten 2026-11-15; **status updated 2026-11-17: everything through wave 4 is on `main` and pushed (github.com/PakDragoon/stillblade): packages A to F (waves 1 to 3), G (graphics tiers and effects), L (menus and settings redesign, scoreboard ping column) and H (recorded sounds). Protocol 14, 415 tests, typecheck clean.** The live site rebuilds from `main` on every push. **The game server on the owner's PC must be restarted from `main` to match protocol 14** (an old server refuses the new client; on 2026-11-17 its `/health` answered 502, meaning it was not running). **Nothing from waves 3 and 4 has been played with a mouse, seen on a real GPU or listened to**: wave 3's animations were judged from Blender renders, wave 4 from headless Chrome (software GL) screenshots and measured sound levels. Older sections below describe each package as it was when built, so some numbers in them (test counts, protocol versions, "not on `main`") are historical; **"What to do next" near the end is the current summary, read it first.** The owner's live server holds port 8080 on his PC, so `npm run dev` needs that server stopped first.
+Last rewritten 2026-11-15; **status updated 2026-11-17 (package M part 1, rifle sights and the stuck-aim fix, is built on branch `claude/sights-aimfix-f78887`, protocol 15, not merged; see its section at the end): everything through wave 4 is on `main` and pushed (github.com/PakDragoon/stillblade): packages A to F (waves 1 to 3), G (graphics tiers and effects), L (menus and settings redesign, scoreboard ping column) and H (recorded sounds). Protocol 14, 415 tests, typecheck clean.** The live site rebuilds from `main` on every push. **The game server on the owner's PC must be restarted from `main` to match protocol 14** (an old server refuses the new client; on 2026-11-17 its `/health` answered 502, meaning it was not running). **Nothing from waves 3 and 4 has been played with a mouse, seen on a real GPU or listened to**: wave 3's animations were judged from Blender renders, wave 4 from headless Chrome (software GL) screenshots and measured sound levels. Older sections below describe each package as it was when built, so some numbers in them (test counts, protocol versions, "not on `main`") are historical; **"What to do next" near the end is the current summary, read it first.** The owner's live server holds port 8080 on his PC, so `npm run dev` needs that server stopped first.
 
 **If you are a new session:** this file tells you what exists, what has and has not been verified, the rules that must not be broken, and how the owner wants work done. `ROADMAP.md` tells you what to build next and what is already decided. Read both before changing anything. `DEPLOY.md` covers hosting. You need nothing else: no memory files or earlier conversations are assumed.
 
@@ -183,6 +183,7 @@ Built 2026-11-16 on branch `claude/bots-practice-046461` (from `wave-2`), protoc
 - **The bare SMG has a short generated barrel stub** (`tools/blender/weapons.py`): the source model's suppressor is integral and the receiver ends flush without it. The stub sits inside the suppressor's collar, so the suppressed look is unchanged (44 hidden triangles more).
 - **No per-zone statistics.** Only `headshots` exists (now counted by zone); arms and legs hits are not counted separately, because the result card (package B's) would need a change to show them.
 - (Fixed by package C: only the bomb carrier can plant.)
+- **Warmup respawn edge (found in package M, not fixed).** A dead player's client keeps sending commands; the server simulates the ones it receives after the respawn, while the client starts its prediction from the fresh spawn state when the `spawn` message arrives. A player who holds movement keys or aim across a warmup respawn gets one small correction on the first snapshot (position, or the loadout's aim counter). Round starts are not affected (the freeze roots everyone). The prediction tests keep still around respawns for this reason.
 - **The scripted bot (`tools/bot.ts`) does not fight.** It walks, strafes and can hold fire; it is a test tool, not an opponent. Real opponents are the server bots of package E.
 
 ## Running it
@@ -374,6 +375,7 @@ Warehouse's lightmap on the GPU grows from about 48 MB to 85 MB with mipmaps (th
 
 Follow `ROADMAP.md`. **State on 2026-11-17, when the owner moved to a new session:** everything through wave 4 is built, reviewed, merged into `main` and pushed: waves 1 to 3 (packages A to F), G (graphics tiers and effects), L (menus and settings redesign plus a scoreboard ping column, protocol 14) and H (recorded sounds). 415 tests, protocol 14. No build session is running and no branch is waiting for review; the old worktrees and branches under `.claude/worktrees/` are all merged and can be deleted when the owner says so. **The game server on the owner's PC must be restarted from `main` to match protocol 14** (start command under Hosting).
 
+- **Package M part 1 (2026-11-17, branch `claude/sights-aimfix-f78887`, not merged, protocol 15):** rifle sights (iron, 1x red dot, 2x scope) chosen in a Loadout page and mounted at the next spawn, and the stuck-aim fix. Needs review (shared and protocol diffs line by line) before merge; part 2 waits for the owner's downloads. See "Package M part 1" below.
 - **Recommended next step:** the owner plays and listens to waves 3 and 4 before any new package is built; his findings come first and will likely change the briefs for K, I and J.
 - **How wave 4 was built (it worked; repeat it):** the main session started each build with a self-contained brief, in its own worktree, with no Browser pane; builds checked their screens with headless Chrome driven by script on scratch ports (8090 and up for the server, 5190 and up for Vite; `tools/graphics-shots.mjs` and `tools/sound-check.mjs` are examples). Follow-ups went to the same build session. Parallel packages were told which files the other owned and merged simulation-side first.
 - **Downloads from kenney.nl cannot be scripted** (the site answers 403 and build sessions must not work around it): the owner downloads packs by hand and unzips them into the git-ignored `tools/audio-source/` (one folder per pack). The five audio packs he fetched on 2026-11-17 are in `tools/audio-source/` of the main checkout (copied from the package H worktree), so `node tools/process-audio.mjs` can be re-run there; a fresh worktree does not have them.
@@ -493,3 +495,92 @@ If a sound is too loud or quiet, the knob is `SAMPLE_GAIN` in `client/src/audio-
 - Loading inside a real match was not timed; the test page's own engine loaded all 53 files (checked by script), and the game boots with no console errors at `?auto=1` against a scratch server. The game's own `audio` instance reaching "53 of 53" in a live match was not checked.
 - Level numbers come from an offline render of one event at a time at the listener's feet, standing, straight ahead; many overlapping sounds and the player's volume sliders were not measured.
 - Voice stealing (24 voices) was left unchanged; recorded sounds hold a voice only as long as the sample (0.1 to 2 s).
+
+## Package M part 1 (rifle sights and the stuck-aim fix) in detail
+
+Built 2026-11-17 on branch `claude/sights-aimfix-f78887` (from `main` at `5a54bda`); **not merged**. **Protocol 15**
+(the server and client must be updated together), 447 tests (32 new), typecheck clean. Part 2 (the realistic AK-103,
+pistol, knife and real sight models) waits for the owner's downloads. Screenshots and how they were made:
+`docs/review/sights/README.md` (headless Chrome, software GL, scratch ports 8092 and 5192).
+
+**Stuck aim (`client/src/input.ts`, `client/src/mouse-buttons.ts`).** The cause was never reproduced (no real mouse).
+What reading the code found:
+- Hold mode: aim is "Mouse2 is in the held set". If the browser never delivers the `mouseup` (pointer lock gained or
+  lost mid-press, a native menu taking the release, focus moving between press and release), Mouse2 stays in the set
+  and aim stays on **until the next right-click and release** (the press itself was ignored because the button already
+  counted as held). This matches "sometimes stays stuck".
+- Toggle mode: the same lost release made the next press do nothing (swallowed toggle).
+- Nothing else latches it: `releaseAll` (every menu, the chat box, suspension) clears held buttons and toggles; a
+  spawn clears toggles; `blur` clears held keys; keys are released on `keyup` wherever focus is; the simulation takes
+  aim fresh from every command and the presenter from the predicted aim counter.
+- Fix: every `mousedown`, `mouseup` and `mousemove` reconciles the held `Mouse0`..`Mouse4` with `MouseEvent.buttons`
+  (`releaseMissingButtons`; note `buttons` bits are 1 left, 2 right, 4 middle, 8 back, 16 forward, not `button`'s
+  order), and `pointerlockchange` releases every held mouse button. Reconciling starts only once the browser has shown a
+  `mousedown`/`mouseup` whose `buttons` agrees with it, so a browser that reports `buttons` as 0 inside pointer lock can
+  never cancel aim on every move. A press of a button still counted as held is treated as release then press. No
+  allocation per event (`mouseInput` no longer builds a string per event). Tests: `client/src/mouse-buttons.test.ts`.
+
+**Sights: the rule (`shared/weapons.ts`, `shared/gun.ts`).**
+- One table, `SIGHTS`: iron 1.3x zoom and 12 commands to aim in, 1x red dot 1.4x and 12, 2x scope 2.0x and 16.
+  **Starting values, untuned** (the rifle's old 1.5x is gone; iron is now 1.3x as the brief asked). Only a gun with
+  `takesSights` (the rifle) uses them; the pistol keeps its own aim (1.2x, 8). Spread, recoil and their aim
+  multipliers stay per weapon. Mouse look while aimed still scales by the zoom.
+- `LoadoutState.sight` is the mounted sight. It is set **only** by `resetLoadout(l, sight)` at a spawn and never by a
+  command; it travels as one byte in the self snapshot and is compared by `sameLoadout`. Aim time is
+  `adsTicksOf(slot, sight)`, used by `stepLoadout` and `aimFraction`; zoom is `adsZoomOf`.
+- Server (`server/src/game.ts`): `Player.sightPending` is the latest choice (join query `sight=N`, cleaned by
+  `cleanSight`, so the very first spawn already uses it; then `{type:'sight', sight}` messages). `spawn()` mounts it.
+  A choice mid-life changes nothing until the next spawn and sends nothing (repeating it is harmless; the normal
+  message credit limit applies). Bots never ask, so they use iron sights (a `sight` message for a bot is ignored).
+- Wire (protocol 15): self snapshot loadout block 5 to 6 bytes (`sight` after `trigger`); `spawn` gains `sight` (the
+  client predicts with it until the first snapshot); `RosterEntry.sight` (the active sight, for drawing it on that
+  player's gun; no position, nothing `knowsAbout` withholds; the roster is re-sent at the end of a tick in which a
+  spawn mounted a different sight); new client message `sight` (`decodeClient` takes only an integer 0..2).
+- `server/src/prediction.test.ts`: new runs with every sight held for a whole session, and with the sight changing
+  mid-life and dying 0.5 s later, every life (iron, red dot, scope, round again), at four delays and with jumping
+  command numbers: zero disagreements. In those runs the script keeps still from death until one round trip after it
+  hears of the respawn (see Known problems, the warmup respawn edge). Server rule tests: `server/src/sights.test.ts`.
+
+**Sights: what you see.**
+- Loadout page (`client/src/ui.ts`, package L's panel style, `segmented` stacked): from the home menu ("Loadout",
+  hint "Rifle sight: ...") and from the pause menu (a Loadout screen, Back or Esc returns to the pause menu). Three
+  choices, one line each. Saved in `localStorage` `sb-loadout` as `{"sight":"reddot"}` (by id, so reordering the table
+  never swaps a choice; `client/src/loadout.ts`, tested). In a match the note says "Mounted on your rifle now" or
+  "Applies at your next spawn. This life keeps the ...".
+- `main.ts` puts the choice in the join query and sends a `sight` message after the welcome and on every change.
+- Presenter (`presenter-api.ts` first: `LocalView.sight`, and `RosterEntry.sight` documented on `roster`): while the
+  rifle is aimed with a red dot, a red reticle at the screen centre; with the 2x scope, a scope ring with a dark edge
+  and a thin duplex reticle. Both are DOM elements over the canvas (no draw call), fade in from 55 % aim, and hide the
+  hip crosshair and spread ticks once half in. Iron sights keep the old crosshair behaviour. The aimed rifle is lowered
+  by the sight's optical axis height minus the iron line (`SIGHT_EYE` in `presenter.ts`: 0.226 m iron and red dot,
+  0.236 m scope), and fully into the 2x scope (92 % aim) the first-person gun is hidden: the overlay is the view.
+- Models (stand-ins, generated, nothing downloaded; `tools/blender/weapons.py` `RIFLE_SIGHTS`): `gun_sight_reddot`
+  (a short tube red dot on a low mount, 188 triangles) and `gun_sight_scope2x` (a scope with bells and turrets on two
+  rings, 736 triangles), children of `gun` in `weapons.glb`. Third person (`client/src/weapons.ts`): every suppressor
+  and sight combination is merged into one mesh at load (`looks`, 6 for the rifle), so a gun is still one draw call;
+  `Character.setSight` from the roster. First person (`tools/blender/viewmodel.py`, rifle rig rebuilt): bones
+  `sight_reddot` and `sight_scope2x` follow the gun in both clips; `VmRig.setSight` shrinks the ones not mounted like
+  the suppressor. Still one skinned mesh (`viewmodel_rifle.glb` 336 to 395 KB, 3,486 triangles). Pistol and knife
+  rigs and `character.glb` were not rebuilt. Rebuilt with the sources in the main checkout's git-ignored
+  `tools/blender/source-art/`; `weapons.py` was first checked to reproduce the shipped `weapons.glb` byte for byte.
+- **For part 2 (re-pointing):** a new rifle needs nodes named `gun_sight_<SightId>` (or bones `sight_<SightId>` in its
+  rig) and the optical axis heights in `SIGHT_EYE`; the table and every rule are model-independent.
+
+**Measured (headless, `docs/review/sights/report.json`):** aim counter 12 / 12 / 16 when fully aimed; field of view
+60.2 / 56.6 / 41.3 degrees; draw calls with other players hidden 9 at the hip with every sight (a sight costs no draw
+call), fully aimed 9 / 9 / 7.
+
+**Decisions taken on my own judgment:** the join query also carries the sight (so a player's first life already has
+it; the brief named only the message); the active sight travels both in the `spawn` message and in the snapshot byte;
+the roster is re-sent only when a spawn changes someone's sight; the sight is saved by id, not index; the iron sight
+also sets the rifle's own `adsTicks`/`adsZoom` (for code with no loadout); the red dot's axis sits on the iron line so
+its aimed pose does not move; the 2x scope hides the gun when fully in; the overlays start at 55 % aim; the pause menu
+got a "Loadout" button between Resume and Settings.
+
+**Not verified:** anything with a real mouse or in a real browser window (so the stuck-aim fix is untested against the
+real fault, which was never reproduced; `buttons` behaviour inside pointer lock was not checked on Chrome, Firefox or
+Safari); how the zoom amounts and aim-in times feel; whether the reticle and ring read well on a real screen and GPU;
+the sights in motion (reload with a sight mounted, switching, sway, kick); third-person sights on moving or aiming
+players (only standing scripted players were seen) and whether the scope clips the helmet in some poses; the
+Loadout page by keyboard only; a sight change through a real death in a real round (the server rule and the respawn
+are tested in-process; the browser run changed it mid-life and checked the note and that the mounted sight stayed).

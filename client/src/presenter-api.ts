@@ -105,9 +105,17 @@ export interface LocalView {
     draw: number;
     /**
      * Aim down sights 0 (hip) to 1 (fully aimed), smooth between ticks. The game core already narrows the
-     * camera's field of view by it; the presenter brings the weapon to the eye line and may shrink the crosshair.
+     * camera's field of view by it (by the zoom of the gun and, for the rifle, of its sight); the presenter brings
+     * the weapon to the eye line and may shrink the crosshair.
      */
     aim: number;
+    /**
+     * The rifle sight this life uses (index into SIGHTS, shared/weapons.ts: iron, 1x red dot, 2x scope); fixed from
+     * spawn to death. Drawn on the first-person rifle; while aiming the rifle with a red dot or scope, the presenter
+     * shows its reticle or scope ring over the view, fading in with `aim`, and hides the hip crosshair. Only the
+     * rifle takes sights (`WeaponDef.takesSights`). Ignore for ghosts.
+     */
+    sight: number;
 }
 
 export interface CrosshairConfig {
@@ -160,7 +168,10 @@ export type KillKind = DamageKind;
 export interface Presenter {
     /** Every rendered frame. `remotes` is reused between frames: do not keep references to it. */
     frame(dt: number, local: LocalView, remotes: readonly RemoteView[], match: MatchView): void;
-    /** The list of players changed (joins, leaves, kills, team swap). Used for the scoreboard and for names. */
+    /**
+     * The list of players changed (joins, leaves, kills, team swap, a spawn that mounted another sight). Used for the
+     * scoreboard and for names, and `RosterEntry.sight` is the sight drawn on that player's rifle in third person.
+     */
     roster(players: readonly RosterEntry[]): void;
     /**
      * A gun was fired from `from` to its end point `to` (world space) by the weapon in slot `weapon`
