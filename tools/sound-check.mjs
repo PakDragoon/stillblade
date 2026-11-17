@@ -2,7 +2,7 @@
 // case is rendered through the real engine into an OfflineAudioContext and the peak / RMS of the output are printed.
 //
 //   npx vite --port 5192 --strictPort            (never the owner's 5173; the sound test page needs no game server)
-//   node tools/sound-check.mjs [--client http://localhost:5192] [--shot docs/review/sounds/soundtest.png] [--json out.json]
+//   node tools/sound-check.mjs [--client http://localhost:5192] [--cdp 9293] [--only gun|breath] [--shot docs/review/sounds/soundtest.png] [--json out.json]
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -17,6 +17,8 @@ const SHOT = arg('shot', '');
 const JSON_OUT = arg('json', '');
 const CHROME = arg('chrome', 'C:/Program Files/Google/Chrome/Application/chrome.exe');
 const PORT = Number(arg('cdp', '9293'));
+const ONLY = arg('only', '');
+const GREP = arg('grep', '');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const profile = mkdtempSync(join(tmpdir(), 'sb-sound-'));
@@ -75,25 +77,37 @@ try {
         ['step run 5 m metal', { event: 'step', dist: 5, loud: 1, surface: 'metal' }],
         ['step run 5 m wood', { event: 'step', dist: 5, loud: 1, surface: 'wood' }],
         ['step run 5 m behind wall', { event: 'step', dist: 5, loud: 1, wall: true }],
-        ['rifle loud 5 m', { event: 'shot', dist: 5, weapon: 0 }], ['rifle loud 20 m', { event: 'shot', dist: 20, weapon: 0 }],
-        ['rifle loud 50 m', { event: 'shot', dist: 50, weapon: 0 }], ['rifle loud 59 m', { event: 'shot', dist: 59, weapon: 0 }],
-        ['rifle suppressed 5 m', { event: 'shot', dist: 5, weapon: 0, suppressed: true }], ['rifle suppressed 15 m', { event: 'shot', dist: 15, weapon: 0, suppressed: true }],
-        ['pistol loud 5 m', { event: 'shot', dist: 5, weapon: 1 }], ['pistol suppressed 5 m', { event: 'shot', dist: 5, weapon: 1, suppressed: true }],
+        // Package N: every gunshot case is rendered 6 times (a variant is picked at random) and the loudest peak and mean RMS reported.
+        ...[5, 20, 35, 50, 59].map(d => [`rifle loud ${d} m`, { event: 'shot', dist: d, weapon: 0, reps: 6 }]),
+        ...[5, 10, 15, 19].map(d => [`rifle suppressed ${d} m`, { event: 'shot', dist: d, weapon: 0, suppressed: true, reps: 6 }]),
+        ...[5, 20, 35, 50, 59].map(d => [`pistol loud ${d} m`, { event: 'shot', dist: d, weapon: 1, reps: 6 }]),
+        ...[5, 15, 19].map(d => [`pistol suppressed ${d} m`, { event: 'shot', dist: d, weapon: 1, suppressed: true, reps: 6 }]),
+        ['rifle loud 20 m, wall', { event: 'shot', dist: 20, weapon: 0, wall: true, reps: 6 }],
+        // Package N breathing: 10 s per case, the first second skipped; calm ghost, exerted ghost, a wall in between.
+        ...[1, 2.5, 5, 7, 8].map(d => [`breath calm ${d} m`, { event: 'breath', dist: d, exert: 0 }]),
+        ...[1, 2.5, 5, 7, 8].map(d => [`breath exerted ${d} m`, { event: 'breath', dist: d, exert: 1 }]),
+        ['breath calm 2 m behind wall', { event: 'breath', dist: 2, exert: 0, wall: true }],
+        ['breath calm 5 m behind wall', { event: 'breath', dist: 5, exert: 0, wall: true }],
+        ['breath half 5 m', { event: 'breath', dist: 5, exert: 0.5 }],
         ['reload rifle 3 m', { event: 'reload', dist: 3, weapon: 0 }], ['reload rifle 9 m', { event: 'reload', dist: 9, weapon: 0 }],
         ['knife windup 5 m', { event: 'knifeWindup', dist: 5 }], ['knife windup 13 m', { event: 'knifeWindup', dist: 13 }],
         ['impact 5 m', { event: 'impact', dist: 5 }], ['impact 20 m', { event: 'impact', dist: 20 }],
         ['bomb beep 10 m', { event: 'beep', dist: 10 }], ['bomb beep 30 m', { event: 'beep', dist: 30 }],
     ];
-    const variants = [['synth', { recorded: false }], ['recorded', { recorded: true }], ['rec, no gun layer', { recorded: true, gunLayer: false }]];
+    // synth: nothing recorded. H: package H's sounds (the synthesised shot and breathing; thump layer). N: package N's recordings.
+    const variants = [['synth', { recorded: false }], ['H (old)', { recorded: true, real: false }], ['N (new)', { recorded: true, real: true }]];
     const results = [];
     const f = x => (Number.isFinite(x) ? x.toFixed(1) : '-inf').padStart(6);
     console.log('case'.padEnd(28) + variants.map(([n]) => n.padStart(22)).join(''));
     console.log(''.padEnd(28) + variants.map(() => '        peak     rms  ').join(''));
     for (const [label, spec] of cases) {
+        if (GREP && !new RegExp(GREP).test(label)) continue;
+        if (ONLY === 'gun' && spec.event !== 'shot') continue;
+        if (ONLY === 'breath' && spec.event !== 'breath') continue;
         let line = label.padEnd(28);
         const row = { label };
         for (const [vn, vs] of variants) {
-            if (vn.includes('gun layer') && spec.event !== 'shot') { line += ''.padStart(22); continue; }
+            if (vn.startsWith('N') && spec.event !== 'shot' && spec.event !== 'breath') { line += ''.padStart(22); continue; }
             const r = await evaluate(`window.__soundtest.measure(${JSON.stringify({ ...spec, ...vs })})`);
             row[vn] = r;
             line += `${f(r.peakDb)} ${f(r.rmsDb)}`.padStart(22);

@@ -1,36 +1,344 @@
 {
-    "_comment": "Which raw Kenney file becomes which shipped sound (read by tools/process-audio.mjs; the set names and variant counts must equal SAMPLE_SETS in client/src/audio-logic.ts, a test checks it). 'match' are regular expressions tried in order against the file name without its extension; the first 'n' distinct files found become variants 1..n. 'maxDur' cuts the sound (s, with a 30 ms fade), 'pitch' is a playback-speed factor, 'lp' a low-pass in Hz, 'gain' dB applied after peak normalisation. These file names were written from memory of the Kenney packs BEFORE the packs were available: check them against the real files, fix the patterns and rerun.",
-    "step_concrete": { "n": 4, "match": ["^footstep_concrete_00[0-4]$"], "maxDur": 0.35 },
-    "step_metal": { "n": 4, "match": ["^impactPlate_light_00[0-4]$", "^impactMetal_light_00[0-4]$"], "maxDur": 0.3, "pitch": 0.9, "lp": 7000 },
-    "step_wood": { "n": 4, "match": ["^footstep_wood_00[0-4]$"], "maxDur": 0.35 },
-    "impact_concrete": { "n": 3, "match": ["^impactMining_00[0-4]$", "^impactGeneric_light_00[0-4]$"], "maxDur": 0.25 },
-    "impact_metal": { "n": 3, "match": ["^impactMetal_medium_00[0-4]$", "^impactMetal_light_00[0-4]$"], "maxDur": 0.4 },
-    "impact_wood": { "n": 3, "match": ["^impactWood_light_00[0-4]$", "^impactWood_medium_00[0-4]$"], "maxDur": 0.25 },
-    "shot_rifle_loud": { "n": 2, "match": ["^impactPunch_heavy_00[0-4]$"], "maxDur": 0.45, "pitch": 0.8 },
-    "shot_pistol_loud": { "n": 2, "match": ["^impactPunch_medium_00[0-4]$"], "maxDur": 0.35 },
-    "shot_rifle_supp": { "n": 1, "match": ["^impactSoft_heavy_00[0-4]$"], "maxDur": 0.25, "pitch": 0.9 },
-    "shot_pistol_supp": { "n": 1, "match": ["^impactSoft_medium_00[0-4]$"], "maxDur": 0.2 },
-    "reload_rifle_out": { "n": 1, "match": ["^metalClick$", "^metalLatch$"], "maxDur": 0.25 },
-    "reload_rifle_in": { "n": 1, "match": ["^metalLatch$", "^impactMetal_heavy_00[0-4]$"], "maxDur": 0.3 },
-    "reload_rifle_bolt": { "n": 1, "match": ["^impactMetal_heavy_00[0-4]$", "^doorClose_1$"], "maxDur": 0.35 },
-    "reload_pistol_out": { "n": 1, "match": ["^metalClick$"], "maxDur": 0.2, "pitch": 1.1 },
-    "reload_pistol_in": { "n": 1, "match": ["^metalLatch$"], "maxDur": 0.25, "pitch": 1.1 },
-    "reload_pistol_slide": { "n": 1, "match": ["^impactMetal_light_00[0-4]$"], "maxDur": 0.25, "pitch": 1.1 },
-    "knife_windup": { "n": 1, "match": ["^drawKnife[1-3]$"], "maxDur": 0.3 },
-    "knife_slash": { "n": 2, "match": ["^knifeSlice2?$", "^drawKnife[1-3]$"], "maxDur": 0.3 },
-    "knife_hit": { "n": 2, "match": ["^impactSoft_heavy_00[0-4]$", "^impactPunch_medium_00[0-4]$"], "maxDur": 0.25 },
-    "bomb_beep": { "n": 1, "match": ["^tone1$", "^pepSound1$"], "maxDur": 0.12 },
-    "bomb_planted": { "n": 1, "match": ["^threeTone1$", "^twoTone1$"], "maxDur": 1.0 },
-    "bomb_defused": { "n": 1, "match": ["^highUp$", "^phaserUp3$"], "maxDur": 1.0 },
-    "explosion": { "n": 1, "match": ["^explosionCrunch_00[0-4]$", "^lowFrequency_explosion_00[01]$"], "maxDur": 2.2 },
-    "bomb_drop": { "n": 1, "match": ["^impactGeneric_heavy_00[0-4]$", "^impactSoft_heavy_00[0-4]$"], "maxDur": 0.3 },
-    "bomb_pickup": { "n": 1, "match": ["^beltHandle1$", "^handleSmallLeather$"], "maxDur": 0.35 },
-    "hit_body": { "n": 1, "match": ["^tick_001$", "^click_001$"], "maxDur": 0.12 },
-    "hit_head": { "n": 1, "match": ["^tick_002$", "^click_002$"], "maxDur": 0.12 },
-    "hit_kill": { "n": 1, "match": ["^confirmation_001$", "^select_001$"], "maxDur": 0.35 },
-    "dry": { "n": 1, "match": ["^metalClick$", "^click_005$"], "maxDur": 0.12 },
-    "switch_rifle": { "n": 1, "match": ["^handleSmallLeather2$", "^beltHandle2$"], "maxDur": 0.4 },
-    "switch_pistol": { "n": 1, "match": ["^handleSmallLeather$", "^beltHandle1$"], "maxDur": 0.3 },
-    "switch_knife": { "n": 1, "match": ["^drawKnife[1-3]$"], "maxDur": 0.3 },
-    "ui_click": { "n": 2, "match": ["^click_00[13]$", "^click_00[1-5]$", "^select_00[1-8]$"], "maxDur": 0.1 }
+    "_comment": "Which raw file becomes which shipped sound (read by tools/process-audio.mjs; the set names and variant counts must equal SAMPLE_SETS in client/src/audio-logic.ts, a test checks it). 'match' are regular expressions tried in order against the file name without its extension; the first 'n' distinct files found become variants 1..n. 'cuts' ([file regex, start second, optional dB, optional length]) cut one variant each out of a long recording (package N: several gunshots or breaths in one file; start times were read off the waveform, 3 ms before the onset). 'prefer' is an alternative tried first when its files exist. 'maxDur' cuts the sound (s, 'fade' long fade-out, default 30 ms), 'pitch' is a playback-speed factor, 'hp'/'lp' filters in Hz, 'denoise' dB, 'fadeIn' s, 'gain' dB applied after peak normalisation. Package H's Kenney names were written before the packs were available and have since been checked.",
+    "step_concrete": {
+        "n": 4,
+        "match": ["^footstep_concrete_00[0-4]$"
+        ],
+        "maxDur": 0.35
+    },
+    "step_metal": {
+        "n": 4,
+        "match": ["^impactPlate_light_00[0-4]$",
+            "^impactMetal_light_00[0-4]$"
+        ],
+        "maxDur": 0.3,
+        "pitch": 0.9,
+        "lp": 7000
+    },
+    "step_wood": {
+        "n": 4,
+        "match": ["^footstep_wood_00[0-4]$"
+        ],
+        "maxDur": 0.35
+    },
+    "impact_concrete": {
+        "n": 3,
+        "match": ["^impactMining_00[0-4]$",
+            "^impactGeneric_light_00[0-4]$"
+        ],
+        "maxDur": 0.25
+    },
+    "impact_metal": {
+        "n": 3,
+        "match": ["^impactMetal_medium_00[0-4]$",
+            "^impactMetal_light_00[0-4]$"
+        ],
+        "maxDur": 0.4
+    },
+    "impact_wood": {
+        "n": 3,
+        "match": ["^impactWood_light_00[0-4]$",
+            "^impactWood_medium_00[0-4]$"
+        ],
+        "maxDur": 0.25
+    },
+    "reload_rifle_out": {
+        "n": 1,
+        "match": ["^metalClick$", "^metalLatch$"],
+        "maxDur": 0.25
+    },
+    "reload_rifle_in": {
+        "n": 1,
+        "match": ["^metalLatch$", "^impactMetal_heavy_00[0-4]$"
+        ],
+        "maxDur": 0.3
+    },
+    "reload_rifle_bolt": {
+        "n": 1,
+        "match": ["^impactMetal_heavy_00[0-4]$",
+            "^doorClose_1$"
+        ],
+        "maxDur": 0.35
+    },
+    "reload_pistol_out": {
+        "n": 1,
+        "match": ["^metalClick$"],
+        "maxDur": 0.2,
+        "pitch": 1.1
+    },
+    "reload_pistol_in": {
+        "n": 1,
+        "match": ["^metalLatch$"],
+        "maxDur": 0.25,
+        "pitch": 1.1
+    },
+    "reload_pistol_slide": {
+        "n": 1,
+        "match": ["^impactMetal_light_00[0-4]$"
+        ],
+        "maxDur": 0.25,
+        "pitch": 1.1
+    },
+    "knife_windup": {
+        "n": 1,
+        "match": ["^drawKnife[1-3]$"
+        ],
+        "maxDur": 0.3
+    },
+    "knife_slash": {
+        "n": 2,
+        "match": ["^knifeSlice2?$", "^drawKnife[1-3]$"
+        ],
+        "maxDur": 0.3
+    },
+    "knife_hit": {
+        "n": 2,
+        "match": ["^impactSoft_heavy_00[0-4]$",
+            "^impactPunch_medium_00[0-4]$"
+        ],
+        "maxDur": 0.25
+    },
+    "bomb_beep": {
+        "n": 1,
+        "match": ["^tone1$", "^pepSound1$"],
+        "maxDur": 0.12
+    },
+    "bomb_planted": {
+        "n": 1,
+        "match": ["^threeTone1$", "^twoTone1$"],
+        "maxDur": 1
+    },
+    "bomb_defused": {
+        "n": 1,
+        "match": ["^highUp$", "^phaserUp3$"],
+        "maxDur": 1
+    },
+    "explosion": {
+        "n": 1,
+        "match": ["^explosionCrunch_00[0-4]$",
+            "^lowFrequency_explosion_00[01]$"
+        ],
+        "maxDur": 2.2
+    },
+    "bomb_drop": {
+        "n": 1,
+        "match": ["^impactGeneric_heavy_00[0-4]$",
+            "^impactSoft_heavy_00[0-4]$"
+        ],
+        "maxDur": 0.3
+    },
+    "bomb_pickup": {
+        "n": 1,
+        "match": ["^beltHandle1$", "^handleSmallLeather$"],
+        "maxDur": 0.35
+    },
+    "hit_body": {
+        "n": 1,
+        "match": ["^tick_001$", "^click_001$"],
+        "maxDur": 0.12
+    },
+    "hit_head": {
+        "n": 1,
+        "match": ["^tick_002$", "^click_002$"],
+        "maxDur": 0.12
+    },
+    "hit_kill": {
+        "n": 1,
+        "match": ["^confirmation_001$", "^select_001$"],
+        "maxDur": 0.35
+    },
+    "dry": {
+        "n": 1,
+        "match": ["^metalClick$", "^click_005$"],
+        "maxDur": 0.12
+    },
+    "switch_rifle": {
+        "n": 1,
+        "match": ["^handleSmallLeather2$", "^beltHandle2$"],
+        "maxDur": 0.4
+    },
+    "switch_pistol": {
+        "n": 1,
+        "match": ["^handleSmallLeather$", "^beltHandle1$"],
+        "maxDur": 0.3
+    },
+    "switch_knife": {
+        "n": 1,
+        "match": ["^drawKnife[1-3]$"
+        ],
+        "maxDur": 0.3
+    },
+    "ui_click": {
+        "n": 2,
+        "match": ["^click_00[13]$",
+            "^click_00[1-5]$",
+            "^select_00[1-8]$"
+        ],
+        "maxDur": 0.1
+    },
+    "thump_rifle_loud": {
+        "n": 2,
+        "match": ["^impactPunch_heavy_00[0-4]$"
+        ],
+        "maxDur": 0.45,
+        "pitch": 0.8
+    },
+    "thump_pistol_loud": {
+        "n": 2,
+        "match": ["^impactPunch_medium_00[0-4]$"
+        ],
+        "maxDur": 0.35
+    },
+    "thump_rifle_supp": {
+        "n": 1,
+        "match": ["^impactSoft_heavy_00[0-4]$"
+        ],
+        "maxDur": 0.25,
+        "pitch": 0.9
+    },
+    "thump_pistol_supp": {
+        "n": 1,
+        "match": ["^impactSoft_medium_00[0-4]$"
+        ],
+        "maxDur": 0.2
+    },
+    "shot_rifle_loud": {
+        "n": 5,
+        "keepStart": true,
+        "maxDur": 0.55,
+        "fade": 0.12,
+        "hp": 60,
+        "cuts": [
+            ["^136399__", 4.625],
+            ["^136399__", 10.155],
+            ["^136399__", 14.768],
+            ["^136399__", 24.115],
+            ["^520934__", 1.124, -8]
+        ],
+        "headroom": true
+    },
+    "shot_rifle_far": {
+        "n": 2,
+        "keepStart": true,
+        "maxDur": 1.6,
+        "fade": 0.5,
+        "lp": 3000,
+        "hp": 50,
+        "cuts": [
+            ["^855843__", 0, 0, 1.7],
+            ["^136399__", 19.643, 0, 1]
+        ],
+        "headroom": true
+    },
+    "shot_rifle_supp": {
+        "n": 2,
+        "keepStart": true,
+        "maxDur": 0.22,
+        "fade": 0.08,
+        "fadeIn": 0.004,
+        "hp": 80,
+        "lp": 1600,
+        "cuts": [
+            ["^136399__", 10.155],
+            ["^136399__", 14.768]
+        ],
+        "headroom": true
+    },
+    "shot_pistol_loud": {
+        "n": 3,
+        "keepStart": true,
+        "maxDur": 0.3,
+        "fade": 0.1,
+        "hp": 150,
+        "pitch": 1.4,
+        "cuts": [
+            ["^136399__", 4.625],
+            ["^136399__", 10.155],
+            ["^136399__", 24.115]
+        ],
+        "prefer": {
+            "n": 3,
+            "match": ["^(569174|855652|703342|427592|828786|386745)__", "^\\d+__.*(makarov|pistol|handgun|9mm|glock)"],
+            "maxDur": 0.4,
+            "fade": 0.12,
+            "hp": 80,
+            "headroom": true
+        },
+        "headroom": true
+    },
+    "shot_pistol_far": {
+        "n": 1,
+        "keepStart": true,
+        "maxDur": 0.9,
+        "fade": 0.3,
+        "lp": 3000,
+        "hp": 120,
+        "pitch": 1.3,
+        "cuts": [
+            ["^855843__", 0]
+        ],
+        "prefer": {
+            "n": 1,
+            "match": ["^(569174|855652|703342|427592|828786|386745)__", "^\\d+__.*(makarov|pistol|handgun|9mm|glock)"],
+            "maxDur": 0.8,
+            "fade": 0.3,
+            "lp": 1800,
+            "hp": 80,
+            "headroom": true
+        },
+        "headroom": true
+    },
+    "shot_pistol_supp": {
+        "n": 2,
+        "keepStart": true,
+        "maxDur": 0.14,
+        "fade": 0.06,
+        "fadeIn": 0.003,
+        "hp": 150,
+        "lp": 2200,
+        "pitch": 1.4,
+        "cuts": [
+            ["^136399__", 14.768],
+            ["^136399__", 19.643]
+        ],
+        "prefer": {
+            "n": 2,
+            "match": ["^(569174|855652|703342|427592|828786|386745)__", "^\\d+__.*(makarov|pistol|handgun|9mm|glock)"],
+            "maxDur": 0.14,
+            "fade": 0.06,
+            "fadeIn": 0.003,
+            "hp": 150,
+            "lp": 2200,
+            "headroom": true
+        },
+        "headroom": true
+    },
+    "breath_calm": {
+        "n": 4,
+        "keepStart": true,
+        "fade": 0.15,
+        "fadeIn": 0.06,
+        "hp": 70,
+        "cuts": [
+            ["^361869__", 0.12, 0, 1.65],
+            ["^361869__", 2.6, 0, 1.9],
+            ["^361869__", 5.25, 0, 1.9],
+            ["^361869__", 8.1, 0, 1.8]
+        ],
+        "headroom": true
+    },
+    "breath_hard": {
+        "n": 3,
+        "keepStart": true,
+        "fade": 0.15,
+        "fadeIn": 0.06,
+        "hp": 80,
+        "denoise": 12,
+        "cuts": [
+            ["^767046__", 10.2, 0, 2.2],
+            ["^767046__", 12.8, 0, 2.2],
+            ["^767046__", 16, 0, 1.95]
+        ],
+        "headroom": true
+    }
 }

@@ -376,6 +376,7 @@ Warehouse's lightmap on the GPU grows from about 48 MB to 85 MB with mipmaps (th
 Follow `ROADMAP.md`. **State on 2026-11-17, when the owner moved to a new session:** everything through wave 4 is built, reviewed, merged into `main` and pushed: waves 1 to 3 (packages A to F), G (graphics tiers and effects), L (menus and settings redesign plus a scoreboard ping column, protocol 14) and H (recorded sounds). 415 tests, protocol 14. No build session is running and no branch is waiting for review; the old worktrees and branches under `.claude/worktrees/` are all merged and can be deleted when the owner says so. **The game server on the owner's PC must be restarted from `main` to match protocol 14** (start command under Hosting).
 
 - **Package M part 1 (2026-11-17, protocol 15): merged into `main` on the owner's word, NOT pushed.** Push only when the owner is at his PC to restart the game server, since the pushed client needs protocol 15. Rifle sights (iron, 1x red dot, 2x scope) chosen in a Loadout page and mounted at the next spawn, and the stuck-aim fix. Review: the shared, protocol, server and input diffs were read line by line; tests (447) and typecheck run on the branch and on merged `main`; two of 19 screenshots looked at. Reviewer's notes: the 2x scope blacks out everything outside its circle like a sniper scope, which should become an ACOG-style sight picture with part 2's real model; the warmup respawn edge (Known problems) predates this package. Part 2 waits for the owner's downloads. See "Package M part 1" below.
+- **Package N (real gunshots and breathing, 2026-11-18): built on branch `claude/recorded-sounds-2-8c2c8a`, committed, NOT merged, NOT pushed; client audio only, no protocol change, 453 tests.** Real AK-47 recordings (Freesound, CC0) are the gunshots, with a distant tail and filtered suppressed versions; the pistol is still an AK stand-in until the owner downloads real pistol files; ghost breathing is two real recordings cut into single breaths; hurt stays synthesised. Nothing has been listened to. See "Package N" below.
 - **Recommended next step:** the owner plays and listens to waves 3 and 4 before any new package is built; his findings come first and will likely change the briefs for K, I and J.
 - **How wave 4 was built (it worked; repeat it):** the main session started each build with a self-contained brief, in its own worktree, with no Browser pane; builds checked their screens with headless Chrome driven by script on scratch ports (8090 and up for the server, 5190 and up for Vite; `tools/graphics-shots.mjs` and `tools/sound-check.mjs` are examples). Follow-ups went to the same build session. Parallel packages were told which files the other owned and merged simulation-side first.
 - **Downloads from kenney.nl cannot be scripted** (the site answers 403 and build sessions must not work around it): the owner downloads packs by hand and unzips them into the git-ignored `tools/audio-source/` (one folder per pack). The five audio packs he fetched on 2026-11-17 are in `tools/audio-source/` of the main checkout (copied from the package H worktree), so `node tools/process-audio.mjs` can be re-run there; a fresh worktree does not have them.
@@ -495,6 +496,70 @@ If a sound is too loud or quiet, the knob is `SAMPLE_GAIN` in `client/src/audio-
 - Loading inside a real match was not timed; the test page's own engine loaded all 53 files (checked by script), and the game boots with no console errors at `?auto=1` against a scratch server. The game's own `audio` instance reaching "53 of 53" in a live match was not checked.
 - Level numbers come from an offline render of one event at a time at the listener's feet, standing, straight ahead; many overlapping sounds and the player's volume sliders were not measured.
 - Voice stealing (24 voices) was left unchanged; recorded sounds hold a voice only as long as the sample (0.1 to 2 s).
+
+## Package N (real gunshots and breathing) in detail
+
+Built on branch `claude/recorded-sounds-2-8c2c8a`, client audio and tools only (`git diff main -- shared server` is empty, protocol unchanged, 453 tests, typecheck clean). **Nothing here has been listened to by anyone.** Levels were measured with `tools/sound-check.mjs`; the cut points came from waveforms, not ears.
+
+### What changed
+
+- **Sources (all CC0, Freesound; raw files in git-ignored `tools/audio-source/freesound/`, credited per file in `client/public/audio/CREDITS.md`):** 136399 felixblume (close AK-47 at a range; single shots cut out, wind avoided), 520934 ninebilly (one shot), 855843 serutonin-deprivd (the distant tail), 767046 ThabzMalik (exerted breathing, 3 cycles), 361869 Unstoppable0 (calm breathing, 4 cycles). 520935 (ninebilly burst) is present but **unused**: its shots are about 30 ms apart in one block and cannot be cut into single shots.
+- **Gunshots (`audio.ts`, `recordedShot`):** the recorded shot is now the whole sound. Rifle: 5 close variants (4 from 136399, 1 from 520934 turned down 8 dB because it is much denser than the others), 2 distant variants (855843 and a low-passed 136399 shot). The close/distant mix is `gunBlend` in `audio-logic.ts` (equal power; all close up to 8 m, all tail from 80 % of the range, a 10 % whisper of the tail up close); the fade to silence at 60 m / 20 m is still the voice's distance panner, unchanged. Variants never repeat back to back; every shot has about +-1 dB and +-4 % pitch variation. **Suppressed** = the same shots high-passed at 80 Hz, low-passed at 1.6 kHz, 0.22 s long, 4 ms fade-in (2 variants), about 14 dB under the loud shot at the same distance. **Pistol is a stand-in:** the AK shots sped up 1.4x (higher, shorter), high-passed at 150 Hz, 0.3 s; its distant tail is 855843 sped up 1.3x.
+- **Breathing:** the two recordings are cut into one breath cycle per file. Per ghost, every cycle picks the next breath at random (never the one just played), calm with probability 1 - exertion and exerted with probability exertion, so a ghost that starts running turns from calm to panting breath by breath, not as two overlapping people; level (x1.0 to x1.5), the pause between breaths (0.45 s down to 0.1 s) and playback rate (up to +8 %) also follow exertion (`pickBreathSet`, `breathLevel`, `breathGap`, `breathRate`). Recorded breaths enter after the synthesis filters, straight into the existing occlusion, fade, `breathDistanceGain` and HRTF panner stage, so all of those are untouched (the `breathDistanceGain` tests pass unchanged; 8 m range unchanged; per-ghost random phase and fade in/out kept). It costs one source and one gain node per ghost every 2 s or so.
+- **Fallback:** a missing or undecodable file falls back to package H's sound (synthesised shot under the old thump; synthesised breathing). Breathing uses recordings only when both breath sets are loaded.
+- **Hurt stays synthesised:** neither breathing file holds a usable grunt (they are breaths; a sigh when hit would read wrongly and could not be judged without listening).
+- **Sound test page (`?soundtest=1`):** new checkbox "New recordings (guns, breathing)": off plays package H's versions for comparison ("Old gunshot layer" then picks the synthesised shot with or without the thump). The old Kenney thumps are kept as sets `thump_*` (16 KB) for exactly this. The ghost selector now offers calm / half exerted / running.
+- **Tools:** `tools/process-audio.mjs` gained `cuts` (several cuts from one long file), `prefer` (a real pistol recording wins over the stand-in when its files exist), `hp`, `denoise`, `fadeIn`, `fade`, `headroom`, and Freesound credits. `tools/sound-check.mjs` measures breathing and averages gunshots over 6 random variants; `--only gun|breath` and `--grep <regex>` select cases.
+- **Size:** 75 files, 318.6 KiB for all audio (the 53 old files are byte-identical; 22 new).
+
+### Measured levels (not heard)
+
+Peak / RMS in dBFS at the listener (3 s render, loudest peak and mean RMS of 6 random shots), straight ahead, standing; "H" is package H's sound, "N" the new recording, same run:
+
+| Case | H peak | N peak | N RMS |
+| --- | --- | --- | --- |
+| Rifle loud 5 / 20 / 35 / 50 / 59 m | -7.8 / -9.7 / -13.8 / -23.2 / -42.9 | -7.7 / -9.6 / -15.4 / -24.9 / -45.0 | -34.5 / -37.0 / -43.1 / -49.4 / -75.0 |
+| Rifle suppressed 5 / 10 / 15 / 19 m | -21.5 / -25.2 / -32.5 / -46.2 | -22.0 / -26.5 / -31.3 / -45.9 | -48.4 / -51.4 / -56.8 / -71.1 |
+| Pistol loud 5 / 20 / 35 / 50 / 59 m | -11.2 / -13.6 / -17.1 / -25.5 / -44.7 | -13.0 / -15.1 / -19.2 / -27.2 / -47.2 | -38.5 / -41.5 / -45.6 / -53.2 / -73.0 |
+| Pistol suppressed 5 / 15 / 19 m | -22.2 / -35.3 / -47.0 | -25.0 / -35.2 / -48.8 | -52.2 / -61.9 / -75.6 |
+| Rifle loud 20 m behind a wall | -17.2 | -18.8 | -44.6 |
+
+`SAMPLE_GAIN` was set to land within 1 to 3 dB of package H at every distance (the first mix put the distant tail 10 dB too hot at 20 m and one close variant 11 dB hotter than the rest; both fixed by measurement). Suppressed is about 14 dB under loud. Everything is silent at the range.
+
+Breathing, same method (10 s render, first second skipped; calm and exerted ghost):
+
+| Distance | N calm peak / RMS | N exerted peak / RMS | H (synthesised) calm RMS / exerted RMS |
+| --- | --- | --- | --- |
+| 1 m | -15.7 / -34.5 | -9.1 / -26.4 | -34.2 / -25.1 |
+| 2.5 m | -16.5 / -34.9 | -8.1 / -26.4 | -33.8 / -25.2 |
+| 5 m | -17.5 / -36.1 | -9.8 / -27.4 | -34.9 / -26.3 |
+| 7 m | -22.7 / -42.9 | -15.7 / -33.7 | -41.4 / -32.7 |
+| 8 m | silent | silent | silent |
+
+Behind a wall: calm 2 m -24.0 / -42.4, calm 5 m -25.5 / -43.9 (about 8 dB quieter, duller). **Caution about "faint at 5 m, barely there at 8 m":** the existing `breathDistanceGain` curve (which had to stay exactly) is flat to 2.5 m and only 1 dB lower at 5 m, then falls to silence at 8 m, so 5 m is not much quieter than 2 m; only 7 m and beyond fall away (-7 dB at 7 m, silent at 8 m). The recorded calm breath is set to the same loudness as the synthesised one, so it is no louder than before. If 5 m is too present, change the curve in `audio.ts` (and its tests) deliberately.
+
+### What the owner should listen for
+
+Open `?soundtest=1` with headphones, click once, wait for "75 of 75 loaded".
+
+1. **Gunshots:** Rifle shot at 5 m, 20 m, 50 m (suppressed off): real and punchy at 5 m, becoming a rolling distant boom by 35 to 50 m, gone at 60 m. "Rifle, 5 shots": the variants should not sound like one sample repeated. Listen for wind or hiss in the tails. Toggle "New recordings" to compare with the old thump and decide which you prefer.
+2. **Suppressed:** a duller, much quieter shot gone by 20 m. This is a filtered AK, not a real suppressor: it may sound like a muffled rifle rather than a "pfft"; say so if it does.
+3. **Pistol:** it is the AK sped up, so it will probably sound like a small rifle. Expected; see the candidate list.
+4. **Breathing:** switch on "Ghost breathing" at 2 m, "calm", then "running". Calm should be slow, steady, quiet; running clearly heavier, faster and louder, switching breath by breath. Check for obvious repetition (4 calm and 3 exerted breaths, random order), clicks between breaths, hiss in the exerted ones (the source was very quiet and was denoised), and the wall.
+5. **Hurt** is still the synthesised thump.
+
+If a sound is too loud or quiet: `SAMPLE_GAIN` (`shot_*`, `breath_*`) in `client/src/audio-logic.ts`. To change a cut: the `cuts` in `tools/audio-map.json`, then `node tools/process-audio.mjs`.
+
+### Real pistol recordings (waiting for the owner)
+
+Put 3 files into `tools/audio-source/freesound/` and run `node tools/process-audio.mjs`: any file whose Freesound id is 569174, 855652, 703342, 427592, 828786 or 386745, or whose name contains makarov, pistol, handgun, 9mm or glock, becomes the pistol (loud, distant and suppressed) automatically; the AK stand-in covers whatever is missing. The first shot of each file is used, so a file that starts with silence or talk should be trimmed first. Candidates (CC0 per the Freesound CC0 filter on the search pages; whether each is a real recording was not confirmed, nobody listened): 569174 "Makarov Shoot" by coolabc, 855652 "A Glock handgun being shot 3x" by serutonin-deprivd (same author as the distant tail), 703342 "S&W M&P9 Shield, one round fired at night, no processing" by AnthonyChan0, 828786 "Glock 19X" by areniporgen, 427592 "9mm pistol shot" by michorvath (167 s long: cut the first shot out). Links: `https://freesound.org/s/<id>/`.
+
+### What was not verified
+
+- Nothing was heard. Cut points and the level of every variant come from waveforms and measurements.
+- The pistol is not a real pistol; suppressed shots are filtered rifle shots.
+- Safari and Firefox decoding; only headless Chrome loaded all 75 files.
+- Several ghosts breathing at once and many overlapping shots were not measured; no game match was run.
 
 ## Package M part 1 (rifle sights and the stuck-aim fix) in detail
 
