@@ -45,7 +45,7 @@ The owner has no game development experience and expects the game to have every 
 | 4 | L. Menus and settings redesign, scoreboard ping column (owner's feedback on waves 1 to 3) (**built and reviewed; protocol 14; on `main` since 2026-11-17**) | Sonnet 5.5 | nothing |
 | 4 | G. Graphics tiers and effects (**built and reviewed; no protocol change; on `main` since 2026-11-17; frame rate unmeasured**) | Opus 5.5 | F merged |
 | 4 | H. Recorded sounds (**built and reviewed; no protocol change; on `main` since 2026-11-17; nobody has listened to it; gunshots still synthesised under a recorded layer**) | Sonnet 5.5 | A merged |
-| 5 | M. Realistic rifle, pistol and knife; sights (iron, 1x red dot, 2x scope); the stuck-aim fix (**part 1, sights and the stuck-aim fix, built on branch `claude/sights-aimfix-f78887`, protocol 15, not merged; part 2, the realistic models, waits for the owner's downloads**) | Opus 5.5 | owner's downloads |
+| 5 | M. Realistic rifle, pistol and knife; sights (iron, 1x red dot, 2x scope); the stuck-aim fix (**part 1, sights and the stuck-aim fix, reviewed and merged into `main` on 2026-11-17, protocol 15, not pushed until the owner can restart his server; part 2, the realistic models, waits for the owner's downloads**) | Opus 5.5 | owner's downloads |
 | 5 | N. Real recorded gunshots, breathing and hurt sounds | Sonnet 5.5 | owner's downloads |
 | 6 | O. Realistic soldiers (defenders) and stealth operatives (ghosts), first-person arms to match, Mixamo animations | Opus 5.5 | M merged, owner's downloads |
 | later | J. Accounts, saved stats, leaderboard | Opus 5.5 | always-on server (the owner is still comparing VPS offers) |
