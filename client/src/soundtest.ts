@@ -6,7 +6,7 @@
  *
  * The listener stands at the origin facing -Z (north). Front is -Z, left -X, right +X, behind +Z. For headphones.
  */
-import { STEP_LOUD_CROUCH, STEP_LOUD_RUN, STEP_LOUD_WALK, STEP_RANGE, BREATH_RANGE, GUNSHOT_RANGE, GUNSHOT_RANGE_SUPPRESSED, KNIFE_SOUND_RANGE, RELOAD_SOUND_RANGE } from '@shared/constants';
+import { GHOST_MAX_VIS, STEP_LOUD_CROUCH, STEP_LOUD_RUN, STEP_LOUD_WALK, STEP_RANGE, BREATH_RANGE, GUNSHOT_RANGE, GUNSHOT_RANGE_SUPPRESSED, KNIFE_SOUND_RANGE, RELOAD_SOUND_RANGE } from '@shared/constants';
 import { SLOT_KNIFE } from '@shared/weapons';
 import type { Box, Vec3 } from '@shared/types';
 import { createAudio } from './audio';
@@ -23,7 +23,7 @@ const engine: AudioEngine = createAudio(boxes, { loadDelayMs: 0 });
 
 const state = {
     dist: 8, angle: 'front' as Angle, wall: false, suppressed: false, local: false,
-    surface: 'concrete', loud: STEP_LOUD_RUN, recorded: true, gunLayer: true,
+    surface: 'concrete', loud: STEP_LOUD_RUN, recorded: true, gunLayer: true, real: true,
     breathing: false, exert: 0, bombTicking: false, bombLeft: 30
 };
 
@@ -201,6 +201,8 @@ function build(): void {
     step.onchange = () => { state.loud = Number(step.value); };
     const rec = el('input', { type: 'checkbox', checked: true });
     rec.onchange = () => { state.recorded = rec.checked; engine.setSoundMode({ recorded: rec.checked }); };
+    const real = el('input', { type: 'checkbox', checked: true });
+    real.onchange = () => { state.real = real.checked; engine.setSoundMode({ real: real.checked }); };
     const layer = el('input', { type: 'checkbox', checked: true });
     layer.onchange = () => { state.gunLayer = layer.checked; engine.setSoundMode({ gunLayer: layer.checked }); };
 
@@ -215,7 +217,7 @@ function build(): void {
         el('div', { class: 'row' }, labelled('Distance', dist), distOut, labelled('Direction', angle),
             labelled('Behind a wall', wall), labelled('Suppressed', sup), labelled('As my own sound', local)),
         el('div', { class: 'row' }, labelled('Surface', surface), labelled('Step', step),
-            labelled('Recorded samples', rec), labelled('Gunshot layer', layer)),
+            labelled('Recorded samples', rec), labelled('New recordings (guns, breathing)', real), labelled('Old gunshot layer', layer)),
         el('div', { class: 'row' }, labelled('Master', mk('master', 1)), labelled('Effects', mk('effects', 1)), labelled('Footsteps', mk('footsteps', 1))),
     );
     const status = el('div', { class: 'status' });
@@ -227,12 +229,13 @@ function build(): void {
         `Audible ranges: footsteps ${STEP_RANGE} m running, ${(STEP_RANGE * STEP_LOUD_WALK).toFixed(1)} m walking, ${(STEP_RANGE * STEP_LOUD_CROUCH).toFixed(1)} m crouched; ` +
         `gunshots ${GUNSHOT_RANGE} m (${GUNSHOT_RANGE_SUPPRESSED} m suppressed); reload ${RELOAD_SOUND_RANGE} m; knife windup ${KNIFE_SOUND_RANGE} m; breathing ${BREATH_RANGE} m; bomb beep 35 m. ` +
         'Samples play only after the first click, and load in the background: the status line says how many are in. ' +
-        'Switch "Recorded samples" off to hear the synthesised sound it replaces; switch "Gunshot layer" off for the pure synthesised shot.'));
+        'Switch "Recorded samples" off to hear the synthesised sound it replaces. Package N: "New recordings" is the real gunshots and breathing; switch it off to hear the old versions from package H ' +
+        '(synthesised shot under a recorded thump, synthesised breathing); with it off, "Old gunshot layer" off is the pure synthesised shot.'));
 
     // Looping things.
     const loops = el('div', { class: 'items' });
     const breathBtn = el('button', {}, 'Ghost breathing: off');
-    const exert = el('select', {}, el('option', { value: '0' }, 'standing still'), el('option', { value: '1' }, 'running (exerted)'));
+    const exert = el('select', {}, el('option', { value: '0' }, 'calm (standing still)'), el('option', { value: '0.5' }, 'half exerted'), el('option', { value: '1' }, 'running (exerted)'));
     exert.onchange = () => { state.exert = Number(exert.value); };
     breathBtn.onclick = () => {
         unlock();
@@ -301,7 +304,13 @@ function loop(now: number): void {
 // ---- measuring (for the reviewer: levels without ears) -------------------------------------------
 
 export interface MeasureSpec {
-    event: 'step' | 'shot' | 'reload' | 'impact' | 'knifeWindup' | 'beep';
+    event: 'step' | 'shot' | 'reload' | 'impact' | 'knifeWindup' | 'beep' | 'breath';
+    /** A breath: the ghost's exertion 0..1 (default 0), and (with `real` false) the synthesised breathing. */
+    exert?: number;
+    /** Package N recordings (gunshots, breathing) on or off; default on. */
+    real?: boolean;
+    /** Render the event this many times and report the loudest peak and the mean RMS (gunshots pick a random variant). */
+    reps?: number;
     dist: number;
     angle?: Angle;
     loud?: number;
@@ -319,8 +328,21 @@ export interface MeasureSpec {
  * and returns the peak and RMS of the stereo output in dBFS. Not heard by anyone.
  */
 async function measure(spec: MeasureSpec): Promise<{ peakDb: number; rmsDb: number }> {
+    const reps = Math.max(1, spec.reps ?? 1);
+    let peak = 0, rms = 0;
+    for (let i = 0; i < reps; i++) {
+        const r = await measureOnce(spec);
+        peak = Math.max(peak, r.peak);
+        rms += r.rms / reps;
+    }
+    const db = (x: number): number => (x > 0 ? 20 * Math.log10(x) : -Infinity);
+    return { peakDb: db(peak), rmsDb: db(rms) };
+}
+
+async function measureOnce(spec: MeasureSpec): Promise<{ peak: number; rms: number }> {
     const sr = 44100;
-    const ctx = new OfflineAudioContext(2, sr * 3, sr);
+    const seconds = spec.event === 'breath' ? 10 : 3;
+    const ctx = new OfflineAudioContext(2, sr * seconds, sr);
     const bx: Box[] = [{ category: SURFACE_CATEGORY[spec.surface ?? 'concrete'], min: [-200, -1, -200], max: [200, 0, 200] }];
     const dir = DIRS[spec.angle ?? 'front'];
     if (spec.wall) {
@@ -328,7 +350,7 @@ async function measure(spec: MeasureSpec): Promise<{ peakDb: number; rmsDb: numb
         bx.push({ category: 'outer_wall', min: [dir[0] * m - (dir[0] === 0 ? 4 : 0.15), 0, dir[1] * m - (dir[1] === 0 ? 4 : 0.15)], max: [dir[0] * m + (dir[0] === 0 ? 4 : 0.15), 4, dir[1] * m + (dir[1] === 0 ? 4 : 0.15)] });
     }
     const e = createAudio(bx, { context: ctx, loadDelayMs: spec.recorded ? 0 : 1e9 });
-    e.setSoundMode({ recorded: !!spec.recorded, gunLayer: spec.gunLayer ?? true });
+    e.setSoundMode({ recorded: !!spec.recorded, gunLayer: spec.gunLayer ?? true, real: spec.real ?? true });
     e.unlock();
     if (spec.recorded) await e.whenLoaded();
     e.setVolumes({ master: 1, effects: 1, footsteps: 1 });
@@ -341,15 +363,24 @@ async function measure(spec: MeasureSpec): Promise<{ peakDb: number; rmsDb: numb
         case 'impact': e.impact(at(0)); break;
         case 'knifeWindup': e.knifeWindup(at(0), false); break;
         case 'beep': e.frame(0.016, listener, [], { pos: at(0), timeLeft: 30 }); break;
+        case 'breath': {
+            // A standing ghost (exertion from its visibility), the engine ticked every 0.25 s as the game does each frame.
+            const g: RemoteView = { ...ghost, pos: [...at(0)] as Vec3, vis: (spec.exert ?? 0) * GHOST_MAX_VIS };
+            const tick = (dt: number): void => e.frame(dt, listener, [g], null);
+            tick(1);
+            for (let t = 0.25; t < seconds - 0.2; t += 0.25) void ctx.suspend(t).then(() => { tick(0.25); void ctx.resume(); });
+            break;
+        }
     }
     const out = await ctx.startRendering();
+    // Breathing: skip the first second (the 0.15 s fade-in and the first cycle's random start would hide the steady level).
+    const from = spec.event === 'breath' ? sr : 0;
     let peak = 0, sum = 0, n = 0;
     for (let c = 0; c < out.numberOfChannels; c++) {
         const d = out.getChannelData(c);
-        for (let i = 0; i < d.length; i++) { const a = Math.abs(d[i]); if (a > peak) peak = a; sum += d[i] * d[i]; n++; }
+        for (let i = from; i < d.length; i++) { const a = Math.abs(d[i]); if (a > peak) peak = a; sum += d[i] * d[i]; n++; }
     }
-    const db = (x: number): number => (x > 0 ? 20 * Math.log10(x) : -Infinity);
-    return { peakDb: db(peak), rmsDb: db(Math.sqrt(sum / n)) };
+    return { peak, rms: Math.sqrt(sum / n) };
 }
 
 (window as unknown as { __soundtest: object }).__soundtest = { measure, engine, state };

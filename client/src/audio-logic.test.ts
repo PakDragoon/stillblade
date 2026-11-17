@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Box } from '@shared/types';
+import { GUNSHOT_RANGE, GUNSHOT_RANGE_SUPPRESSED } from '@shared/constants';
 import {
-    DEFAULT_SOUND_MODE, RELOAD_CUES, SAMPLE_EXT, SAMPLE_SETS, allSampleFiles, pickVariant, sampleFiles, stepVariation,
+    BREATH_REC_EXERT, BREATH_SETS, DEFAULT_SOUND_MODE, GUN_FAR_FLOOR, breathGap, breathLevel, breathRate, gunBlend, pickBreathSet, RELOAD_CUES, SAMPLE_EXT, SAMPLE_SETS, allSampleFiles, pickVariant, sampleFiles, stepVariation,
     surfaceUnder, useRecorded, varied
 } from './audio-logic';
 import { breathDistanceGain } from './audio';
@@ -73,7 +74,7 @@ describe('fallback rule', () => {
         expect(useRecorded(DEFAULT_SOUND_MODE, loaded([]), parts)).toBe(false);
     });
     it('plays synthesised when recorded sounds are switched off, however much is loaded', () => {
-        expect(useRecorded({ recorded: false, gunLayer: true }, () => true, ['dry'])).toBe(false);
+        expect(useRecorded({ recorded: false, gunLayer: true, real: true }, () => true, ['dry'])).toBe(false);
     });
     it('treats an empty parts list as usable (nothing missing)', () => {
         expect(useRecorded(DEFAULT_SOUND_MODE, () => false, [])).toBe(true);
@@ -132,5 +133,63 @@ describe('breathing distance curve is unchanged', () => {
     it('meets the old curve at 6 m and 7 m', () => {
         expect(breathDistanceGain(6)).toBeCloseTo(1 - (6 - 0.8) / (8 - 0.8), 6);
         expect(breathDistanceGain(7)).toBeCloseTo(1 - (7 - 0.8) / (8 - 0.8), 6);
+    });
+});
+
+describe('package N: gunshot blend of the close recording and the distant tail', () => {
+    it('is the close shot up close and the tail alone from 80 % of the range', () => {
+        for (const range of [GUNSHOT_RANGE, GUNSHOT_RANGE_SUPPRESSED]) {
+            const near = gunBlend(2, range), far = gunBlend(range * 0.8, range);
+            expect(near.close).toBeCloseTo(1, 6);
+            expect(near.far).toBe(GUN_FAR_FLOOR);
+            expect(far.close).toBeCloseTo(0, 6);
+            expect(far.far).toBeCloseTo(1, 6);
+        }
+    });
+    it('crossfades at equal power and never swaps back', () => {
+        let prevClose = 1, prevFar = 0;
+        for (let d = 0; d <= 70; d += 0.5) {
+            const b = gunBlend(d, GUNSHOT_RANGE);
+            expect(b.close).toBeLessThanOrEqual(prevClose + 1e-9);
+            expect(b.far).toBeGreaterThanOrEqual(prevFar - 1e-9);
+            if (b.far > GUN_FAR_FLOOR) expect(b.close ** 2 + b.far ** 2).toBeCloseTo(1, 6);
+            prevClose = b.close; prevFar = b.far;
+        }
+    });
+    it('keeps both weights finite for a tiny range', () => {
+        const b = gunBlend(5, 1);
+        expect(Number.isFinite(b.close) && Number.isFinite(b.far)).toBe(true);
+    });
+});
+
+describe('package N: recorded breathing choices', () => {
+    it('has a calm and an exerted set', () => {
+        expect([...BREATH_SETS]).toEqual(['breath_calm', 'breath_hard']);
+        for (const s of BREATH_SETS) expect(SAMPLE_SETS[s]).toBeGreaterThanOrEqual(2);
+    });
+    it('picks a calm breath at rest, an exerted one at full exertion, a mix in between', () => {
+        for (let r = 0; r < 1; r += 0.05) {
+            expect(pickBreathSet(0, r)).toBe('breath_calm');
+            expect(pickBreathSet(1, r)).toBe('breath_hard');
+        }
+        let hard = 0;
+        for (let r = 0; r < 1; r += 0.01) if (pickBreathSet(0.5, r) === 'breath_hard') hard++;
+        expect(hard).toBeGreaterThan(40);
+        expect(hard).toBeLessThan(60);
+        expect(pickBreathSet(7, 0.99)).toBe('breath_hard');
+        expect(pickBreathSet(-2, 0)).toBe('breath_calm');
+    });
+    it('gets louder, faster and closer together with exertion, within bounds', () => {
+        expect(breathLevel(0)).toBe(1);
+        expect(breathLevel(1)).toBe(BREATH_REC_EXERT);
+        expect(breathLevel(9)).toBe(BREATH_REC_EXERT);
+        expect(breathGap(1, 0.5)).toBeLessThan(breathGap(0, 0.5));
+        expect(breathRate(1, 0.5)).toBeGreaterThan(breathRate(0, 0.5));
+        for (let r = 0; r < 1; r += 0.1) {
+            expect(breathGap(0, r)).toBeGreaterThan(0.25);
+            expect(breathGap(1, r)).toBeGreaterThan(0.05);
+            expect(breathRate(0, r)).toBeGreaterThan(0.95);
+            expect(breathRate(1, r)).toBeLessThan(1.2);
+        }
     });
 });

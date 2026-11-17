@@ -18,7 +18,14 @@ export const SAMPLE_EXT = 'mp3';
 export const SAMPLE_SETS: Readonly<Record<string, number>> = {
     step_concrete: 4, step_metal: 4, step_wood: 4,
     impact_concrete: 3, impact_metal: 3, impact_wood: 3,
-    shot_rifle_loud: 2, shot_pistol_loud: 2, shot_rifle_supp: 1, shot_pistol_supp: 1,
+    // Package H's thump layers (kept for the old-versus-new comparison on the sound test page and as the layer of
+    // the synthesised shot when a recording is missing).
+    thump_rifle_loud: 2, thump_pistol_loud: 2, thump_rifle_supp: 1, thump_pistol_supp: 1,
+    // Package N: real gunshots (close recordings, a distant tail, suppressed versions derived from them) and the
+    // ghost's recorded breaths, cut one breath cycle per file.
+    shot_rifle_loud: 5, shot_rifle_far: 2, shot_rifle_supp: 2,
+    shot_pistol_loud: 3, shot_pistol_far: 1, shot_pistol_supp: 2,
+    breath_calm: 4, breath_hard: 3,
     reload_rifle_out: 1, reload_rifle_in: 1, reload_rifle_bolt: 1,
     reload_pistol_out: 1, reload_pistol_in: 1, reload_pistol_slide: 1,
     knife_windup: 1, knife_slash: 2, knife_hit: 2,
@@ -37,7 +44,12 @@ export const SAMPLE_GAIN: Readonly<Record<string, number>> = {
     // the gun layers would otherwise add 5 to 10 dB (a suppressed shot must stay quiet), bullet impacts were 14 dB
     // hotter than the synthesised ones (footsteps must stay the loudest thing a defender listens for), the knife
     // windup is the defender's warning and came out 4.6 dB quieter, reloads are meant to be quiet.
-    shot_rifle_loud: 0.65, shot_pistol_loud: 0.65, shot_rifle_supp: 0.3, shot_pistol_supp: 0.25,
+    thump_rifle_loud: 0.65, thump_pistol_loud: 0.65, thump_rifle_supp: 0.3, thump_pistol_supp: 0.25,
+    // Package N, set from tools/sound-check.mjs measurements (nobody has listened): the recorded shot is the whole
+    // gunshot now, so these are the loudness of the shot itself.
+    shot_rifle_loud: 2.0, shot_rifle_far: 0.5, shot_rifle_supp: 0.48,
+    shot_pistol_loud: 2.7, shot_pistol_far: 0.5, shot_pistol_supp: 0.65,
+    breath_calm: 0.45, breath_hard: 0.9,
     impact_concrete: 0.4, impact_metal: 0.4, impact_wood: 0.4,
     knife_windup: 1.4,
     reload_rifle_out: 0.8, reload_rifle_in: 0.8, reload_rifle_bolt: 0.8,
@@ -65,9 +77,14 @@ export interface SoundMode {
     recorded: boolean;
     /** Gunshots: the recorded layer over the synthesised shot. False is the pure synthesised shot. */
     gunLayer: boolean;
+    /**
+     * Package N: gunshots and ghost breathing from the real recordings. False plays package H's sounds instead
+     * (the synthesised shot under a recorded thump, the synthesised breathing), for comparison.
+     */
+    real: boolean;
 }
 
-export const DEFAULT_SOUND_MODE: Readonly<SoundMode> = { recorded: true, gunLayer: true };
+export const DEFAULT_SOUND_MODE: Readonly<SoundMode> = { recorded: true, gunLayer: true, real: true };
 
 /**
  * Index of the variant to play from `items` (entries not loaded are null/undefined), or -1 when none is loaded,
@@ -141,3 +158,42 @@ export const RELOAD_CUES = {
     rifle: { parts: ['reload_rifle_out', 'reload_rifle_in', 'reload_rifle_bolt'], times: [0.3, 1.4, 1.9] },
     pistol: { parts: ['reload_pistol_out', 'reload_pistol_in', 'reload_pistol_slide'], times: [0.15, 0.7, 1.0] }
 } as const;
+
+/**
+ * Package N: how a gunshot at distance `d` mixes the close recording and the distant tail (equal power, so the
+ * loudness does not dip in the middle). Up to `CLOSE_UNTIL` m it is the close shot with a whisper of the tail; by
+ * 80 % of the range (48 m for the loud rifle) it is the tail alone. The overall fade to silence at the range comes
+ * from the voice's distance panner, not from here, so both layers reach silence exactly at `range`.
+ */
+export const GUN_CLOSE_UNTIL = 8;
+export const GUN_FAR_FLOOR = 0.1;
+export function gunBlend(d: number, range: number): { close: number; far: number } {
+    const end = Math.max(GUN_CLOSE_UNTIL + 1, range * 0.8);
+    const w = Math.min(1, Math.max(0, (d - GUN_CLOSE_UNTIL) / (end - GUN_CLOSE_UNTIL)));
+    return { close: Math.cos(w * Math.PI / 2), far: Math.max(GUN_FAR_FLOOR, Math.sin(w * Math.PI / 2)) };
+}
+
+/**
+ * Package N, recorded ghost breathing. A calm breath and an exerted one are separate recordings, each cut into
+ * single breath cycles. Every cycle the next breath is chosen at random (never the one just played, per ghost);
+ * the chance that it is an exerted one equals the ghost's exertion `e` (0..1), so a ghost that starts running turns
+ * from calm to panting breath by breath rather than as two overlapping people, and the level, pace and pitch
+ * move with `e` as well.
+ */
+export const BREATH_SETS = ['breath_calm', 'breath_hard'] as const;
+export function pickBreathSet(e: number, r: number): 'breath_calm' | 'breath_hard' {
+    return r < Math.min(1, Math.max(0, e)) ? 'breath_hard' : 'breath_calm';
+}
+/** Amplitude of a recorded breath: calm at rest, `BREATH_REC_EXERT` times that at full exertion. */
+export const BREATH_REC_EXERT = 1.5;
+export function breathLevel(e: number): number {
+    return 1 + (BREATH_REC_EXERT - 1) * Math.min(1, Math.max(0, e));
+}
+/** Silence (s) after a recorded breath before the next starts; shorter when exerted. `r` in [0, 1). */
+export function breathGap(e: number, r: number): number {
+    return (0.45 - 0.35 * Math.min(1, Math.max(0, e))) * varied(0.35, r);
+}
+/** Playback rate of a recorded breath: a little faster when exerted, with +-4 % variation from `r` in [0, 1). */
+export function breathRate(e: number, r: number): number {
+    return (1 + 0.08 * Math.min(1, Math.max(0, e))) * varied(0.04, r);
+}

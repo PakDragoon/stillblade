@@ -28,8 +28,8 @@ import type { Box, Vec3 } from '@shared/types';
 import type { AudioEngine, AudioOptions, BombView, CreateAudio, CueKind, ListenerView } from './audio-api';
 import type { RemoteView } from './presenter-api';
 import {
-    DEFAULT_SOUND_MODE, RELOAD_CUES, SAMPLE_GAIN, SAMPLE_SETS, pickVariant, sampleFiles, stepVariation,
-    surfaceUnder, useRecorded, varied, type SoundMode
+    BREATH_SETS, DEFAULT_SOUND_MODE, RELOAD_CUES, SAMPLE_GAIN, SAMPLE_SETS, breathGap, breathLevel, breathRate, gunBlend,
+    pickBreathSet, pickVariant, sampleFiles, stepVariation, surfaceUnder, useRecorded, varied, type SoundMode
 } from './audio-logic';
 import { faceAt, type Surface } from './effects';
 
@@ -135,6 +135,10 @@ class Voice {
     tag = '';
     /** The loaded samples and the mode, or null for a voice that must stay synthesised. */
     samples: SampleBank | null = null;
+    /** Distance (m) from the listener to the source when started, 0 for a sound with no position; for the gunshot's close/distant blend. */
+    dist = 0;
+    /** Audible range (m) of this sound, from its config. */
+    range = 1;
     private pending = 0;
 
     constructor(readonly ctx: BaseAudioContext, readonly bank: NoiseBank) {
@@ -174,6 +178,11 @@ class Voice {
     /** A variant of recorded set `set`, or null when recorded sounds are off or none has loaded (play the synth). */
     pick(set: string): AudioBuffer | null {
         return this.samples ? this.samples.pick(set) : null;
+    }
+
+    /** Like `pick`, for the package N recordings: null too when the sound test page switched them off (play package H's sound). */
+    pickReal(set: string): AudioBuffer | null {
+        return this.samples && this.samples.mode.real ? this.samples.pick(set) : null;
     }
 
     /** Are recorded sounds on and loaded for every one of these sets (see `useRecorded`)? */
@@ -844,6 +853,24 @@ function layered(set: string, synth: Synth, level: number): Synth {
     };
 }
 
+/**
+ * Package N gunshot: the recorded shot is the whole sound. A close variant (never the same twice running, a slight
+ * level and pitch variation) and, for the louder shots, a distant tail blended in by distance (`gunBlend`; the
+ * fade to silence at the range is the voice's panner as for every sound). With no recording loaded, or with
+ * `real` off on the test page, `old` plays: package H's synthesised shot under a recorded thump.
+ */
+function recordedShot(closeSet: string, farSet: string | null, old: Synth, level: number): Synth {
+    return (v, t, x, flag) => {
+        const close = v.pickReal(closeSet);
+        if (!close) { old(v, t, x, flag); return; }
+        const far = farSet ? v.pickReal(farSet) : null;
+        let wc = 1, wf = 0;
+        if (far) { const b = gunBlend(v.dist, v.range); wc = b.close; wf = b.far; }
+        v.play(closeSet, close, t, level * wc * varied(0.12, Math.random()), varied(0.04, Math.random()));
+        if (far) v.play(farSet as string, far, t + 0.012, level * wf * varied(0.1, Math.random()), varied(0.03, Math.random()));
+    };
+}
+
 const STEP_SETS: Record<string, string> = { concrete: 'step_concrete', metal: 'step_metal', wood: 'step_wood' };
 const IMPACT_SETS: Record<string, string> = { concrete: 'impact_concrete', metal: 'impact_metal', wood: 'impact_wood' };
 
@@ -1001,6 +1028,10 @@ interface Breather {
     formant: BiquadFilterNode;
     band: BiquadFilterNode;
     amp: GainNode;
+    /** Recorded breaths (package N) enter here, past the synthesis filters, straight into the occlusion stage. */
+    rec: GainNode;
+    /** Index last played per recorded set, so a ghost never repeats a breath. */
+    lastBreath: [number, number];
     occF: BiquadFilterNode;
     occG: GainNode;
     fade: GainNode;
@@ -1045,11 +1076,13 @@ const stepCfg: ShotCfg = { ...STEP_CFG };
 /** Each gun's suppressed and unsuppressed shot and its reload, by id, then per slot of the weapon table. */
 const WEAPON_SOUNDS: Record<WeaponId, { shot: Synth; loud: Synth; reload: Synth }> = {
     rifle: {
-        shot: layered('shot_rifle_supp', synthGun, 0.9), loud: layered('shot_rifle_loud', synthLoudRifle, 0.9),
+        shot: recordedShot('shot_rifle_supp', null, layered('thump_rifle_supp', synthGun, 0.9), 1),
+        loud: recordedShot('shot_rifle_loud', 'shot_rifle_far', layered('thump_rifle_loud', synthLoudRifle, 0.9), 1),
         reload: sampledReload('rifle', synthReload)
     },
     pistol: {
-        shot: layered('shot_pistol_supp', synthPistol, 0.9), loud: layered('shot_pistol_loud', synthLoudPistol, 0.9),
+        shot: recordedShot('shot_pistol_supp', null, layered('thump_pistol_supp', synthPistol, 0.9), 1),
+        loud: recordedShot('shot_pistol_loud', 'shot_pistol_far', layered('thump_pistol_loud', synthLoudPistol, 0.9), 1),
         reload: sampledReload('pistol', synthPistolReload)
     }
 };
@@ -1122,10 +1155,11 @@ export const createAudio: CreateAudio = (boxes: readonly Box[], opts?: AudioOpti
         gain *= stepMode ? volSteps : volEffects;
         if (gain <= 0) return null;
 
-        let att = 1, occ = false;
+        let att = 1, occ = false, dist = 0;
         if (pos && haveListener) {
             const dx = pos[0] - lpos[0], dy = pos[1] - lpos[1], dz = pos[2] - lpos[2];
             const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            dist = d;
             att = linearGain(d, cfg.ref, cfg.range);
             if (att <= 0) return null; // beyond audible range: do not even build it
             occ = occluded(pos[0], pos[1] + cfg.occLift, pos[2]);
@@ -1146,6 +1180,8 @@ export const createAudio: CreateAudio = (boxes: readonly Box[], opts?: AudioOpti
         const t = now + LEAD;
         const v = new Voice(ctx, bank);
         v.start = t;
+        v.dist = dist;
+        v.range = cfg.range;
         v.tag = tag;
         v.samples = samples;
         v.priority = priority;
@@ -1230,6 +1266,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[], opts?: AudioOpti
         occF.type = 'lowpass';
         occF.frequency.value = OPEN_CUTOFF;
         occF.Q.value = 0.707;
+        const rec = c.createGain();
         const occG = c.createGain();
         const fade = c.createGain();
         fade.gain.setValueAtTime(0, now);
@@ -1243,6 +1280,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[], opts?: AudioOpti
         formant.connect(band);
         band.connect(amp);
         amp.connect(occF);
+        rec.connect(occF);
         occF.connect(occG);
         occG.connect(fade);
         fade.connect(dist);
@@ -1250,14 +1288,14 @@ export const createAudio: CreateAudio = (boxes: readonly Box[], opts?: AudioOpti
         panner.connect(out);
         src.start(now, Math.random() * nb.pink.duration);
         const b: Breather = {
-            id, src, formant, band, amp, occF, occG, fade, dist, panner,
+            id, src, formant, band, amp, rec, lastBreath: [-1, -1], occF, occG, fade, dist, panner,
             seen: frameNo, dying: false, exert: 0,
             // Random phase so several ghosts do not breathe in unison.
             nextBreath: now + Math.random() * 0.6,
             occTimer: 0, occInit: false, occluded: false, head: [0, 0, 0],
         };
         src.onended = () => {
-            src.disconnect(); formant.disconnect(); band.disconnect(); amp.disconnect();
+            src.disconnect(); formant.disconnect(); band.disconnect(); amp.disconnect(); rec.disconnect();
             occF.disconnect(); occG.disconnect(); fade.disconnect(); dist.disconnect(); panner.disconnect();
             const i = breathers.indexOf(b);
             if (i >= 0) { breathers[i] = breathers[breathers.length - 1]; breathers.pop(); }
@@ -1289,6 +1327,33 @@ export const createAudio: CreateAudio = (boxes: readonly Box[], opts?: AudioOpti
         f.exponentialRampToValueAtTime(420, t0 + inh + hold + ex);
         b.band.Q.setValueAtTime(1.6 - 0.7 * e, t0);
         b.nextBreath = t0 + P;
+    }
+
+    /**
+     * One recorded breath cycle (package N) scheduled at `t0`: the next one is picked at random (calm or exerted by the
+     * ghost's exertion, never the cycle just played), then the silence before the one after. Costs a source and a gain
+     * node every couple of seconds per ghost, no more.
+     */
+    function scheduleRecordedBreath(b: Breather, t0: number): void {
+        const e = b.exert;
+        const set = pickBreathSet(e, Math.random());
+        const si = set === 'breath_calm' ? 0 : 1;
+        const arr = samples.sets.get(set);
+        const k = arr ? pickVariant(arr, Math.random(), b.lastBreath[si]) : -1;
+        const buf = arr && k >= 0 ? arr[k] : null;
+        if (!buf || !ctx) { b.nextBreath = t0 + 1; return; }
+        b.lastBreath[si] = k;
+        const rate = breathRate(e, Math.random());
+        const g = ctx.createGain();
+        g.gain.value = breathLevel(e) * (SAMPLE_GAIN[set] ?? 1) * varied(0.1, Math.random());
+        const s = ctx.createBufferSource();
+        s.buffer = buf;
+        s.playbackRate.value = rate;
+        s.connect(g);
+        g.connect(b.rec);
+        s.onended = () => { s.disconnect(); g.disconnect(); };
+        s.start(t0);
+        b.nextBreath = t0 + buf.duration / rate + breathGap(e, Math.random());
     }
 
     function releaseBreather(b: Breather, now: number): void {
@@ -1470,7 +1535,11 @@ export const createAudio: CreateAudio = (boxes: readonly Box[], opts?: AudioOpti
 
                 // Keep about a quarter second of breath scheduled ahead.
                 if (b.nextBreath < now) b.nextBreath = now + LEAD;
-                if (b.nextBreath < now + 0.25) scheduleBreath(b, b.nextBreath);
+                if (b.nextBreath < now + 0.25) {
+                    // Recorded breaths when both recordings are loaded (and not switched off); else the synthesised cycle.
+                    if (samples.usable(BREATH_SETS) && samples.mode.real) scheduleRecordedBreath(b, b.nextBreath);
+                    else scheduleBreath(b, b.nextBreath);
+                }
             }
         },
 
@@ -1556,6 +1625,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[], opts?: AudioOpti
         setSoundMode(mode: Partial<SoundMode>): void {
             if (mode.recorded !== undefined) samples.mode.recorded = mode.recorded;
             if (mode.gunLayer !== undefined) samples.mode.gunLayer = mode.gunLayer;
+            if (mode.real !== undefined) samples.mode.real = mode.real;
         },
 
         setVolumes(v: { master: number; effects: number; footsteps: number }): void {
