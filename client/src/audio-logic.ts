@@ -24,7 +24,7 @@ export const SAMPLE_SETS: Readonly<Record<string, number>> = {
     // Package N: real gunshots (close recordings, a distant tail, suppressed versions derived from them) and the
     // ghost's recorded breaths, cut one breath cycle per file.
     shot_rifle_loud: 5, shot_rifle_far: 2, shot_rifle_supp: 2,
-    shot_pistol_loud: 3, shot_pistol_far: 1, shot_pistol_supp: 2,
+    shot_pistol_loud: 2, shot_pistol_far: 1, shot_pistol_supp: 2,
     breath_calm: 4, breath_hard: 3,
     reload_rifle_out: 1, reload_rifle_in: 1, reload_rifle_bolt: 1,
     reload_pistol_out: 1, reload_pistol_in: 1, reload_pistol_slide: 1,
@@ -48,7 +48,9 @@ export const SAMPLE_GAIN: Readonly<Record<string, number>> = {
     // Package N, set from tools/sound-check.mjs measurements (nobody has listened): the recorded shot is the whole
     // gunshot now, so these are the loudness of the shot itself.
     shot_rifle_loud: 2.0, shot_rifle_far: 0.5, shot_rifle_supp: 0.48,
-    shot_pistol_loud: 2.7, shot_pistol_far: 0.5, shot_pistol_supp: 0.65,
+    // Pistol: real Makarov and Glock recordings since 2026-11-18 (the AK stand-in needed 2.7 / 0.65): set to sit about
+    // 2 dB under the rifle up close, measured with tools/sound-check.mjs, not listened to.
+    shot_pistol_loud: 0.6, shot_pistol_far: 0.8, shot_pistol_supp: 0.13,
     breath_calm: 0.45, breath_hard: 0.9,
     impact_concrete: 0.4, impact_metal: 0.4, impact_wood: 0.4,
     knife_windup: 1.4,

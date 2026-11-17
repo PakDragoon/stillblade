@@ -245,7 +245,7 @@
         "headroom": true
     },
     "shot_pistol_loud": {
-        "n": 3,
+        "n": 2,
         "keepStart": true,
         "maxDur": 0.3,
         "fade": 0.1,
