@@ -166,7 +166,7 @@ describe('rifle sight: chosen any time, active from the next spawn', () => {
     it('passes the join-query sight through Rooms', () => {
         const rooms = new Rooms(new Map([['test', map]]), 'test');
         const sent: ServerMsg[] = [];
-        const r = rooms.join('abc', null, { send: m => sent.push(structuredClone(m)), ip: '1.2.3.4' } as never, 'Sam', 0, undefined, undefined, 2);
+        const r = rooms.join('abc', null, { send: (m: ServerMsg) => sent.push(structuredClone(m)), ip: '1.2.3.4' } as never, 'Sam', 0, undefined, undefined, 2);
         expect(r.ok).toBe(true);
         const spawn = sent.find(m => m.type === 'spawn');
         // A lobby room spawns in warmup at once with the join-query sight.
