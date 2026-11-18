@@ -56,6 +56,7 @@ from mathutils import Matrix, Vector
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import fpanims  # noqa: E402
+import packhands  # noqa: E402
 import rigkit as rk  # noqa: E402
 import soldier  # noqa: E402
 
@@ -997,6 +998,26 @@ def build_knife_clips(rig):
 
 # ---------------------------------------------------------------------------------------------
 
+# Ghost suit forearm with the pack's hands: its own hand is cut away (faces wholly on the hand bones) and the forearm
+# reduced to this many triangles.
+GHOST_FOREARM_TRIS = 1200
+
+
+def cut_hand(obj):
+    """Removes the faces of a soldier arm part whose every vertex is mostly weighted to the hand (wrist and fingers)."""
+    me = obj.data
+    gname = {g.index: g.name for g in obj.vertex_groups}
+    hand = [sum(g.weight for g in v.groups if gname[g.group] in soldier.HAND_BONES) > 0.5 for v in me.vertices]
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bm.verts.ensure_lookup_table()
+    dead = [f for f in bm.faces if all(hand[v.index] for v in f.verts)]
+    bmesh.ops.delete(bm, geom=dead, context='FACES')
+    bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context='VERTS')
+    bm.to_mesh(me)
+    bm.free()
+
+
 def skin(obj, arm, groups=None):
     if groups:
         for gname in groups:
@@ -1019,14 +1040,32 @@ def build(rig_name):
     src, sparts = soldier.fp_sources()
     s = 1.0
     crops = soldier.fp_crops(sparts)
+    pack_hands = packhands.available()
+    arm_layout = rl.ARM_LAYOUTS_PACK[rig_name] if pack_hands else rl.ARM_LAYOUTS[rig_name]
+    if pack_hands:
+        crops.update({k: v for k, v in packhands.crops().items() if v})
     atlas = rl.Atlas(rig_name, [(k, r, {}) for k, r in layout] +
-                     [rl.Region(k, r, crop=crops.get(k)) for k, r in rl.ARM_LAYOUTS[rig_name].items()], swatch_rect)
+                     [rl.Region(k, r, crop=crops.get(k)) for k, r in arm_layout.items()], swatch_rect)
     palettes = ['defender', 'ghost'] if rig_name == 'knife' else ['defender']
-    arms = [(pal, soldier.fp_arms(pal, sparts[pal], atlas, rig_name)) for pal in palettes]
-    for pal, objs in sparts.items():
-        if pal not in palettes:
-            for o in objs:
-                bpy.data.objects.remove(o)
+    if pack_hands:
+        # The pack's gloved hands (packhands.py, built once the armature exists): defenders get a sleeve to the wrist
+        # instead of the soldier's bare forearm and rolled sleeve; ghosts keep their suit forearm, its hand cut away.
+        arms = []
+        for pal, objs in sparts.items():
+            if pal == 'ghost' and pal in palettes:
+                for o in objs:
+                    cut_hand(o)
+                    o['budget'] = GHOST_FOREARM_TRIS
+                arms.append((pal, soldier.fp_arms(pal, objs, atlas, rig_name)))
+            else:
+                for o in objs:
+                    bpy.data.objects.remove(o)
+    else:
+        arms = [(pal, soldier.fp_arms(pal, sparts[pal], atlas, rig_name)) for pal in palettes]
+        for pal, objs in sparts.items():
+            if pal not in palettes:
+                for o in objs:
+                    bpy.data.objects.remove(o)
     for pal, a in arms:
         log(pal, 'arms tris', tris(a.data), 'verts', len(a.data.vertices))
 
@@ -1042,6 +1081,26 @@ def build(rig_name):
     # The armature must not share a name with a mesh node (the client picks the knife's variant by node name).
     arm = make_armature(f'rig_{rig_name}', src, s, extra)
     bpy.data.objects.remove(src)
+    if pack_hands:
+        # Our hand bones moved to the pack's hands, then its gloved hands (and the defender's sleeves) on them.
+        fits = packhands.fit_bones(arm)
+        done = dict(arms)
+        arms = []
+        for pal in palettes:
+            hands = packhands.hands_mesh(fits, pal)
+            rl.weld(hands, 1e-5)
+            atlas.remap(hands, material_region={'Glove_D': 'glove', 'Hand_D': 'handskin'})
+            parts_ = [hands]
+            if pal == 'defender':
+                sl = packhands.sleeve(arm, hands, pal, crops.get('sleeve'))
+                atlas.remap(sl, material_region={'sleeve_tube': 'sleeve'})
+                parts_.append(sl)
+            if pal in done:
+                parts_.append(done[pal])
+            a = join(parts_)
+            rl.single_material(a, rig_name)
+            arms.append((pal, a))
+            log(pal, 'pack hands: arms tris', tris(a.data), 'verts', len(a.data.vertices))
     for a in list(bpy.data.actions):
         bpy.data.actions.remove(a)
 

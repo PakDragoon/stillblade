@@ -287,7 +287,7 @@ Warehouse routes from the ghost spawn: to A through the yard stair and service c
 
 ## Assets and licences
 
-Maps: CC0 textures and sky from Poly Haven, listed in `client/public/maps/CREDITS.md`. Models (`client/public/models/CREDITS.md`): since package O the characters and first-person arms are the Fab "Quantum Modular Character Free Sample" by Quantum Assets (Fab Standard License: its source files must never be shipped or committed, only the processed models), animated with clips retargeted from the Quaternius "SWAT" character (CC0); since package M part 2 the weapons are CC-BY models from Fab (AK-105 by SpatialNeglect, Makarov PM by TaigaForest, Tactical Knife and Red Dot Sight by Gerardo Justel, and since package O the AR Scope by Scape), whose authors must stay credited. Raw downloads live in the git-ignored `tools/blender/source-art/`; the Blender scripts fall back to the shipped files if it is missing, but rebuilding characters or weapons from source needs those files present.
+Maps: CC0 textures and sky from Poly Haven, listed in `client/public/maps/CREDITS.md`. Models (`client/public/models/CREDITS.md`): since package O the characters and first-person arms are the Fab "Quantum Modular Character Free Sample" by Quantum Assets (Fab Standard License: its source files must never be shipped or committed, only the processed models), animated with clips retargeted from the Quaternius "SWAT" character (CC0); since package M part 2 the weapons are CC-BY models from Fab (AK-105 by SpatialNeglect, Makarov PM by TaigaForest, Tactical Knife and Red Dot Sight by Gerardo Justel, and since package O the AR Scope by Scape), whose authors must stay credited. Since package R the first-person **gloved hands and their textures** come from the Fab "M4 - FPS Weapon Animations Pack FREE (v.1)" (Fab Standard License, seller name to be filled in by the owner in `CREDITS.md`): processed hands and resampled textures ship inside the game files, the downloaded zip never does. Raw downloads live in the git-ignored `tools/blender/source-art/`; the Blender scripts fall back to the shipped files if it is missing, but rebuilding characters or weapons from source needs those files present.
 
 ## Hosting
 
@@ -1197,3 +1197,60 @@ the red dot or 2x scope during the overhand rack (not seen in the pictures, not 
 magazine's rock against the AK's well frame by frame; third person: a remote player's empty reload still plays the
 2.2 s third-person clip and then holds until the 2.7 s reload ends; the in-game draw frames landed late (see the README
 there); the seller's name for the credits.
+
+### Package R, second commit: the pack's gloved hands (a trial, 2026-11-19)
+
+The owner asked to try the pack's gloved hands on all three rigs. **It is one commit on top of package R so it can be
+dropped** (`git revert` it, or rebuild with `SB_PACK_HANDS=0`: `weapons.py`, then `viewmodel.py`). No rule, message,
+client code or protocol change: art and Blender scripts only (`presenter.ts` and `weapons.ts` untouched). Pictures:
+`docs/review/viewmodel/after5/` (README there): old and new side by side for every moment in `compare-blender/` and
+`compare-game/`.
+
+**How** (`tools/blender/packhands.py`, called by `viewmodel.py` and `weapons.py`):
+- **Skeleton:** our rig keeps its arms; its finger and thumb bones are moved onto the pack's hand skeleton (its bind
+  pose), fitted rigidly to our wrist by the two hands' frames (wrist, knuckles, the line across the knuckles). Every
+  grip, curl and clip reads the bones, so the rifle (idle, aimed, both reloads, draw, fire), pistol (idle, reload) and
+  knife (idle, swing) grips refit by themselves; no grip constant was changed.
+- **Size:** the pack's hands are about 1.4 times our soldier's (12.7 cm wrist to knuckles against 9.0, a 10 cm cuff),
+  so they are drawn at 0.71 (`PACK_HAND_SCALE`): our guns, grips and third-person characters are sized for our hand.
+- **Mesh:** the pack's glove (2,412 triangles) and skin (only the fingertips and the wrist under the cuff are kept; its
+  bare forearm above the glove's cuff is cut away), skin weights renamed onto our bones (its hand to `Wrist`, finger
+  joints 1-3 to our 2-4, its forearm to the wrist-end twist bone). Still one skinned mesh and one draw call per rig.
+- **Sleeves:** defenders get a generated tube from just over the glove's cuff to past the elbow, skinned along the
+  forearm twist bones, textured with a plain patch of the Quantum shirt's orange fabric (the whole fabric crop streaked
+  along the tube; the rolled cuff mesh no longer fits a full sleeve and is dropped). Ghosts keep their suit forearm
+  (the Quantum body), its own hand cut away, reduced to 1,200 triangles.
+- **Team looks:** the glove's colour is recoloured coyote in the atlas (its light and dark kept); a ghost's glove is
+  tinted near-black by vertex colour and its bare fingertips darkened to 45 %. The pack's ORM blue channel reads fully
+  metallic although its materials set metalness 0: it is ignored.
+- **Atlases** (`realistic.ARM_LAYOUTS_PACK`): the arms' skin rectangle becomes `glove` (a quarter of the atlas height)
+  and `handskin` (the fingertip crop of the skin map); `sleeve` and `ghostarms` unchanged; 2048 for High, 1024 for Low as
+  before.
+
+**Numbers.** Arms: defender 4,678 triangles (was 5,000), ghost 4,213 (was 4,500). `viewmodel_*.glb` sizes within 1 KB
+of before (rifle 1,293,056, pistol 654,276, knife 583,816 bytes). Atlases (the six albedo and normal files per tier):
+
+| | Before | After | Change |
+|---|---|---|---|
+| Low (1024) | 801,794 bytes | 904,932 bytes | +103 KB |
+| High (2048) | 2,179,830 bytes | 2,482,014 bytes | +302 KB |
+
+`models.test.ts`' Low download budget still passes; 490 tests and typecheck pass.
+
+**What looks better (judged from SwiftShader stills only):** the coyote gloves read as real tactical gloves, with
+stitching, knuckle padding and a wrist strap, where our old hands were bare skin; the fingers wrap the AK grip, the
+Makarov and the knife convincingly; the ghost's near-black glove on the dark suit is a clean, readable silhouette; the
+overhand AK handle pull shows a gloved hand over the receiver.
+
+**What looks worse or is weaker:** the defender's sleeve is a plain smooth tube (no folds, a slightly darker
+burnt-orange than the third-person shirt) where the old rifle view showed the soldier's rolled sleeve; the glove's
+texture is softer than the guns at High (1024 source in a 512-pixel rectangle); the knife's thumb rests along the spine
+rather than wrapping over the fingers (the fist itself is closed round the handle, checked from the side in
+`compare-blender/knife-idle-side.jpg`); the bare fingertips are small and can look like skin-coloured blobs at a
+distance.
+
+**Not verified:** anything on a real GPU, in motion or with a mouse; the glove and sleeve lighting on High and in
+Warehouse; whether the pack's normal map is the right handedness (glTF requires OpenGL style and it was used as is;
+not checked by rendering both ways); fingertips poking through the guns frame by frame during the clips (none seen in
+the stills); the third-person characters, which still have the soldier's own hands (first person only changed); the
+seller's name for the credits.

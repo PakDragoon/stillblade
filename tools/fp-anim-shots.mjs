@@ -11,7 +11,8 @@
 //
 // The practice range as a defender (red dot, Low tier, Test Map 1): the hip hold, the tactical reload at four phases,
 // the empty reload (fire the magazine dry, keep the trigger held) at the magazine change and the charging handle, the
-// rifle's draw (switch to the pistol and back) and the defender's and the ghost's knife grips. Real input only.
+// rifle's draw (switch to the pistol and back), the pistol at the hip and through its reload, and the defender's and
+// the ghost's knife grips. Real input only.
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -172,11 +173,18 @@ async function run() {
             await cdp.eval('__thaw(1)');
         }
         await cdp.eval('__frames(40)');
+        console.log('pistol');
+        await cdp.eval(`(async () => { await __tap('Digit2'); await __frames(40); return true; })()`);
+        await shoot(cdp, '05-pistol-idle');
+        await cdp.eval(`(async () => { __key('KeyF', true); await __frames(2); __key('KeyF', false); await __frames(20); return true; })()`);
+        await cdp.eval(`__tap('KeyR')`);
+        for (const [t, tag] of [[0.42, 'a-mag-out'], [0.75, 'b-mag-in'], [1.06, 'c-slide']]) await reloadAt(cdp, 84, t / 1.4, `05-pistol-reload-${tag}`);
+        await cdp.eval('__frames(60)');
         console.log('knife');
         await cdp.eval(`(async () => { await __tap('Digit3'); await __frames(40); return true; })()`);
-        await shoot(cdp, '05-knife-defender');
+        await shoot(cdp, '06-knife-defender');
         await practice(cdp, { side: 'ghosts' });
-        await shoot(cdp, '06-knife-ghost');
+        await shoot(cdp, '07-knife-ghost');
         writeFileSync(join(OUT, 'frames.json'), JSON.stringify(log, null, 1));
         cdp.ws.close();
     } finally {
