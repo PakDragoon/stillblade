@@ -49,6 +49,17 @@ describe('first-person viewmodels', () => {
         });
     }
 
+    it('the guns have an aimed-arms clip for each sight they take, and the forearm twist bones', () => {
+        for (const w of WEAPONS) {
+            const g = readGlb(`viewmodel_${w.id}.glb`);
+            const c = clips(g);
+            const sights = w.takesSights ? SIGHTS.map(s => s.id) : [SIGHTS[SIGHT_IRON].id];
+            for (const s of sights) expect(c.has(`${w.id}_aim_${s}`), `${w.id}_aim_${s}`).toBe(true);
+            const names = nodeNames(g);
+            for (const n of ['ForeTwist1.L', 'ForeTwist2.L', 'ForeTwist1.R', 'ForeTwist2.R']) expect(names.has(n)).toBe(true);
+        }
+    });
+
     it('knife: idle and swing, the defender and ghost meshes on one armature', () => {
         const g = readGlb('viewmodel_knife.glb');
         const c = clips(g);

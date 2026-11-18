@@ -43,8 +43,10 @@ import type { LocalView, MatchView, RemoteView, WeaponSlotView } from './present
 
 const RAD = Math.PI / 180;
 /** Vertical field of view from the hip, in degrees; aiming down sights narrows it by the weapon's zoom. */
+/** Field of view (degrees, vertical) before the player's setting is read; the setting replaces it. */
 const BASE_FOV = 74;
-const TAN_HALF_FOV = Math.tan((BASE_FOV / 2) * RAD);
+let baseFov = BASE_FOV;
+let tanHalfFov = Math.tan((BASE_FOV / 2) * RAD);
 /** Prediction errors larger than this are teleports (respawn), not drift: snap instead of smoothing. */
 const SNAP_DISTANCE = 2;
 
@@ -827,7 +829,9 @@ async function start(): Promise<void> {
         input.sensitivity = st.sensitivity;
         input.invertY = st.invertY;
         input.setModes(st.crouchToggle, st.walkToggle, st.aimToggle, st.aimSensitivity);
-        camera.camera!.fov = st.fov;
+        // The field of view setting is the view's base; aiming narrows it from there (the frame loop sets it).
+        baseFov = st.fov;
+        tanHalfFov = Math.tan((st.fov / 2) * RAD);
         audio.setVolumes({ master: st.master, effects: st.effects, footsteps: st.footsteps });
         presenter.setCrosshair({ style: st.crosshairStyle, color: st.crosshairColor, size: st.crosshairSize });
         ui.applySettingsToPage(st);
@@ -970,7 +974,7 @@ async function start(): Promise<void> {
         const aimNow = aimPrev + (aimCurr - aimPrev) * a;
         // The rifle's zoom is its sight's (shared/weapons.ts SIGHTS); the pistol keeps its own.
         const zoom = held ? 1 + (adsZoomOf(loadout.slot, loadout.sight) - 1) * aimNow : 1;
-        const fov = zoom === 1 ? BASE_FOV : (2 * Math.atan(TAN_HALF_FOV / zoom)) / RAD;
+        const fov = zoom === 1 ? baseFov : (2 * Math.atan(tanHalfFov / zoom)) / RAD;
         if (camera.camera!.fov !== fov) camera.camera!.fov = fov;
         input.lookScale = 1 / zoom;
 

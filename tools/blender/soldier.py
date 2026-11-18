@@ -280,6 +280,8 @@ def copy_part(src, name, drop_mats, fold):
     groups = {}
     for tgt, _, _ in BONES:
         groups[tgt] = obj.vertex_groups.new(name=tgt)
+    for t in sorted({t for w in acc for t in w} - set(groups)):
+        groups[t] = obj.vertex_groups.new(name=t)
     by = {}
     for i, w in enumerate(acc):
         tot = sum(w.values())
@@ -454,9 +456,14 @@ for _S in 'LR':
     ARM_BONES.update({f'UpperArm.{_S}', f'LowerArm.{_S}', f'Wrist.{_S}'})
     ARM_BONES.update(f'{F}{k}.{_S}' for F in FINGERS for k in (2, 3, 4))
     ARM_BONES.update(f'Thumb{k}.{_S}' for k in (1, 2, 3))
-HAND_BONES = {b for b in ARM_BONES if not b.startswith(('UpperArm', 'LowerArm'))}
+# First person only: two forearm twist bones per arm (from the source's lowerarm_twist_02 at mid forearm and _01 near
+# the wrist), so the wrist's roll is spread along the forearm instead of wringing the skin at the elbow or the wrist.
+FP_TWIST = {'ForeTwist1': 'lowerarm_twist_02', 'ForeTwist2': 'lowerarm_twist_01'}
+for _S in 'LR':
+    ARM_BONES.update(f'{t}.{_S}' for t in FP_TWIST)
+HAND_BONES = {b for b in ARM_BONES if not b.startswith(('UpperArm', 'LowerArm', 'ForeTwist'))}
 # Look -> [(FBX, mesh, triangles)]: the defender's forearms, hands and rolled sleeves; the ghost's suit arms.
-FP_PARTS = {'defender': [('SKM_Character.fbx', 'Quantum_Arms', 3800), ('SKM_Character.fbx', 'Shirt_RolledUp', 1200)],
+FP_PARTS = {'defender': [('SKM_Character.fbx', 'Quantum_Arms', 4400), ('SKM_Character.fbx', 'Shirt_RolledUp', 600)],
             'ghost': [('SKM_Body_Full.fbx', 'Body_Full', 4500)]}
 FP_REGION = {'M_Quantum_Arms': 'arms', 'M_Quantum_Head': 'arms', 'M_Quantum_Body': 'arms', 'M_Shirt_RolledUp': 'sleeve',
              'M_Body': 'ghostarms', 'M_Head': 'ghostarms'}
@@ -481,7 +488,13 @@ def fp_sources():
         else:
             bpy.data.objects.remove(a)
     arm = build_armature(q)
+    add_fp_twist(arm, q)
     bpy.data.objects.remove(q)
+    for fbx, fold in folds.items():
+        for b in list(fold):
+            for t, src in FP_TWIST.items():
+                if b.startswith(src + '_'):
+                    fold[b] = f'{t}.{"L" if b.endswith("_l") else "R"}'
     out = {}
     for look, items in FP_PARTS.items():
         out[look] = []
@@ -494,6 +507,24 @@ def fp_sources():
         for o in d.values():
             bpy.data.objects.remove(o)
     return arm, out
+
+
+def add_fp_twist(arm, q):
+    """The first-person twist bones (FP_TWIST) on the shipped skeleton `arm`, at the source's twist bones, along the
+    forearm, parented to LowerArm."""
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode='EDIT')
+    eb = arm.data.edit_bones
+    for S in 'LR':
+        lo = eb[f'LowerArm.{S}']
+        d = (eb[f'Wrist.{S}'].head - lo.head).normalized()
+        for t, src in FP_TWIST.items():
+            b = eb.new(f'{t}.{S}')
+            b.head = q.matrix_world @ q.data.bones[f'{src}_{S.lower()}'].head_local
+            b.tail = b.head + d * 0.05
+            b.roll = lo.roll
+            b.parent = lo
+    bpy.ops.object.mode_set(mode='OBJECT')
 
 
 def cut_to_arms(obj):
@@ -566,7 +597,7 @@ def fp_regions(rects, crops):
 
 
 # Share of an arm part's triangles kept for the hands (they fill the bottom of the screen with the pistol and knife).
-FP_HAND_SHARE = 0.7
+FP_HAND_SHARE = 0.8
 
 
 def reduce_hands_first(obj, budget):

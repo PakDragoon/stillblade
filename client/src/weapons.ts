@@ -286,6 +286,32 @@ function makeStudioSphere(device: pc.GraphicsDevice): pc.Texture {
 }
 
 /**
+ * Skinned normals for the first-person rigs, which presenter.ts scales across the view (not in depth) to hold their
+ * size at any field of view (VM_FOV). The engine turns a skinned normal by the skin matrix itself, which is only right
+ * for uniform scale; this uses the matrix's cofactor (its inverse transpose up to a factor, which the normalize after
+ * it removes), right for any scale. A per-material override of the engine's `normalCoreVS` chunk (GLSL and WGSL),
+ * changing only the skinned line; skipped, with a warning, if a future engine version words that line differently.
+ */
+export function fovLockNormals(device: pc.GraphicsDevice, materials: pc.StandardMaterial[]): void {
+    const swaps: [string, string, string][] = [
+        ['glsl', 'return mat3(modelMatrix[0].xyz, modelMatrix[1].xyz, modelMatrix[2].xyz);',
+            'return mat3(cross(modelMatrix[1].xyz, modelMatrix[2].xyz), cross(modelMatrix[2].xyz, modelMatrix[0].xyz), cross(modelMatrix[0].xyz, modelMatrix[1].xyz));'],
+        ['wgsl', 'return mat3x3f(modelMatrix[0].xyz, modelMatrix[1].xyz, modelMatrix[2].xyz);',
+            'return mat3x3f(cross(modelMatrix[1].xyz, modelMatrix[2].xyz), cross(modelMatrix[2].xyz, modelMatrix[0].xyz), cross(modelMatrix[0].xyz, modelMatrix[1].xyz));']
+    ];
+    for (const [lang, from, to] of swaps) {
+        const src = pc.ShaderChunks.get(device, lang).get('normalCoreVS');
+        if (!src || !src.includes(from)) {
+            console.warn(`[stillblade] normalCoreVS (${lang}) changed; first-person normals keep the engine's.`);
+            continue;
+        }
+        const chunk = src.replace(from, to);
+        for (const m of materials) m.getShaderChunks(lang).set('normalCoreVS', chunk);
+    }
+    for (const m of materials) m.update();
+}
+
+/**
  * The weapons' materials: one per atlas (rifle, pistol, knife), shared by first and third person (and by the arms in
  * the rigs, whose UVs point at a flat white swatch so their vertex colours show). Each samples its gun's albedo atlas
  * (RGB colour times the vertex colour; alpha = the surface value, read as both gloss and metalness), its normal map
@@ -317,6 +343,7 @@ export class WeaponMaterials {
             return m;
         };
         this.byAtlas = { rifle: make(), pistol: make(), knife: make(), character: make() };
+        fovLockNormals(app.graphicsDevice, [this.byAtlas.rifle, this.byAtlas.pistol, this.byAtlas.knife]);
         // Characters: no glowing reticle; a mid grey until the atlas arrives.
         const ch = this.byAtlas.character;
         ch.emissive = new pc.Color(0, 0, 0);

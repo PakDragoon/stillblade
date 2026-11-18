@@ -13,6 +13,10 @@ import { SIGHTS, SIGHT_IRON } from '@shared/weapons';
  * hang from the weapon bone. The knife file has two meshes on the same armature ("rig_knife"): "vm_knife" (a
  * defender's sleeves) and "vm_ghost" (a ghost's), one shown at a time by node name.
  *
+ * Aimed: `<rig>_aim_<sight>` clips (one frame) hold the same grip with the arms solved from shoulders that keep their
+ * place relative to the eye; presenter.ts lays them over the idle pose by the aim progress (`blend`), so the arms do
+ * not slide into view with the gun. The gun bone is the same in both, so the sight picture is unchanged.
+ *
  * Rig space: for a gun, the rig's origin is the grip at the gun's hip pose (presenter.ts places the rig root exactly
  * where it used to place the bare gun, so aiming, drawing, kick and sway still move the whole rig); for the knife it
  * is the camera. Clips are sampled by time, not played: `pose(clip, t)` writes every bone for time t, so the reload
@@ -43,8 +47,14 @@ export interface VmClip {
 }
 
 const tq = new pc.Quat();
+const tq2 = new pc.Quat();
+const tv = new pc.Vec3();
 
-function sampleChannel(c: Channel, t: number): void {
+/**
+ * Samples a channel at time t. With w < 1 the sample is blended into the node's current value by w (slerp / lerp):
+ * VmRig.blend lays an aimed pose over the pose already written.
+ */
+function sampleChannel(c: Channel, t: number, w0 = 1): void {
     const times = c.times, n = times.length;
     let i = c.last < n - 1 ? c.last : 0;
     if (times[i] > t) i = 0;
@@ -63,11 +73,16 @@ function sampleChannel(c: Channel, t: number): void {
         if (v[a] * bx + v[a + 1] * by + v[a + 2] * bz + v[a + 3] * bw < 0) { bx = -bx; by = -by; bz = -bz; bw = -bw; }
         const u = 1 - w;
         tq.set(v[a] * u + bx * w, v[a + 1] * u + by * w, v[a + 2] * u + bz * w, v[a + 3] * u + bw * w).normalize();
+        if (w0 < 1) tq.slerp(tq2.copy(c.node.getLocalRotation()), tq, w0);
         c.node.setLocalRotation(tq);
         return;
     }
     const a = i * 3, b = Math.min(i + 1, n - 1) * 3, u = 1 - w;
-    const x = v[a] * u + v[b] * w, y = v[a + 1] * u + v[b + 1] * w, z = v[a + 2] * u + v[b + 2] * w;
+    let x = v[a] * u + v[b] * w, y = v[a + 1] * u + v[b + 1] * w, z = v[a + 2] * u + v[b + 2] * w;
+    if (w0 < 1) {
+        tv.copy(c.prop === P_POS ? c.node.getLocalPosition() : c.node.getLocalScale());
+        x = tv.x + (x - tv.x) * w0; y = tv.y + (y - tv.y) * w0; z = tv.z + (z - tv.z) * w0;
+    }
     if (c.prop === P_POS) c.node.setLocalPosition(x, y, z);
     else c.node.setLocalScale(x, y, z);
 }
@@ -165,6 +180,23 @@ export class VmRig {
         this.lastTime = t;
         const ch = clip.channels;
         for (let i = 0; i < ch.length; i++) sampleChannel(ch[i], t);
+        this.hideParts();
+    }
+
+    /**
+     * Blends `clip` at `time` over the pose written last (by `pose`) by weight w (0..1): the aimed arms
+     * (<rig>_aim_<sight>) over the idle hold. Call after `pose` every frame it applies; a no-op at w = 0.
+     */
+    blend(clip: VmClip | undefined, time: number, w: number): void {
+        if (!clip || w <= 0) return;
+        const t = time < 0 ? 0 : time > clip.duration ? clip.duration : time;
+        const ch = clip.channels;
+        for (let i = 0; i < ch.length; i++) sampleChannel(ch[i], t, w > 1 ? 1 : w);
+        this.hideParts();
+        this.lastTime = -1; // the next pose() must write every bone again
+    }
+
+    private hideParts(): void {
         if (this.sup && !this.suppressed) this.sup.setLocalScale(HIDDEN, HIDDEN, HIDDEN);
         const sb = this.sightBones;
         for (let i = 0; i < sb.length; i++) if (sb[i] && i !== this.sight) sb[i]!.setLocalScale(HIDDEN, HIDDEN, HIDDEN);

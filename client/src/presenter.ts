@@ -10,12 +10,12 @@ import type { CreatePresenter, CrosshairConfig, KillKind, LocalView, MatchView, 
 import { Character, CharLook, loadCharacterModel, makeSkinnedGhostMaterial, type CharacterModel } from './characters';
 import { TICK_RATE } from '@shared/constants';
 import { bindings } from './bindings';
-import { SIGHT_IRON, SLOT_COUNT, SLOT_KNIFE, WEAPONS, isGunSlot, sightDef, slotLabel, type SightId, type WeaponId } from '@shared/weapons';
+import { SIGHTS, SIGHT_IRON, SLOT_COUNT, SLOT_KNIFE, WEAPONS, adsZoomOf, isGunSlot, sightDef, slotLabel, type SightId, type WeaponId } from '@shared/weapons';
 import type { HitZone } from '@shared/zones';
 import {
     instantiateWeapon, loadWeaponModel, WEAPON_MESH, WeaponMaterials, type WeaponInstance, type WeaponModel
 } from './weapons';
-import { loadViewmodel, type VmRig } from './viewmodel';
+import { loadViewmodel, type VmClip, type VmRig } from './viewmodel';
 import { Effects, faceAt, type Surface } from './effects';
 import type { Tier } from './graphics';
 import { DYN_COL_UNIFORM, DYN_LIGHTS, DYN_POS_UNIFORM, type LookTuning } from './maplook';
@@ -54,6 +54,21 @@ const KNIFE_MODEL_BACK = 0.055;
 const SWAY_POS = 0.0022;
 const SWAY_ROT = 0.45;
 const SWAY_RATE = 1.3;
+/**
+ * The first-person weapon is drawn as if by a camera with this vertical field of view (degrees), whatever the
+ * player's field of view setting: at a wide setting the world shrinks but the weapon and hands keep their size and
+ * place on screen, as in other shooters. Done without a second camera: the viewmodel root is scaled across the view
+ * (x and y, not depth) by tan(world fov / 2) / tan(VM_FOV / 2), which projects exactly like a VM_FOV camera, keeps
+ * the screen centre (so aimed sights stay lined up) and keeps the muzzle where the tracers start. The arms' skinning
+ * shader takes the scale into its normals (weapons.ts `fovLockNormals`).
+ */
+const VM_FOV = 74;
+const VM_TAN = Math.tan((VM_FOV / 2) * Math.PI / 180);
+/**
+ * Share of the 2x scope's zoom the weapon itself gets when aimed: the world behind the lens is magnified 2x, the
+ * scope's housing only 1 + (2 - 1) * this, so the housing takes less of the screen round the lens.
+ */
+const VM_SCOPE_ZOOM_SHARE = 0.35;
 /** Share of the sway left when fully aimed down sights. */
 const AIM_SWAY = 0.2;
 /** Return rate (1/s) of the reload pose when a reload is cancelled. */
@@ -108,7 +123,7 @@ interface VmLook {
 
 const VM_LOOKS: Record<WeaponId, VmLook> = {
     rifle: {
-        hip: [0.15, -0.165, -0.4, 0, 3, -3],
+        hip: [0.13, -0.16, -0.29, 0, 12, -4],
         aim: [-0.013, -0.226, -0.47, 0, 0, 0],
         draw: [0.03, -0.24, 0.06, -40, 12, 25],
         // Lowered, pulled in toward the centre and canted so the magazine well faces the support hand.
@@ -120,7 +135,7 @@ const VM_LOOKS: Record<WeaponId, VmLook> = {
         fx: 1
     },
     pistol: {
-        hip: [0.11, -0.15, -0.33, 0, 3, -2],
+        hip: [0.085, -0.11, -0.21, -2, 12, -3],
         aim: [-0.002, -0.084, -0.3, 0, 0, 0],
         draw: [0, -0.2, 0.05, -55, 0, 20],
         // Tilted onto its side and brought in, magazine well toward the support hand.
@@ -869,8 +884,16 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     // The box versions are the fallback while weapons.glb loads (or if it fails); useWeaponModel swaps in
     // the meshes. `gun` is posed every frame; under it, one child per weapon slot, only the one in hand
     // enabled: 1 draw call + the flash. Knife = 1.
+    // Every first-person weapon hangs from this root, scaled for the viewmodel field of view (VM_FOV).
+    const vmRoot = new pc.Entity('viewmodel-root');
+    camera.addChild(vmRoot);
+    /** Scales the viewmodel root so the weapon is drawn as if at VM_FOV, magnified by `zoom` (aiming). */
+    const lockVmFov = (zoom: number): void => {
+        const k = Math.tan((cam.fov / 2) * Math.PI / 180) / (VM_TAN / zoom);
+        vmRoot.setLocalScale(k, k, 1);
+    };
     const gun = new pc.Entity('viewmodel-gun');
-    camera.addChild(gun);
+    vmRoot.addChild(gun);
     interface VmGun {
         root: pc.Entity; boxes: pc.Entity; muzzle: pc.Entity;
         /** Today's small box flash (suppressed) and the star flash (unsuppressed); one is used per room. */
@@ -918,7 +941,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
 
     // Knife: origin at the guard, blade along -Z.
     const knife = new pc.Entity('viewmodel-knife');
-    camera.addChild(knife);
+    vmRoot.addChild(knife);
     const knifeBoxes = new pc.Entity('boxes');
     knife.addChild(knifeBoxes);
     box(knifeBoxes, bladeMat, 0.007, 0.03, 0.16, 0, 0.003, -0.08, VM);          // blade
@@ -971,6 +994,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         v.muzzle.setLocalPosition(0, 0, 0);
         v.muzzle.setLocalEulerAngles(0, 0, 0);
     };
+    /** Per gun slot, per sight (SIGHTS index): the rig's aimed-arms clip, or null (an older file without one). */
+    const aimClips: (VmClip | null)[][] = WEAPONS.map(() => []);
     for (let i = 0; i < vmGuns.length; i++) {
         const id = WEAPONS[i].id, file = RIG_FILE[id];
         loadViewmodel(app, `${import.meta.env.BASE_URL}models/${file}`, file, VM, weaponMats.of(WEAPON_MESH[id]),
@@ -978,6 +1003,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             .then(rig => {
                 const v = vmGuns[i];
                 v.rig = rig;
+                aimClips[i] = SIGHTS.map(sd => rig.clips.get(`${id}_aim_${sd.id}`) ?? null);
                 v.root.addChild(rig.root);
                 rig.setSuppressed(suppressedLook);
                 rig.setSight(vmSight);
@@ -992,7 +1018,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     }
     // The knife rig hangs from the camera directly (its clips carry the whole swing).
     const knifeRigRoot = new pc.Entity('viewmodel-knife-rig');
-    camera.addChild(knifeRigRoot);
+    vmRoot.addChild(knifeRigRoot);
     knifeRigRoot.enabled = false;
     let knifeRig: VmRig | null = null;
     loadViewmodel(app, `${import.meta.env.BASE_URL}models/viewmodel_knife.glb`, 'viewmodel_knife.glb', VM, weaponMats.of('knife'),
@@ -1112,14 +1138,19 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             }
             // With arms, the reload clip moves the gun and hands inside the rig: no procedural reload pose on top.
             const rw = rig ? 0 : w;
-            if (rig) {
-                const clip = p > 0 ? rig.clips.get(RELOAD_CLIP[slot]) : rig.clips.get(IDLE_CLIP[slot]);
-                rig.pose(clip, clip ? p * clip.duration : 0);
-            }
             // Aim: blend from the hip pose to the sight line; the reload pose takes over from it.
             const a0 = local.aim > 0 ? Math.min(1, local.aim) : 0;
             const a = a0 * a0 * (3 - 2 * a0) * (1 - w);
+            if (rig) {
+                const clip = p > 0 ? rig.clips.get(RELOAD_CLIP[slot]) : rig.clips.get(IDLE_CLIP[slot]);
+                rig.pose(clip, clip ? p * clip.duration : 0);
+                // The aimed arms (shoulders kept in place relative to the eye) over the hold, by the aim.
+                if (p <= 0 && a > 0) rig.blend(aimClips[slot][WEAPONS[slot].takesSights ? vmSight : SIGHT_IRON] ?? undefined, 0, a);
+            }
             const ha = 1 - a;
+            // The weapon's own magnification follows the aim (part of it for the 2x scope).
+            const zoom = adsZoomOf(slot, vmSight);
+            lockVmFov(1 + (zoom - 1) * a * (WEAPONS[slot].takesSights && sightDef(vmSight).id === 'scope2x' ? VM_SCOPE_ZOOM_SHARE : 1));
             const hip = look.hip, rl = look.reload, dr = look.draw;
             // Aimed: the sight's aim point (weapons.glb) on the camera; before the model loads, the old fixed pose.
             const sightIdx = WEAPONS[slot].takesSights ? vmSight : SIGHT_IRON;
@@ -1149,6 +1180,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             knifeRigRoot.enabled = false;
             return;
         }
+        lockVmFov(1);
         // A defender drawing the knife: it rises from below, like the guns.
         const kd0 = knifeHeld && local.draw > 0 ? Math.min(1, local.draw) : 0;
         knifeDraw = kd0 * kd0;
