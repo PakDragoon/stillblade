@@ -74,10 +74,11 @@ SCOPE_DL = {'forward': (0, 1, 0), 'up': (0, 0, 1), 'scale': 1.0, 'lens': ('scope
 SCOPE_DL_REGIONS = {'scope_Material.001': (0.75, 0.375, 1.0, 0.5), 'scope_Material': (0.75, 0.25, 0.875, 0.375),
                     'scope_Material.002': (0.875, 0.3125, 1.0, 0.375), 'scope_Material.004': (0.875, 0.25, 1.0, 0.3125)}
 
-# Eye positions when aimed (the shipped frame, metres): iron sights put the eye this far behind the grip (over the
-# end of the stock, so the receiver and rear sight lead the eye to the front post); the red dot this far behind its
-# glass; the 2x scope this far behind its eyepiece, so the eyepiece fills the view like a real combat scope.
-EYE_BEHIND_GRIP = {'rifle': 0.44, 'pistol': 0.30}
+# Eye positions when aimed (the shipped frame, metres): iron sights put the eye this far behind the grip (the rifle:
+# a cheek weld over the stock's front, so the stock passes under the eye and the receiver's top leads to the front
+# post; at 0.44, past the stock's end, the gun was seen end-on as a thin strip); the red dot this far behind its glass;
+# the 2x scope this far behind its eyepiece, so the eyepiece fills the view like a real combat scope.
+EYE_BEHIND_GRIP = {'rifle': 0.20, 'pistol': 0.30}
 REDDOT_EYE_RELIEF = 0.26
 SCOPE_EYE_RELIEF = 0.045
 

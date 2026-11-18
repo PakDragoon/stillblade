@@ -935,3 +935,26 @@ new framing beyond the three frozen frames per gun; the hands are still a little
 most; more triangles would need a bigger budget); the knife swing's slash frame in the game (the capture froze after
 it); other screen shapes than 1366 x 768; the lighting on the arms at the widest field of view on a real GPU (the
 normal fix is in the shader, seen only in SwiftShader).
+
+### Package O second follow-up: roll, the thin aimed gun, knife fingers (2026-11-18)
+
+After the owner played `main` d2d5098. Branch `claude/realistic-soldiers-bcc8fb`, not merged or pushed; no protocol
+change, `shared/` and `server/` untouched, 461 tests, typecheck clean. Screenshots before and after at fields of view
+60, 74, 90 and 110: `docs/review/viewmodel/before2/` and `after2/` (README there).
+
+- **"The gun looks like a thin piece of paper when aiming":** the rifle's iron-sight eye point was 0.44 m behind the
+  grip, past the stock's end, so the aimed camera saw the AK end-on (a 5 cm strip). Same at every field of view, so the
+  field of view lock was not the cause. `weapons.py EYE_BEHIND_GRIP['rifle']` is now 0.20 (a cheek weld): the stock
+  passes under the eye and the receiver's top shows. Only `weapons.glb` changed (aim points); atlases unchanged.
+- **Roll:** `viewmodel.py HIP` and `presenter.ts VM_LOOKS.hip` roll the rifle and pistol -1 degree (were -6 and -3),
+  the knife's spine is level; the rifle reads upright like the owner's reference.
+- **Fingers:** `viewmodel.py Rig.pose_arm` curls each finger about its own hinge (its direction crossed with the palm's
+  normal, from the hand as posed, not the grip frame): every joint bends toward the palm in its own plane. The knife's
+  diagonal handle had bent fingers sideways with the old shared axis. `THUMB_KNIFE` wraps the thumb over the handle.
+  Checked frame by frame through the swing in Blender previews (idle and seven swing frames, close and side views).
+- **Reload untouched** (to be replaced by a bought animation pack, per the owner); timings unchanged.
+
+**Not verified:** anything on a real GPU, in motion or with a mouse; the aim-in blend in motion; the ghost's and the
+defender's swing in the game frame by frame (the in-game capture freezes one frame; the Blender previews cover the
+swing); the hands are still a little angular close up.
+
