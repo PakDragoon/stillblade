@@ -1,0 +1,65 @@
+{
+ "note": "SwiftShader (software GL): frame times are the CPU renderer's, not a GPU's. Draw calls are real.",
+ "views": {
+  "low-lit-hip": {
+   "draws": 20,
+   "fps": 10.2,
+   "frameMs": 226.7,
+   "renderMs": 2.2
+  },
+  "low-lit-aimed": {
+   "draws": 19
+  },
+  "low-dark-hip": {
+   "draws": 10,
+   "fps": 10,
+   "frameMs": 186.8,
+   "renderMs": 1.9
+  },
+  "low-dark-aimed": {
+   "draws": 10
+  },
+  "low-lit-third-person": {
+   "draws": 13,
+   "fps": 10.1,
+   "frameMs": 186.9,
+   "renderMs": 1.5
+  },
+  "low-dark-third-person": {
+   "draws": 12,
+   "fps": 10,
+   "frameMs": 120.1,
+   "renderMs": 7
+  },
+  "high-lit-hip": {
+   "draws": 42,
+   "fps": 10.2,
+   "frameMs": 333.4,
+   "renderMs": 14.8
+  },
+  "high-lit-aimed": {
+   "draws": 42
+  },
+  "high-dark-hip": {
+   "draws": 32,
+   "fps": 10,
+   "frameMs": 253.4,
+   "renderMs": 2.5
+  },
+  "high-dark-aimed": {
+   "draws": 32
+  },
+  "high-lit-third-person": {
+   "draws": 39,
+   "fps": 10.1,
+   "frameMs": 293.4,
+   "renderMs": 10.2
+  },
+  "high-dark-third-person": {
+   "draws": 39,
+   "fps": 10,
+   "frameMs": 200.1,
+   "renderMs": 3.9
+  }
+ }
+}

@@ -19,6 +19,8 @@ import { loadViewmodel, type VmClip, type VmRig } from './viewmodel';
 import { Effects, faceAt, type Surface } from './effects';
 import type { Tier } from './graphics';
 import { DYN_COL_UNIFORM, DYN_LIGHTS, DYN_POS_UNIFORM, type LookTuning } from './maplook';
+import { defaultLight, LIGHT_FLOATS, useProbeLighting, type MapLighting } from './lighting';
+import { ViewFeel, type FeelInput, type RecoilFeel } from './vmfeel';
 
 const DEG = 180 / Math.PI;
 const HEAD_WIDTH = 0.4;
@@ -71,6 +73,17 @@ const VM_TAN = Math.tan((VM_FOV / 2) * Math.PI / 180);
 const VM_SCOPE_ZOOM_SHARE = 0.35;
 /** Share of the sway left when fully aimed down sights. */
 const AIM_SWAY = 0.2;
+/** Rate (1/s) at which a player's or the weapon's light follows the probes as they move. */
+const LIGHT_EASE = 5;
+/** A camera jump longer than this (m) in one frame (a respawn, a spectator switch) takes the new light at once. */
+const LIGHT_SNAP = 3;
+
+/** Eases light uniforms `dst` toward `src` by `t` (0..1), keeping the key direction a unit vector. */
+function blendLight(dst: Float32Array, src: Float32Array, t: number): void {
+    for (let i = 0; i < dst.length; i++) dst[i] += (src[i] - dst[i]) * t;
+    const l = Math.hypot(dst[18], dst[19], dst[20]) || 1;
+    dst[18] /= l; dst[19] /= l; dst[20] /= l;
+}
 /** Return rate (1/s) of the reload pose when a reload is cancelled. */
 const RELOAD_RETURN = 12;
 /** The spread ticks fade to this opacity when fully aimed (the dot stays). */
@@ -114,8 +127,11 @@ interface VmLook {
      * Size 1 lifts the gun 12 mm and tips it up 5 degrees; negative dips it.
      */
     jolts: readonly (readonly [number, number, number])[];
-    /** Firing kick at its peak: lift (m), push back (m), muzzle up (degrees); and its duration (s). */
-    kick: readonly number[];
+    /**
+     * Firing kick (package Q: springs in vmfeel.ts that settle like a gun coming back to rest, a little different on
+     * every shot by the shot count), and how long the idle sway stays damped after a shot (s).
+     */
+    recoil: RecoilFeel;
     kickTime: number;
     /** Size of the muzzle flash and tracer relative to the rifle's. */
     fx: number;
@@ -132,7 +148,7 @@ const VM_LOOKS: Record<WeaponId, VmLook> = {
         reloadIn: 0.2, reloadOut: 0.2,
         // The magazine seats (1.4 s) and the bolt slams home (about 2.05 s).
         jolts: [[1400, 110, 1], [2050, 88, 0.7]],
-        kick: [0.012, 0.035, 4], kickTime: 0.08,
+        recoil: { back: 0.03, lift: 0.007, pitch: 3.2, side: 0.7, roll: 1.1, camRoll: 0.35, camPitch: 0.1 }, kickTime: 0.08,
         fx: 1
     },
     pistol: {
@@ -144,7 +160,7 @@ const VM_LOOKS: Record<WeaponId, VmLook> = {
         reloadIn: 0.15, reloadOut: 0.13,
         // Magazine drops (0.18 s), new one slapped in (0.7 s), slide pulled (1.08 s) and released (1.17 s).
         jolts: [[180, 90, -0.7], [700, 80, 1], [1080, 60, -0.6], [1170, 60, 1.3]],
-        kick: [0.016, 0.03, 9], kickTime: 0.11,
+        recoil: { back: 0.026, lift: 0.013, pitch: 7.5, side: 1.1, roll: 1.8, camRoll: 0.5, camPitch: 0.18 }, kickTime: 0.11,
         fx: 0.75
     }
 };
@@ -613,6 +629,10 @@ interface Remote {
     headMi: pc.MeshInstance;
     /** Animated character, once the model has loaded; null while the boxes stand in. */
     char: Character | null;
+    /** This player's light uniforms (lighting.ts), set on its character's and weapons' mesh instances. */
+    light: Float32Array;
+    /** False until `light` has been set from the probes once (it then eases instead of jumping). */
+    lightInit: boolean;
     height: number;
     seen: number;
     /** Copy of this frame's view, for matching remote shots to their shooter. */
@@ -654,6 +674,17 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     // Weapons load independently: the viewmodel keeps its boxes and characters stay unarmed until then. Their
     // textured materials (weapons.ts) exist from the start; the atlases load with the first setTier.
     const weaponMats = new WeaponMaterials(app, import.meta.env.BASE_URL);
+    // Lighting from the map's probes (lighting.ts): the first-person weapon's light is the weapon materials' own
+    // (`weaponMats.light`), each character's is on its mesh instances. Null until a map's lighting arrives.
+    let lighting: MapLighting | null = null;
+    const lightScratch = new Float32Array(LIGHT_FLOATS);
+    const camLast = new pc.Vec3(0, -1e6, 0);
+    // How the first-person weapon moves with the player and kicks (vmfeel.ts).
+    const feel = new ViewFeel();
+    const feelIn: FeelInput = { vx: 0, vy: 0, vz: 0, onGround: true, crouched: false, yaw: 0, pitch: 0, aim: 0 };
+    let feelAlive = false;
+    let localShots = 0;
+    let vmAim = 0;
     // The animated characters (package O) load with the first setTier, one file per tier (character_low.glb about
     // 6.6k triangles a look, character_high.glb about 13k); until then (and for good if it fails) remote players
     // keep drawing as the box stand-ins below. A later tier change loads the other file and swaps every character.
@@ -725,6 +756,10 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     bladeMat.update();
     const knifeGuardMat = makeMaterial(0.35, 0.36, 0.38, false);
     const knifeHandleMat = makeMaterial(0.1, 0.09, 0.08, false);
+    // The stand-ins' lit materials take the first-person weapon's light (lighting.ts), like the weapon materials.
+    for (const m of [defenderMats.body, defenderMats.head, gunMat, gunAccentMat, bladeMat, knifeGuardMat, knifeHandleMat]) {
+        useProbeLighting(app.graphicsDevice, m, weaponMats.light);
+    }
 
     const tmpA = new pc.Vec3();
     const tmpB = new pc.Vec3();
@@ -765,7 +800,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         return {
             id: -1, team: null, look: Look.None, root, body, neck, head, visor,
             bodyMi: body.render!.meshInstances[0], headMi: head.render!.meshInstances[0],
-            char: null, height: HULL_HEIGHT, seen: 0, x: 0, y: 0, z: 0, crouched: false, alive: false, corpseYaw: 0,
+            char: null, light: defaultLight(new Float32Array(LIGHT_FLOATS)), lightInit: false, height: HULL_HEIGHT, seen: 0, x: 0, y: 0, z: 0, crouched: false, alive: false, corpseYaw: 0,
             drawn: false, vis: 0
         };
     };
@@ -804,6 +839,13 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         r.char.setSuppressed(suppressedLook);
         r.char.reset();
         if (r.look !== Look.None) applyCharLook(r);
+        bindRemoteLight(r);
+    };
+    /** Points every lit mesh instance of this player (character, guns, knife) at its own light uniforms. */
+    const bindRemoteLight = (r: Remote): void => {
+        for (const n of r.root.find((g: pc.GraphNode) => g instanceof pc.Entity && !!g.render)) {
+            for (const mi of (n as pc.Entity).render!.meshInstances) mi.setParameter('sbLight[0]', r.light);
+        }
     };
 
     const layoutRemote = (r: Remote): void => {
@@ -873,6 +915,11 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             if (tier === 'high' && v.alive) effects.blobShadow(v.pos[0], v.pos[1], v.pos[2], SHADOW_RADIUS, SHADOW_ALPHA * r.vis);
             r.root.setPosition(v.pos[0], v.pos[1], v.pos[2]);
             r.root.setEulerAngles(0, (v.alive ? v.yaw : r.corpseYaw) * DEG, 0);
+            // Lit by where it stands (chest height; low when lying dead), easing as it moves between probes.
+            if (lighting && ch && lighting.sample(v.pos[0], v.pos[1] + (v.alive ? (v.crouched ? 0.8 : 1.15) : 0.35), v.pos[2], lightScratch)) {
+                blendLight(r.light, lightScratch, r.lightInit ? 1 - Math.exp(-LIGHT_EASE * dt) : 1);
+                r.lightInit = true;
+            }
             if (ch) continue;
             r.neck.setLocalEulerAngles(v.pitch * DEG, 0, 0);
             layoutRemote(r);
@@ -987,8 +1034,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         if (knifeRig) k.entity.enabled = false;
         k.entity.setLocalPosition(0, 0, KNIFE_MODEL_BACK);
         knifeBoxes.enabled = false;
-        for (let i = 0; i < active.length; i++) active[i].char?.setWeapons(m, weaponMats);
-        for (let i = 0; i < free.length; i++) free[i].char?.setWeapons(m, weaponMats);
+        for (let i = 0; i < active.length; i++) { active[i].char?.setWeapons(m, weaponMats); bindRemoteLight(active[i]); }
+        for (let i = 0; i < free.length; i++) { free[i].char?.setWeapons(m, weaponMats); bindRemoteLight(free[i]); }
     };
 
     // Arms rigs (tools/blender/viewmodel.py): one skinned mesh each, the same single draw call as the bare gun, drawn
@@ -1091,12 +1138,30 @@ export const createPresenter: CreatePresenter = (app, camera) => {
 
     const updateViewmodel = (dt: number, local: LocalView): void => {
         const team = local.team;
+        const firstPerson = local.alive && !local.spectating && !local.overview;
+        if (team !== vmTeam || firstPerson !== feelAlive) {
+            feel.reset(); // a respawn or a team change: no carried-over swing or kick
+            feelAlive = firstPerson;
+        }
         if (team !== vmTeam) {
             vmTeam = team;
             recoilT = 0;
             flashT = 0;
             swingT = -1;
             reloadW = 0;
+        }
+        vmAim = local.aim > 0 ? Math.min(1, local.aim) : 0;
+        if (firstPerson) {
+            feelIn.vx = local.vel[0]; feelIn.vy = local.vel[1]; feelIn.vz = local.vel[2];
+            feelIn.onGround = local.onGround;
+            feelIn.crouched = local.crouched;
+            feelIn.yaw = local.yaw;
+            feelIn.pitch = local.pitch;
+            feelIn.aim = team === 'defenders' && local.weapon !== SLOT_KNIFE ? vmAim : 0;
+            feel.update(dt, feelIn);
+            // A brief roll and flick of the view on each shot, gone within about 0.15 s. The camera's recoil offset,
+            // which the crosshair follows, is the game core's and unchanged.
+            if (feel.cam[0] !== 0 || feel.cam[1] !== 0) camera.rotateLocal(feel.cam[0], 0, feel.cam[1]);
         }
         const defender = team === 'defenders';
         const knifeHeld = defender && local.weapon === SLOT_KNIFE;
@@ -1122,12 +1187,12 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             }
             const look = SLOT_LOOKS[slot];
             const kick = SLOT_LOOKS[kickSlot];
+            const fp = feel.pos, fr = feel.rot;
             recoilT = Math.max(0, recoilT - dt);
             flashT = Math.max(0, flashT - dt);
             vmGuns[slot].flash.enabled = flashT > 0 && suppressedLook;
             vmGuns[slot].loud.enabled = flashT > 0 && !suppressedLook;
             const k = recoilT / kick.kickTime;
-            const e = k * k;
             // Reload: state-driven from the progress alone. Dip and cant in, hold, come back up; a
             // cancelled reload (progress back to 0) eases home.
             const p = local.reload > 0 ? Math.min(1, local.reload) : 0;
@@ -1177,14 +1242,15 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             const s = (1 - 0.7 * k) * (1 - (1 - AIM_SWAY) * a);
             const sx = Math.sin(time * SWAY_RATE) * SWAY_POS * s;
             const sy = Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6 * s;
+            // On top: the movement and recoil feel (bob, look inertia, jump and landing, crouch tilt, kick springs).
             gun.setLocalPosition(
-                hip[0] * ha + aim[0] * a + sx + rl[0] * rw + dr[0] * d,
-                hip[1] * ha + (aim[1] - sightDrop) * a + sy + kick.kick[0] * e + rl[1] * rw + 0.012 * jolt + dr[1] * d,
-                hip[2] * ha + aim[2] * a + kick.kick[1] * e + rl[2] * rw + dr[2] * d);
+                hip[0] * ha + aim[0] * a + sx + rl[0] * rw + dr[0] * d + fp[0],
+                hip[1] * ha + (aim[1] - sightDrop) * a + sy + rl[1] * rw + 0.012 * jolt + dr[1] * d + fp[1],
+                hip[2] * ha + aim[2] * a + rl[2] * rw + dr[2] * d + fp[2]);
             gun.setLocalEulerAngles(
-                hip[3] * ha + aim[3] * a + kick.kick[2] * e + sy * 120 + rl[3] * rw + 5 * jolt + dr[3] * d,
-                hip[4] * ha + aim[4] * a + Math.sin(time * SWAY_RATE * 0.7) * SWAY_ROT * s + rl[4] * rw + dr[4] * d,
-                hip[5] * ha + aim[5] * a + sx * 160 + rl[5] * rw + dr[5] * d);
+                hip[3] * ha + aim[3] * a + sy * 120 + rl[3] * rw + 5 * jolt + dr[3] * d + fr[0],
+                hip[4] * ha + aim[4] * a + Math.sin(time * SWAY_RATE * 0.7) * SWAY_ROT * s + rl[4] * rw + dr[4] * d + fr[1],
+                hip[5] * ha + aim[5] * a + sx * 160 + rl[5] * rw + dr[5] * d + fr[2]);
             knifeRigRoot.enabled = false;
             return;
         }
@@ -1198,9 +1264,10 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             knifeRigRoot.enabled = localAlive && (!defender || knifeHeld);
             knifeRig.setVariant(defender ? 'vm_knife' : 'vm_ghost');
             const kd = knifeDraw, rd = KNIFE_RIG_DRAW;
-            knifeRigRoot.setLocalPosition(rd[0] * kd + Math.sin(time * SWAY_RATE) * SWAY_POS,
-                rd[1] * kd + Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6, rd[2] * kd);
-            knifeRigRoot.setLocalEulerAngles(rd[3] * kd, 0, 0);
+            const fp = feel.pos, fr = feel.rot;
+            knifeRigRoot.setLocalPosition(rd[0] * kd + Math.sin(time * SWAY_RATE) * SWAY_POS + fp[0],
+                rd[1] * kd + Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6 + fp[1], rd[2] * kd + fp[2]);
+            knifeRigRoot.setLocalEulerAngles(rd[3] * kd + fr[0], fr[1], fr[2]);
             const swing = knifeRig.clips.get('knife_swing')!;
             let ct = -1;
             if (swingT >= 0) {
@@ -1995,6 +2062,16 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             ghostMat.setParameter('uTime', time);
             ghostSkinMat.setParameter('uTime', time);
             followId = local.spectateId;
+            // The first-person weapon's light: the probes at the eye, eased as the player moves (taken at once after the
+            // camera jumps: a respawn, a spectator switch).
+            if (lighting) {
+                const cp = camera.getPosition();
+                const snap = cp.distance(camLast) > LIGHT_SNAP;
+                camLast.copy(cp);
+                if (lighting.sample(cp.x, cp.y, cp.z, lightScratch)) {
+                    blendLight(weaponMats.light, lightScratch, snap ? 1 : 1 - Math.exp(-LIGHT_EASE * dt));
+                }
+            }
             updateRemotes(dt, remotes);
             updateViewmodel(dt, local);
             updateBomb(dt, match);
@@ -2048,6 +2125,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                 // one, except a shot predicted on the very frame of a switch).
                 kickSlot = slot;
                 recoilT = SLOT_LOOKS[slot].kickTime;
+                feel.shoot(SLOT_LOOKS[slot].recoil, ++localShots, vmAim);
                 flashT = suppressedLook ? FLASH_TIME : LOUD_FLASH_TIME;
                 const v = vmGuns[vmSlot];
                 (suppressedLook ? v.flash : v.loud).setLocalEulerAngles(0, 0, Math.random() * 90);
@@ -2195,6 +2273,16 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         setMapLook(tuning: LookTuning): void {
             effects.setFog(tuning);
             effects.reset(world);
+        },
+
+        setLighting(l: MapLighting | null): void {
+            lighting = l;
+            weaponMats.setEnvironment(l ? { atlas: l.envAtlas, sphere: l.sphere } : null);
+            camLast.set(0, -1e6, 0); // the next sample is taken at once
+            for (const list of [active, free]) {
+                for (const r of list) { r.lightInit = false; if (!l) defaultLight(r.light); }
+            }
+            if (!l) defaultLight(weaponMats.light);
         },
 
         footstep(id: number, pos: Vec3, loud: number): void {

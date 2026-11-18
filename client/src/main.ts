@@ -34,6 +34,7 @@ import { bindings, inputMatches, mouseInput } from './bindings';
 import { Input } from './input';
 import { loadout as loadoutChoice } from './loadout';
 import { applyMapLook, type LookTuning, type MapLookHandle } from './maplook';
+import { buildMapLighting, type MapLighting } from './lighting';
 import { measureTier, rendererName, resolveTier, tierFromRenderer, urlTier, type Tier, type TierChoice } from './graphics';
 import { Net } from './net';
 import { isTouchOnly, showPhoneNotice } from './phone';
@@ -75,6 +76,11 @@ const fixedRes = Math.min(1, Math.max(0, Number(params.get('res')) || 0));
 const forcedTier = urlTier(location.search);
 /** `?lag=150` adds 150 ms of artificial round-trip latency. */
 const lagMs = Math.max(0, Number(params.get('lag')) || 0);
+/**
+ * Anti-aliasing (package Q): 4x multisampling of the screen (Low; chosen when the WebGL context is created, so it
+ * cannot follow a live tier change) and of High's CameraFrame target. `?aa=0` turns both off, for comparing cost.
+ */
+const antialias = params.get('aa') !== '0';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
@@ -95,7 +101,7 @@ function explainFailure(reason: string): { title: string; message: string } {
 }
 
 const app = new pc.Application(canvas, {
-    graphicsDeviceOptions: { antialias: false, alpha: false, powerPreference: 'high-performance' }
+    graphicsDeviceOptions: { antialias, alpha: false, powerPreference: 'high-performance' }
 });
 app.setCanvasFillMode(pc.FILLMODE_FILL_WINDOW);
 app.setCanvasResolution(pc.RESOLUTION_AUTO);
@@ -103,17 +109,10 @@ app.setCanvasResolution(pc.RESOLUTION_AUTO);
 app.graphicsDevice.maxPixelRatio = 1;
 window.addEventListener('resize', () => app.resizeCanvas());
 
-// The world is drawn unlit from its baked lightmap; these realtime lights only light the players and
-// the first-person weapon, matched to the bake (tools/blender/mapbuilder.py): the sun at 47.9 deg elevation
-// toward engine (0.554, 0.742, 0.377) (the light shines along its -Y: pitch 90 - 47.9, yaw 55.8), warm,
-// and an ambient close to the baked sky fill on vertical surfaces.
-const SUN_ELEVATION_DEG = 47.9;
-const SUN_YAW_DEG = 55.8;
+// The world is drawn unlit from its baked lightmap. Players and the first-person weapon have no realtime sun or flat
+// ambient any more (package Q): client/src/lighting.ts lights them from probes of the map's own baked light, with the
+// sun where it reaches them. This ambient colour only lights the box stand-ins' fallback before a map is loaded.
 app.scene.ambientLight = new pc.Color(0.4, 0.42, 0.47);
-const sun = new pc.Entity('sun');
-sun.addComponent('light', { type: 'directional', color: new pc.Color(1, 0.93, 0.78), intensity: 0.95, castShadows: false });
-sun.setEulerAngles(90 - SUN_ELEVATION_DEG, SUN_YAW_DEG, 0);
-app.root.addChild(sun);
 
 const camera = new pc.Entity('camera');
 camera.addComponent('camera', {
@@ -186,7 +185,10 @@ const setPostProcessing = (on: boolean): void => {
         pc.ShaderChunks.get(app.graphicsDevice, 'glsl').set('tonemappingNeutralPS', NEUTRAL_NO_TOE);
         const f = new pc.CameraFrame(app, camera.camera!);
         f.rendering.toneMapping = pc.TONEMAP_NEUTRAL;
-        f.rendering.samples = 1;
+        // 4x multisampling of the scene target (the first-person weapon is drawn into it too), with a light
+        // sharpen to keep texture detail crisp through the resolve and the post passes.
+        f.rendering.samples = antialias ? 4 : 1;
+        f.rendering.sharpness = antialias ? 0.25 : 0;
         // Ambient occlusion reads a depth prepass: the viewmodel layer clears depth before the weapon is drawn, so
         // the depth left after the scene would only hold the weapon. The map shader writes the prepass's depth.
         f.rendering.sceneDepthMap = true;
@@ -199,6 +201,12 @@ const setPostProcessing = (on: boolean): void => {
         f.ssao.power = 4;
         f.ssao.scale = 0.5;
         f.ssao.blurEnabled = true;
+        // A soft vignette in the compose pass High already runs (no extra pass): draws the eye to the centre and gives
+        // the frame depth. Low has none (no post-processing on integrated graphics).
+        f.vignette.intensity = 0.3;
+        f.vignette.inner = 0.6;
+        f.vignette.outer = 1.25;
+        f.vignette.curvature = 0.6;
         cameraFrame = f;
     }
     cameraFrame.enabled = true;
@@ -241,6 +249,8 @@ interface LoadedMap {
     data: MapData;
     /** The map's look (shader variant per tier, fog and grade), or null for a map without baked look data. */
     look: MapLookHandle | null;
+    /** Players' and weapons' lighting from the map's baked light (null without a look, or if building it failed). */
+    lighting: MapLighting | null;
     unload(): void;
 }
 
@@ -257,7 +267,9 @@ async function loadMap(id: string): Promise<LoadedMap> {
     const mapEntity = (mapAsset.resource as pc.ContainerResource).instantiateRenderEntity();
     app.root.addChild(mapEntity);
     let look: MapLookHandle | null = null;
+    let lighting: MapLighting | null = null;
     const unload = (): void => {
+        lighting?.dispose();
         look?.dispose();
         mapEntity.destroy();
         app.assets.remove(mapAsset);
@@ -266,8 +278,14 @@ async function loadMap(id: string): Promise<LoadedMap> {
     // Baked maps draw unlit (albedo x baked light): no realtime lighting cost on the world at all.
     if (mapData.look) {
         try { look = await applyMapLook(app, mapEntity, camera, mapData, `${ASSETS}maps/`, tier); } catch (err) { unload(); throw err; }
+        // Looks only: if it fails, players and weapons keep a fixed outdoor light.
+        try {
+            lighting = buildMapLighting(app, mapEntity, mapData, look.sources, look.tuning, mapData.boxes);
+        } catch (err) {
+            console.warn('[stillblade] map lighting for players failed; using a fixed light.', err);
+        }
     }
-    return { data: mapData, look, unload };
+    return { data: mapData, look, lighting, unload };
 }
 
 /** The public room list for the menu (`GET /rooms` on the game server, same address as the socket). */
@@ -401,6 +419,7 @@ async function start(): Promise<void> {
         l.look.setTier(tier);
         setSceneFog(l.look.tuning);
         presenter.setMapLook(l.look.tuning);
+        presenter.setLighting(l.lighting);
     };
     lookLoaded(loaded);
     tierListeners.push(t => { loaded.look?.setTier(t); presenter.setTier(t); });
@@ -777,7 +796,7 @@ async function start(): Promise<void> {
         id: 0, team: 'ghosts', health: MAX_HEALTH, armor: MAX_ARMOR, alive: false, respawnIn: 0, connected: false, ping: 0, firing: false, vis: 0,
         canAct: false, carrier: false, siteNoBomb: false, action: 0, showScores: false, weapon: 0, weapons: [] as WeaponSlotView[],
         mag: WEAPONS[0].magSize, magSize: WEAPONS[0].magSize, reserve: 0, reload: 0, spread: 0, draw: 0, aim: 0, sight: 0,
-        yaw: 0, spectating: null, spectateId: -1, overview: false
+        yaw: 0, pitch: 0, vel: [0, 0, 0], onGround: true, crouched: false, spectating: null, spectateId: -1, overview: false
     };
     const slotViews = local.weapons as WeaponSlotView[];
     for (let i = 0; i < SLOT_COUNT; i++) slotViews.push({ mag: 0, reserve: 0 });
@@ -1052,6 +1071,14 @@ async function start(): Promise<void> {
         local.spectateId = followed ? followed.id : -1;
         local.overview = spectating && !followed;
         local.yaw = followed ? followed.yaw : input.yaw;
+        local.pitch = followed ? followed.pitch : input.pitch;
+        // Motion for the weapon's bob and sway: our own predicted movement (none while dead or following someone).
+        const moving = alive && !followed;
+        local.vel[0] = moving ? curr.vel[0] : 0;
+        local.vel[1] = moving ? curr.vel[1] : 0;
+        local.vel[2] = moving ? curr.vel[2] : 0;
+        local.onGround = moving ? curr.onGround : true;
+        local.crouched = moving && curr.crouched;
         presenter.frame(dt, local, remotes, match);
         const eyeNow = camera.getPosition();
         listener.pos[0] = eyeNow.x; listener.pos[1] = eyeNow.y; listener.pos[2] = eyeNow.z;
@@ -1106,6 +1133,8 @@ async function start(): Promise<void> {
     });
     // The room's map changes between matches, so `__sb.mapData` follows it.
     Object.defineProperty((window as unknown as { __sb: object }).__sb, 'mapData', { get: () => mapData, configurable: true });
+    // The players' and weapons' lighting of the current map (lighting.ts), for checking probe values.
+    Object.defineProperty((window as unknown as { __sb: object }).__sb, 'lighting', { get: () => loaded.lighting, configurable: true });
 }
 
 /** A touch device with no mouse is told so before the map, the models or the socket are touched (`?desktop=1` skips it). */

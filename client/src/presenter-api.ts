@@ -4,6 +4,7 @@ import type { Phase, RoundReason } from '@shared/rules';
 import type { Box, Vec3 } from '@shared/types';
 import type { HitZone } from '@shared/zones';
 import type { Tier } from './graphics';
+import type { MapLighting } from './lighting';
 import type { LookTuning } from './maplook';
 
 /** Another player, already interpolated for this frame. `pos` is the feet position. */
@@ -94,6 +95,16 @@ export interface LocalView {
     spread: number;
     /** The local view yaw in radians (0 faces -Z): damage direction markers turn with it. */
     yaw: number;
+    /** The local view pitch in radians (positive looks up), without recoil: the weapon trails how fast it changes. */
+    pitch: number;
+    /**
+     * The local player's predicted velocity (m/s, world; reused between frames) and whether it stands on the ground
+     * and is crouched: the first-person weapon bobs with the real speed and step, lifts on a jump, dips on landing and
+     * tilts when crouched (package Q). Presentation only. Zero, true and false while dead or spectating.
+     */
+    vel: Vec3;
+    onGround: boolean;
+    crouched: boolean;
     /** While dead and following a living teammate: that player's name. Null otherwise. */
     spectating: string | null;
     /** Id of the teammate being followed (their body is not drawn: the camera is inside it), or -1. */
@@ -250,6 +261,13 @@ export interface Presenter {
      * decal and particle of the previous map goes. The boxes given to `setWorld` already hold the new map.
      */
     setMapLook(tuning: LookTuning): void;
+    /**
+     * The map's lighting for players and weapons (client/src/lighting.ts: probes built from the map's own baked light,
+     * and an environment generated from its sky), after each map load; null before one exists or if building it
+     * failed (players and weapons then keep a fixed outdoor light). The presenter lights the first-person weapon from
+     * the camera's position and each character from its own, and gives metal the environment to reflect.
+     */
+    setLighting(lighting: MapLighting | null): void;
     /**
      * Another player's footstep sound arrived (`pos` its feet, `loud` 0..1). Dust is drawn only under a player the
      * presenter is drawing right now (never for a ghost it was not sent), and for an enemy ghost only as faintly as

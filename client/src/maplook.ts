@@ -337,10 +337,24 @@ function addSky(camera: pc.Entity, sky: pc.Texture, elevMin: number, tuning: Loo
     return entity;
 }
 
+/**
+ * What the look was made from, for the players' and weapons' lighting (client/src/lighting.ts): the lightmap and the
+ * sky (their images are read back on the CPU, small), and per map material its albedo texture and tint. Valid until
+ * `dispose`.
+ */
+export interface LookSources {
+    light: pc.Texture;
+    sky: pc.Texture;
+    elevMin: number;
+    lightScale: number;
+    materials: Map<string, { albedo: pc.Texture; tint: number; decal: boolean }>;
+}
+
 /** A map's look once applied: switch the tier's shader variant, and take it all away again. */
 export interface MapLookHandle {
     /** The fog and grade in use (the scene fog for players and weapons is set to match by the caller). */
     readonly tuning: LookTuning;
+    readonly sources: LookSources;
     /** High compiles the world shader with the dynamic lights; Low without (the default). */
     setTier(tier: Tier): void;
     /** Removes the sky, the materials and the textures (a map change). */
@@ -397,8 +411,13 @@ export async function applyMapLook(app: pc.Application, mapRoot: pc.Entity, came
         }
     };
     setTier(tier);
+    const sourceMaterials = new Map<string, { albedo: pc.Texture; tint: number; decal: boolean }>();
+    for (const [name, m] of Object.entries(look.materials)) {
+        sourceMaterials.set(name, { albedo: albedoByFile.get(m.albedo)!, tint: m.tint ?? 1, decal: m.decal ?? false });
+    }
     return {
         tuning,
+        sources: { light, sky, elevMin: look.sky.elevMin, lightScale: look.lightScale, materials: sourceMaterials },
         setTier,
         dispose: () => {
             skyEntity.destroy();
