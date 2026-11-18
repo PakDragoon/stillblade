@@ -803,7 +803,7 @@ the git-ignored `source-art/`, see `client/public/models/CREDITS.md`):
   It also provides the first-person arms (`fp_sources`, `fp_arms`) and their atlas regions (`fp_regions`).
 - `clips.py` (new): retargeting and the generated clips, sockets, export (24 fps, rotation keys only except the hips,
   bones that do not move in a clip keep 2 keys).
-- `viewmodel.py`: arms from `soldier.fp_*` instead of SWAT; hands at real size; shoulders moved for real arm lengths
+- `viewmodel.py`: arms from `soldier.fp_*` instead of SWAT (5,000 triangles for the defender's, 4,500 for the ghost's, 70 % in the hands); hands at real size; shoulders moved for real arm lengths
   (the rifle's left shoulder forward, a bladed stance, so the support hand reaches the handguard). Clip names, cue
   times, the hip poses and the aimed poses are unchanged.
 - `weapons.py`: each gun atlas gets the arms' regions (`realistic.ARM_LAYOUTS`; the AK, Makarov and knife textures
@@ -879,5 +879,5 @@ a quarter of the AK texture's height.
 retargeted clips in motion (feet sliding, the idle's lean); how the shirt orange reads against the real maps at a
 distance and in Warehouse's dark corners; the tier switch rebuilding characters during a match (code read, not run);
 remote characters during real fights (all third-person poses in the screenshots are staged on practice targets); the
-first-person arms at real screen sizes with sway, kick and draw; whether the left hand clips the AK's magazine during
+first-person arms at real screen sizes with sway, kick and draw (in the software-GL stills the hands still look a little angular when the pistol brings them close); whether the left hand clips the AK's magazine during
 the reload; the aimed 2x view on other screen shapes; `review.py`.
