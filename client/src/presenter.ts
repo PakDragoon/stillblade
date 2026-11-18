@@ -684,14 +684,16 @@ const RIG_FILE: Record<WeaponId, string> = { rifle: 'viewmodel_rifle.glb', pisto
 
 
 
-export const createPresenter: CreatePresenter = (app, camera) => {
+export const createPresenter: CreatePresenter = (app, camera, loads) => {
     // Materials (shared; per-instance opacity goes through mesh-instance parameters).
     const defenderMats = { body: makeMaterial(0.95, 0.5, 0.15, false), head: makeMaterial(0.85, 0.32, 0.12, false) };
     const ghostMat = makeGhostMaterial();
     const ghostSkinMat = makeSkinnedGhostMaterial(ENEMY_TINT);
     // Weapons load independently: the viewmodel keeps its boxes and characters stay unarmed until then. Their
     // textured materials (weapons.ts) exist from the start; the atlases load with the first setTier.
-    const weaponMats = new WeaponMaterials(app, import.meta.env.BASE_URL);
+    const weaponMats = new WeaponMaterials(app, import.meta.env.BASE_URL, loads ?? null);
+    /** A file's track for the loading screen (null without one). */
+    const track = (step: 'weapons' | 'characters' | 'hands', url: string, label: string) => loads?.file(step, url, label) ?? null;
     // Lighting from the map's probes (lighting.ts): the first-person weapon's light is the weapon materials' own
     // (`weaponMats.light`), each character's is on its mesh instances. Null until a map's lighting arrives.
     let lighting: MapLighting | null = null;
@@ -712,7 +714,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
         if (t === charTier) return;
         charTier = t;
         const file = `character_${t}.glb`;
-        loadCharacterModel(app, `${import.meta.env.BASE_URL}models/${file}`, ghostSkinMat, weaponMats.character(), file)
+        const url = `${import.meta.env.BASE_URL}models/${file}`;
+        loadCharacterModel(app, url, ghostSkinMat, weaponMats.character(), file, track('characters', url, 'models'))
             .then(m => {
                 if (charTier !== t) return; // a later tier change won
                 const old = charModel;
@@ -736,7 +739,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             });
     };
     let weaponModel: WeaponModel | null = null;
-    loadWeaponModel(app, `${import.meta.env.BASE_URL}models/weapons.glb`)
+    loadWeaponModel(app, `${import.meta.env.BASE_URL}models/weapons.glb`, 'weapons.glb',
+        track('weapons', `${import.meta.env.BASE_URL}models/weapons.glb`, 'models'))
         .then(m => {
             weaponModel = m;
             useWeaponModel(m);
@@ -1071,8 +1075,9 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     const aimClips: (VmClip | null)[][] = WEAPONS.map(() => []);
     for (let i = 0; i < vmGuns.length; i++) {
         const id = WEAPONS[i].id, file = RIG_FILE[id];
-        loadViewmodel(app, `${import.meta.env.BASE_URL}models/${file}`, file, VM, weaponMats.of(WEAPON_MESH[id]),
-            [`${id}_idle`, `${id}_reload`])
+        const url = `${import.meta.env.BASE_URL}models/${file}`;
+        loadViewmodel(app, url, file, VM, weaponMats.of(WEAPON_MESH[id]),
+            [`${id}_idle`, `${id}_reload`], track('hands', url, id))
             .then(rig => {
                 const v = vmGuns[i];
                 v.rig = rig;
@@ -1095,7 +1100,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     knifeRigRoot.enabled = false;
     let knifeRig: VmRig | null = null;
     loadViewmodel(app, `${import.meta.env.BASE_URL}models/viewmodel_knife.glb`, 'viewmodel_knife.glb', VM, weaponMats.of('knife'),
-        ['knife_idle', 'knife_swing'])
+        ['knife_idle', 'knife_swing'], track('hands', `${import.meta.env.BASE_URL}models/viewmodel_knife.glb`, 'knife'))
         .then(rig => {
             knifeRig = rig;
             knifeRigRoot.addChild(rig.root);

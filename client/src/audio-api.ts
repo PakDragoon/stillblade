@@ -2,6 +2,7 @@ import type { Team } from '@shared/protocol';
 import type { Box, Vec3 } from '@shared/types';
 import type { RemoteView } from './presenter-api';
 import type { SoundMode } from './audio-logic';
+import type { LoadReporter } from './loading';
 
 /** What the audio engine needs to know about the listener each frame. */
 export interface ListenerView {
@@ -121,6 +122,11 @@ export interface AudioOptions {
     context?: BaseAudioContext;
     /** Wait this long after the first `unlock()` before loading the samples (default 1500 ms: after the game is playable). */
     loadDelayMs?: number;
+    /**
+     * Hears each sample file's progress for the loading screen (`loading.ts`, step 'sounds'). Every file is announced
+     * when the engine is created; they are all skipped if Web Audio is unavailable.
+     */
+    loads?: LoadReporter;
 }
 
 /**

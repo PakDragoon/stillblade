@@ -1,4 +1,6 @@
 import * as pc from 'playcanvas';
+import { loadAssetTracked } from './fetch-progress';
+import type { FileTrack } from './loading';
 import { SIGHTS, SIGHT_IRON } from '@shared/weapons';
 
 /**
@@ -205,7 +207,7 @@ export class VmRig {
 
 /** Loads one viewmodel GLB. Rejects if it fails to load or lacks the weapon bone or its clips. */
 export function loadViewmodel(app: pc.Application, url: string, filename: string, layers: number[],
-    material: pc.Material, clips: readonly string[]): Promise<VmRig> {
+    material: pc.Material, clips: readonly string[], file: FileTrack | null = null): Promise<VmRig> {
     return new Promise((resolve, reject) => {
         const asset = new pc.Asset(filename, 'container', { url, filename });
         asset.once('load', () => {
@@ -222,7 +224,6 @@ export function loadViewmodel(app: pc.Application, url: string, filename: string
             app.assets.remove(asset);
             reject(new Error(`Failed to load ${url}: ${String(err)}`));
         });
-        app.assets.add(asset);
-        app.assets.load(asset);
+        loadAssetTracked(app, asset, file);
     });
 }

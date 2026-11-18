@@ -1,4 +1,6 @@
 import * as pc from 'playcanvas';
+import { loadAssetTracked } from './fetch-progress';
+import type { FileTrack } from './loading';
 import { TICK_RATE } from '@shared/constants';
 import { SLOT_COUNT, SLOT_KNIFE, WEAPONS } from '@shared/weapons';
 import type { RemoteView } from './presenter-api';
@@ -236,7 +238,7 @@ export interface CharacterModel {
 
 /** Loads the shared character GLB. Rejects if it fails to load or lacks a required clip. */
 export function loadCharacterModel(app: pc.Application, url: string, ghostMat: pc.ShaderMaterial,
-    defenderMat: pc.Material, filename = 'character_low.glb'): Promise<CharacterModel> {
+    defenderMat: pc.Material, filename = 'character_low.glb', file: FileTrack | null = null): Promise<CharacterModel> {
     return new Promise((resolve, reject) => {
         const asset = new pc.Asset('character', 'container', { url, filename });
         asset.once('load', () => {
@@ -256,8 +258,7 @@ export function loadCharacterModel(app: pc.Application, url: string, ghostMat: p
             app.assets.remove(asset);
             reject(new Error(`Failed to load ${url}: ${String(err)}`));
         });
-        app.assets.add(asset);
-        app.assets.load(asset);
+        loadAssetTracked(app, asset, file);
     });
 }
 
