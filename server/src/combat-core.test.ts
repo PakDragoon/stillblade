@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     EYE_HEIGHT, GUNSHOT_RANGE, GUNSHOT_RANGE_SUPPRESSED, HULL_HALF_WIDTH, KNIFE_COOLDOWN_TICKS, KNIFE_WINDUP_TICKS,
-    MAX_HEALTH, TICK_RATE
+    MAX_ARMOR, MAX_HEALTH, TICK_RATE
 } from '../../shared/constants';
 import type { NetCmd, ServerMsg, ShotEvent, SlashEvent, SoundEvent } from '../../shared/protocol';
 import { parseRoomOptions } from '../../shared/room-options';
@@ -94,8 +94,10 @@ describe('defender knife on the server', () => {
         expect(ghost.slashes()).toEqual([{
             type: 'slash', attacker: defender.id, pos: w.P(defender).state.pos, victim: ghost.id, damage: 35, backstab: false
         }]);
-        expect(w.P(ghost).health).toBe(MAX_HEALTH - DEFENDER_KNIFE.damage);
-        expect(ghost.last('dmg')).toMatchObject({ amount: 35, kind: 'knife' });
+        // From the front the armor takes 17 of the 35 (rounded down), health 18 (shared/armor.ts).
+        expect(w.P(ghost).health).toBe(MAX_HEALTH - 18);
+        expect(w.P(ghost).armor).toBe(MAX_ARMOR - 17);
+        expect(ghost.last('dmg')).toMatchObject({ amount: 18, armor: 17, kind: 'knife' });
         expect(ghost.last('dmg').zone).toBeUndefined(); // knife hits ignore zones
         expect(defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'knife', kill: false, damage: 35 });
         expect(defender.shots()).toHaveLength(0); // no gunshot either
@@ -110,6 +112,8 @@ describe('defender knife on the server', () => {
         w.run(KNIFE_WINDUP_TICKS + 1, back);
         expect(ghost.slashes()[0]).toMatchObject({ damage: 70, backstab: true });
         expect(w.P(ghost).health).toBe(MAX_HEALTH - DEFENDER_KNIFE.backstabDamage);
+        expect(w.P(ghost).armor).toBe(MAX_ARMOR); // a back-stab ignores armor
+        expect(ghost.last('dmg').armor).toBeUndefined();
         w.run(KNIFE_COOLDOWN_TICKS, back);
         expect(w.P(ghost).alive).toBe(false);
         expect(w.P(defender).stats).toMatchObject({ backstabs: 2, kills: 1, headshots: 0 });
@@ -228,8 +232,12 @@ describe('body-part damage on the server', () => {
         for (const [x, y, zone] of [[0, 1.65, 'head'], [0, 1.2, 'torso'], [0.26, 1.2, 'arms'], [-0.26, 1.2, 'arms'], [0, 0.4, 'legs']] as const) {
             const { shot, ghost, w } = shoot(x, y);
             expect(shot).toMatchObject({ victim: ghost.id, zone, damage: zoneDamage(RIFLE, zone) });
-            expect(w.P(ghost).health).toBe(MAX_HEALTH - zoneDamage(RIFLE, zone));
-            expect(ghost.last('dmg')).toMatchObject({ kind: 'shot', zone, weapon: SLOT_RIFLE });
+            // Head past the armor; torso 17 + 17; arms and legs 8 on armor, 9 on health (shared/armor.ts).
+            const health = { head: 32, torso: 83, arms: 91, legs: 91 }[zone];
+            const armor = { head: 100, torso: 83, arms: 92, legs: 92 }[zone];
+            expect(w.P(ghost).health).toBe(health);
+            expect(w.P(ghost).armor).toBe(armor);
+            expect(ghost.last('dmg')).toMatchObject({ kind: 'shot', zone, weapon: SLOT_RIFLE, amount: MAX_HEALTH - health });
         }
         // Head 2x, torso 1x, arms and legs 0.5x the rifle's 34: no single shot kills.
         expect([shoot(0, 1.65), shoot(0, 1.2), shoot(0.26, 1.2), shoot(0, 0.4)].map(r => r.shot.damage)).toEqual([68, 34, 17, 17]);

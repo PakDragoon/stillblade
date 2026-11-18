@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     EYE_HEIGHT, GHOST_MAX_VIS, KNIFE_BACKSTAB_DAMAGE, KNIFE_DAMAGE,
-    KNIFE_COOLDOWN_TICKS, KNIFE_WINDUP_TICKS, MAX_HEALTH, RELOAD_SOUND_RANGE, RESPAWN_MS, RUN_SPEED,
+    KNIFE_COOLDOWN_TICKS, KNIFE_WINDUP_TICKS, MAX_ARMOR, MAX_HEALTH, RELOAD_SOUND_RANGE, RESPAWN_MS, RUN_SPEED,
     TICK_RATE, VIS_SWING_SPIKE
 } from '../../shared/constants';
 import { shotDirection, spreadAngle } from '../../shared/gun';
@@ -88,10 +88,10 @@ const present = (c: Client): Partial<NetCmd> => ({ pitch: (c.seq % 2) * 0.001 })
 // Eye is at 1.62 m; aiming slightly down lands in the body, below the head zone.
 const BODY_AIM = { fire: true, pitch: -0.03 };
 /**
- * No gun kills with one shot (head is 2x body damage: 68 for the rifle). Held this long, the rifle puts three
- * shots into the torso from 20 m (the recoil climbs about 0.25 m, still below the head): 102 damage, a kill.
+ * No gun kills with one shot (head is 2x body damage: 68 for the rifle). Held this long, the rifle puts six
+ * shots into the torso from 20 m: with full armor (shared/armor.ts) each takes 17 health, so the sixth kills.
  */
-const KILL_TICKS = 2 * FIRE_INTERVAL_TICKS + 1;
+const KILL_TICKS = 5 * FIRE_INTERVAL_TICKS + 1;
 
 describe('core rules', () => {
     it('puts the first two players on opposite teams and spawns them', () => {
@@ -135,7 +135,9 @@ describe('defender gun', () => {
     it('registers a body shot, then kills and respawns', () => {
         const { ghost, defender, run, G } = setup();
         run(1, c => (c === defender ? BODY_AIM : {}));
-        expect(G.health).toBe(MAX_HEALTH - BODY_DAMAGE);
+        // Half of the 34 on the armor, half on health (shared/armor.ts); the shot event carries the full amount.
+        expect(G.health).toBe(MAX_HEALTH - BODY_DAMAGE / 2);
+        expect(G.armor).toBe(MAX_ARMOR - BODY_DAMAGE / 2);
         const shot = ghost.shots().at(-1)!;
         expect(shot).toMatchObject({ shooter: defender.id, victim: ghost.id, zone: 'torso', damage: BODY_DAMAGE });
         expect(shot.to[2]).toBeCloseTo(10 - 0.3, 3);
@@ -150,6 +152,8 @@ describe('defender gun', () => {
         run(Math.ceil(RESPAWN_MS / TICK_MS) + 1);
         expect(G.alive).toBe(true);
         expect(G.health).toBe(MAX_HEALTH);
+        expect(G.armor).toBe(MAX_ARMOR); // armor is back too at the warmup respawn
+        expect(ghost.last('snap').me).toMatchObject({ health: MAX_HEALTH, armor: MAX_ARMOR });
     });
 
     it('scores a headshot when the ray enters the head zone: twice the body damage, not a kill', () => {
@@ -159,6 +163,7 @@ describe('defender gun', () => {
         expect(defender.shots().at(-1)).toMatchObject({ victim: ghost.id, zone: 'head', damage: 2 * BODY_DAMAGE });
         expect(defender.shots().at(-1)!.killed).toBeUndefined();
         expect(G.health).toBe(MAX_HEALTH - 2 * BODY_DAMAGE);
+        expect(G.armor).toBe(MAX_ARMOR); // a headshot ignores armor
     });
 
     it('hits a ghost that is completely invisible', () => {
@@ -377,7 +382,8 @@ describe('defender loadout: rifle and pistol', () => {
         const body = setup();
         body.run(PISTOL.drawTicks + 1, c => (c === body.defender ? { slot: 2 } : {}));
         body.run(1, c => (c === body.defender ? BODY_AIM : {}));
-        expect(body.G.health).toBe(MAX_HEALTH - PISTOL.bodyDamage);
+        expect(body.G.health).toBe(MAX_HEALTH - PISTOL.bodyDamage / 2); // 13 to health, 13 to armor
+        expect(body.G.armor).toBe(MAX_ARMOR - PISTOL.bodyDamage / 2);
         expect(body.defender.shots().at(-1)).toMatchObject({ weapon: SLOT_PISTOL, zone: 'torso', damage: PISTOL.bodyDamage });
         expect(PISTOL.bodyDamage).toBeLessThan(RIFLE.bodyDamage);
 
@@ -579,7 +585,9 @@ describe('ghost knife', () => {
         expect(defender.slashes()).toHaveLength(0);
         run(1);
         expect(defender.slashes()).toMatchObject([{ attacker: ghost.id, victim: defender.id, damage: KNIFE_DAMAGE, backstab: false }]);
-        expect(D.health).toBe(MAX_HEALTH - KNIFE_DAMAGE);
+        // From the front the armor takes 27 of the 55 (rounded down), health the other 28.
+        expect(D.health).toBe(MAX_HEALTH - 28);
+        expect(D.armor).toBe(MAX_ARMOR - 27);
     });
 
     it('kills in one hit from behind', () => {
@@ -713,7 +721,9 @@ describe('rounds and the bomb', () => {
 
     it('ends the round on elimination with no respawn, then starts the next one', () => {
         const { game, ghost, defender, run, G } = live();
-        run(KILL_TICKS, c => (c === defender ? BODY_AIM : {}));
+        // Fire until the ghost falls (the recoil may put a late shot into the head, so the kill tick varies).
+        for (let i = 0; i < KILL_TICKS && G.alive; i++) run(1, c => (c === defender ? BODY_AIM : {}));
+        expect(G.alive).toBe(false);
         run(1);
         expect(defender.last('round')).toMatchObject({ phase: 'over', winner: 'defenders', reason: 'eliminated' });
         run(ticks(OVER_MS) - 5);

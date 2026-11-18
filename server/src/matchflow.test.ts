@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BREATH_RANGE, KNIFE_RANGE, TICK_RATE } from '../../shared/constants';
+import { BREATH_RANGE, KNIFE_COOLDOWN_TICKS, KNIFE_RANGE, TICK_RATE } from '../../shared/constants';
 import { CHAT_MAX_CHARS, type ChatMsg, type DamageMsg, type NetCmd, type ServerMsg, type Team } from '../../shared/protocol';
 import {
     FREEZE_MS, GRACE_MS, IDLE_ROUNDS, MATCH_OVER_MS, OVER_MS, PLANT_TICKS, ROUNDS_TO_WIN, ROUND_MS
@@ -13,10 +13,11 @@ const TICK_MS = 1000 / TICK_RATE;
 const ticks = (ms: number): number => Math.ceil(ms / TICK_MS);
 /**
  * No gun kills with one shot (a headshot is twice the body damage). Aimed slightly down from 20 m and held for
- * KILL_TICKS, the rifle (a shot every 6 commands) puts three shots into the torso as the recoil climbs: 102.
+ * KILL_TICKS, the rifle (a shot every 6 commands) puts six shots into the torso as the recoil climbs: with full
+ * armor (shared/armor.ts) each takes 17 health and 17 armor, so the sixth kills.
  */
 const KILL = { fire: true, pitch: -0.03 };
-const KILL_TICKS = 2 * 6 + 1;
+const KILL_TICKS = 5 * 6 + 1;
 
 /** Ghost spawns at z = ghostZ facing -Z; defender at z = defenderZ facing +Z. A bomb site covers the ghost spawn. */
 function makeMap(ghostZ = 10, defenderZ = -10, extra: Box[] = []): MapData {
@@ -206,16 +207,19 @@ describe('stats', () => {
         const r = room();
         const [ghost, defender] = r.clients;
         r.live();
-        r.run(1, c => (c === defender ? { fire: true, pitch: -0.03 } : null)); // body shot at 20 m: 34
+        r.run(1, c => (c === defender ? { fire: true, pitch: -0.03 } : null)); // body shot at 20 m: 34, half on armor
         const afterBody = r.game.players.get(defender.id)!.stats;
-        expect(afterBody).toMatchObject({ damage: 34, kills: 0, headshots: 0 });
+        expect(afterBody).toMatchObject({ damage: 34, kills: 0, headshots: 0 }); // health and armor both count
         r.run(ticks(3000), c => (c === defender ? { fire: false } : null));
-        r.run(1, c => (c === defender ? { fire: true } : null)); // head shot: 100 but only 66 left
+        r.run(1, c => (c === defender ? { fire: true } : null)); // head shot: 68, past the armor, 15 left
+        expect(r.game.players.get(defender.id)!.stats).toMatchObject({ kills: 0, headshots: 1, damage: 102 });
+        r.run(ticks(3000), c => (c === defender ? { fire: false } : null));
+        r.run(1, c => (c === defender ? { fire: true } : null)); // another: 68, but only 15 left
         const s = r.game.players.get(defender.id)!.stats;
-        expect(s).toMatchObject({ kills: 1, headshots: 1, damage: 100 });
+        expect(s).toMatchObject({ kills: 1, headshots: 2, damage: 117 });
         expect(r.game.players.get(ghost.id)!.stats.deaths).toBe(1);
         const roster = ghost.last('roster').players.find(p => p.id === defender.id)!;
-        expect(roster).toMatchObject({ kills: 1, headshots: 1, damage: 100, assists: 0, plants: 0 });
+        expect(roster).toMatchObject({ kills: 1, headshots: 2, damage: 117, assists: 0, plants: 0 });
     });
 
     it('credits an assist to a recent damager but not a stale one, and backstabs count', () => {
@@ -238,10 +242,12 @@ describe('stats', () => {
         const r = room(map, ['G1', 'D', 'G2']);
         const [g1, d, g2] = r.clients;
         r.live();
-        r.run(14, c => (c === d ? {} : { fire: true }));
+        // Two swings each. Front hits put 27 of 55 on the armor: g1 72/73, g2 44/46, g1 16/19, then g2's
+        // second takes the last 19 armor and 16 health and kills.
+        r.run(14 + KNIFE_COOLDOWN_TICKS, c => (c === d ? {} : { fire: true }));
         const S = (c: Client) => r.game.players.get(c.id)!.stats;
-        expect(S(g1)).toMatchObject({ damage: 55, kills: 0, assists: 1 });
-        expect(S(g2)).toMatchObject({ damage: 45, kills: 1, assists: 0 });
+        expect(S(g1)).toMatchObject({ damage: 110, kills: 0, assists: 1 });
+        expect(S(g2)).toMatchObject({ damage: 90, kills: 1, assists: 0 });
         expect(S(d)).toMatchObject({ deaths: 1 });
     });
 
@@ -454,7 +460,10 @@ describe('holding a match when a team empties', () => {
         const r = room(makeMap(), ['G', 'D', 'G2']);
         const [, d, g2] = r.clients;
         r.live();
-        r.run(6 * 6 + 1, c => (c === d ? KILL : wiggle(c))); // round 1 to the defenders: both ghosts down
+        // Round 1 to the defenders: both ghosts down, a burst each with a pause for the recoil to settle.
+        r.run(KILL_TICKS, c => (c === d ? KILL : wiggle(c)));
+        r.run(ticks(1000), c => wiggle(c));
+        r.run(KILL_TICKS, c => (c === d ? KILL : wiggle(c)));
         expect(r.game.score[1]).toBe(1);
         const kills = r.P(d).stats.kills;
         expect(kills).toBeGreaterThanOrEqual(1);
@@ -558,13 +567,21 @@ describe('damage events', () => {
         const d = dmgs(ghost)[0];
         // The defender is at -Z of the ghost: bearing 0 faces -Z.
         expect(d.dir).toBeCloseTo(0, 5);
-        expect(d).toMatchObject({ amount: 34, kind: 'shot', weapon: 0 }); // the rifle's slot
+        // 34 to the torso: 17 to health, 17 to the ghost's own armor (told only to the ghost).
+        expect(d).toMatchObject({ amount: 17, armor: 17, kind: 'shot', weapon: 0 }); // the rifle's slot
         expect(d.killed).toBeUndefined();
+        // The shooter gets the full amount and nothing about armor.
         expect(defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'shot', zone: 'torso', kill: false, damage: 34 });
         r.run(ticks(3000)); // recoil recovers in commands, so keep sending them
         r.run(1, c => (c === defender ? { fire: true } : null));
+        const h = dmgs(ghost).at(-1)!; // a headshot ignores armor: 68 of the 83 left
+        expect(h).toMatchObject({ kind: 'shot', zone: 'head', amount: 68 });
+        expect(h.armor).toBeUndefined();
+        expect(h.killed).toBeUndefined();
+        r.run(ticks(3000));
+        r.run(1, c => (c === defender ? { fire: true } : null));
         const k = dmgs(ghost).at(-1)!;
-        expect(k).toMatchObject({ killed: true, by: defender.id, kind: 'shot', zone: 'head', amount: 66 });
+        expect(k).toMatchObject({ killed: true, by: defender.id, kind: 'shot', zone: 'head', amount: 15 });
         expect(k.dist).toBeCloseTo(20, 0);
         expect(defender.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'shot', zone: 'head', kill: true, damage: 68 });
     });
@@ -575,7 +592,7 @@ describe('damage events', () => {
         r.live();
         r.run(14, c => (c === ghost ? { fire: true } : {}));
         expect(ghost.last('hitconfirm')).toEqual({ type: 'hitconfirm', kind: 'knife', kill: false, damage: 55 });
-        expect(defender.all('dmg')[0]).toMatchObject({ amount: 55, kind: 'knife' });
+        expect(defender.all('dmg')[0]).toMatchObject({ amount: 28, armor: 27, kind: 'knife' }); // 27 of 55 on the armor
         expect(defender.all('dmg')[0].zone).toBeUndefined();
     });
 
@@ -587,8 +604,8 @@ describe('damage events', () => {
         const d = dmgs(defender)[0];
         // Ghost is at +Z of the defender: bearing pi.
         expect(Math.abs(d.dir)).toBeCloseTo(Math.PI, 1);
-        expect(Object.keys(d).sort()).toEqual(['amount', 'dir', 'kind', 'type']);
-        r.run(ticks(1500), c => (c === ghost ? { fire: true } : {}));
+        expect(Object.keys(d).sort()).toEqual(['amount', 'armor', 'dir', 'kind', 'type']); // armor: its own, nobody else's
+        r.run(ticks(3000), c => (c === ghost ? { fire: true } : {})); // four front swings with armor
         const k = dmgs(defender).find(m => m.killed)!;
         expect(k.dist!).toBeLessThanOrEqual(KNIFE_RANGE + 0.1);
         expect(k.dist!).toBeLessThan(BREATH_RANGE); // already inside what the defender may know

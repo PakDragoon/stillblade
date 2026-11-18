@@ -64,7 +64,7 @@ function setup(defenderSight?: number, rounds = false) {
     /** The ghost stabs the defender until it dies, then the server runs until it respawns. */
     const killAndRespawn = (): void => {
         expect(P(defender).alive).toBe(true);
-        run(KNIFE_COOLDOWN_TICKS * 3, c => (c === ghost ? { fire: true } : {}));
+        run(KNIFE_COOLDOWN_TICKS * 5, c => (c === ghost ? { fire: true } : {})); // four front stabs through full armor
         expect(P(defender).alive).toBe(false);
         run(Math.ceil(RESPAWN_MS / TICK_MS) + 2);
         expect(P(defender).alive).toBe(true);
