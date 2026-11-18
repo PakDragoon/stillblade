@@ -30,6 +30,8 @@ const CHROME = arg('chrome', 'C:/Program Files/Google/Chrome/Application/chrome.
 const PORT = Number(arg('cdp', '9241'));
 const TIERS = arg('tiers', 'low,high').split(',');
 const MAP = arg('map', 'warehouse');
+/** Extra address parameters (for example `&aa=0` to compare without anti-aliasing). */
+const QUERY = arg('query', '');
 const W = 1366, H = 768;
 
 // Engine coordinates; yaw degrees (0 faces -Z, positive turns toward -X), pitch degrees. Snapped to the nearest
@@ -135,7 +137,14 @@ const HOOKS = `(() => {
   window.__vm = on => { const ls = cam.camera.layers.filter(id => id !== vm.id); cam.camera.layers = on ? ls.concat(vm.id) : ls; };
   window.__draws = () => sb.app.stats.drawCalls.total;
   // Frame time as the game's own HUD counts it (smoothed fps), and the engine's last frame and render times.
-  window.__timing = async () => { await __frames(30); const s = sb.stats(); const f = sb.app.stats.frame; return { fps: Math.round(s.fps * 10) / 10, frameMs: Math.round(f.ms * 10) / 10, renderMs: Math.round(f.renderTime * 10) / 10 }; };
+  // Wall-clock time between frames over 60 frames (mean and median, ms), after 20 frames to settle.
+  window.__timing = async () => {
+    await __frames(20);
+    const ts = []; const h = () => ts.push(performance.now()); sb.app.on('frameend', h); await __frames(61); sb.app.off('frameend', h);
+    const d = []; for (let i = 1; i < ts.length; i++) d.push(ts[i] - ts[i - 1]); d.sort((x, y) => x - y);
+    const mean = d.reduce((x, y) => x + y, 0) / d.length;
+    return { meanMs: Math.round(mean * 10) / 10, medianMs: Math.round(d[d.length >> 1] * 10) / 10 };
+  };
   // The light the probes give at the camera (lighting.ts uniforms, rounded): ambient from up, the sides, down; sun.
   window.__light = () => {
     const l = sb.lighting; if (!l) return null;
@@ -150,7 +159,7 @@ const HOOKS = `(() => {
 
 async function open(cdp, { tier, side }) {
     await cdp.eval(`localStorage.setItem('sb-loadout', JSON.stringify({ sight: 'reddot' })); localStorage.setItem('sb-howto', '1'); true`);
-    const url = `${CLIENT}/?auto=1&quiet=1&desktop=1&name=Shot&practice=1&side=${side}&map=${MAP}&server=${encodeURIComponent(SERVER)}&res=1&tier=${tier}`;
+    const url = `${CLIENT}/?auto=1&quiet=1&desktop=1&name=Shot&practice=1&side=${side}&map=${MAP}&server=${encodeURIComponent(SERVER)}&res=1&tier=${tier}${QUERY}`;
     await cdp.send('Page.navigate', { url });
     await waitFor(cdp, 'window.__sb && window.__sb.mapData && window.__sb.stats().alive', 120000, 'spawn');
     await cdp.eval(HOOKS);
@@ -200,6 +209,23 @@ async function run() {
                 report.views[`${tag}-aimed`] = { draws: await cdp.eval('__draws()') };
                 await shoot(cdp, `${tag}-aimed`);
                 await cdp.eval(`(async () => { await __thaw(2); __key('KeyZ', false); await __frames(30); return true; })()`);
+                if (spot.name !== 'lit') continue;
+                // Motion (package Q): frozen 0.45 s into a run forward (the camera stays at the spot; the weapon shows
+                // the bob and lean from the player's real speed), and on the frame of a burst's third shot (the kick).
+                await cdp.eval(`(async () => { const sb = window.__sb; __key('KeyW', true); let t = 0;
+                  await new Promise(res => { const h = dt => { t += dt; if (t >= 0.45) { sb.app.off('update', h); sb.app.timeScale = 0; res(); } }; sb.app.on('update', h); });
+                  await __frames(1); return true; })()`);
+                await sleep(200);
+                report.views[`${tag}-running`] = { draws: await cdp.eval('__draws()'), speed: await cdp.eval('Math.round(Math.hypot(window.__sb.state.vel[0], window.__sb.state.vel[2]) * 100) / 100') };
+                await shoot(cdp, `${tag}-running`);
+                await cdp.eval(`(async () => { await __thaw(1); __key('KeyW', false); await __frames(40); return true; })()`);
+                await cdp.eval(`(async () => { const sb = window.__sb; let n = 0; const shot = sb.presenter.shot;
+                  const done = new Promise(res => { sb.presenter.shot = (...a) => { shot(...a); if (a[2] && ++n === 3) { sb.app.timeScale = 0; res(); } }; });
+                  __key('KeyF', true); await done; __key('KeyF', false); sb.presenter.shot = shot; await __frames(1); return true; })()`);
+                await sleep(200);
+                report.views[`${tag}-firing`] = { draws: await cdp.eval('__draws()') };
+                await shoot(cdp, `${tag}-firing`);
+                await cdp.eval('__thaw(40)');
             }
             console.log(`${tier}: third person`);
             await open(cdp, { tier, side: 'ghosts' });
