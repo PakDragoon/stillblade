@@ -2,7 +2,7 @@ import { rayWorld } from '@shared/raycast';
 import type { Box, Vec3 } from '@shared/types';
 
 /**
- * Where a body lies. The character's death clip (tools/blender/characters.py, recentred) falls backward: the head
+ * Where a body lies. The character's death clip (tools/blender/clips.py, recentred) falls backward: the head
  * ends about 1.3 m behind the feet position, the feet about 0.6 m in front, the arms out to the sides behind the
  * hips. Played facing the wrong way next to a wall, half the body goes through it, so the presenter turns the body
  * toward open floor: the facing at death if the fall is clear, else the nearest direction (45 degree steps) that is,

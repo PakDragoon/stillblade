@@ -45,10 +45,18 @@ ATLAS_SIZES = (2048, 1024)
 # Atlas layout per gun (UV units, v up): [(source material, rect)], swatch rect. The rifle: AK-105 body, folding stock,
 # red dot, downloaded scope; the swatches (flat colours for generated parts and the first-person arms) in the corner.
 LAYOUTS = {
-    'rifle': ([('ak105', (0.0, 0.0, 0.75, 1.0)), ('folding_stock', (0.75, 0.75, 1.0, 1.0)),
+    'rifle': ([('ak105', (0.0, 0.25, 0.75, 1.0)), ('folding_stock', (0.75, 0.75, 1.0, 1.0)),
                ('sight', (0.75, 0.5, 1.0, 0.75)), ('scope', (0.75, 0.25, 1.0, 0.5))], (0.75, 0.0, 1.0, 0.25)),
-    'pistol': ([('T_PM', (0.0, 0.0, 0.875, 1.0))], (0.875, 0.0, 1.0, 1.0)),
-    'knife': ([('Material.001', (0.0, 0.0, 0.875, 1.0))], (0.875, 0.0, 1.0, 1.0)),
+    'pistol': ([('T_PM', (0.0, 0.25, 0.875, 1.0))], (0.875, 0.0, 1.0, 1.0)),
+    'knife': ([('Material.001', (0.0, 0.5, 0.875, 1.0))], (0.875, 0.0, 1.0, 1.0)),
+}
+# The first-person arms (package O; soldier.py fills them from the soldier's textures): forearm and hand skin, the
+# rolled sleeve, and on the knife the ghost's suit arms.
+ARM_LAYOUTS = {
+    'rifle': {'arms': (0.0, 0.0, 0.375, 0.25), 'sleeve': (0.375, 0.0, 0.75, 0.25)},
+    'pistol': {'arms': (0.0, 0.0, 0.4375, 0.25), 'sleeve': (0.4375, 0.0, 0.875, 0.25)},
+    'knife': {'arms': (0.0, 0.25, 0.4375, 0.5), 'sleeve': (0.4375, 0.25, 0.875, 0.5),
+              'ghostarms': (0.0, 0.0, 0.875, 0.25)},
 }          # High, Low
 WEBP_QUALITY = {'albedo': 82, 'normal': 85}
 
@@ -242,6 +250,29 @@ def transfer_normals(src, dst):
         bpy.ops.object.modifier_apply(modifier=m.name)
 
 
+def uv_crop(objs, material, pad=0.01):
+    """Bounding box (u0, v0, u1, v1) of the UVs of `material`'s faces over `objs`, padded; None if none."""
+    lo, hi = None, None
+    for o in objs:
+        me = o.data
+        if not me.uv_layers:
+            continue
+        uv = np.zeros(len(me.loops) * 2, np.float32)
+        me.uv_layers.active.data.foreach_get('uv', uv)
+        uv = uv.reshape(-1, 2)
+        mats = [m.name if m else '' for m in me.materials]
+        for p in me.polygons:
+            if p.material_index < len(mats) and mats[p.material_index] == material:
+                sel = uv[p.loop_start:p.loop_start + p.loop_total]
+                a, b = sel.min(axis=0), sel.max(axis=0)
+                lo = a if lo is None else np.minimum(lo, a)
+                hi = b if hi is None else np.maximum(hi, b)
+    if lo is None:
+        return None
+    return (max(0.0, float(lo[0]) - pad), max(0.0, float(lo[1]) - pad), min(1.0, float(hi[0]) + pad),
+            min(1.0, float(hi[1]) + pad))
+
+
 def new_mesh_object(name, bm, material):
     me = bpy.data.meshes.new(name)
     bm.to_mesh(me)
@@ -392,11 +423,17 @@ def material_maps(mat):
 class Region:
     """One rectangle of an atlas (UV space, v up) and the maps resampled into it."""
 
-    def __init__(self, name, rect, maps=None, constant=None):
+    def __init__(self, name, rect, maps=None, constant=None, crop=None, post=None):
+        """`crop` (u0, v0, u1, v1): only that part of the source maps is used (UVs outside it are clamped);
+        `post(rgb, s)` may change the composed albedo (h, w, 3) and surface value (h, w) of this region in place."""
         self.name, self.rect, self.maps, self.constant = name, rect, maps or {}, constant
+        self.crop, self.post = crop, post
 
     def map_uv(self, u, v):
         u0, v0, u1, v1 = self.rect
+        if self.crop:
+            c0, d0, c1, d1 = self.crop
+            u, v = (u - c0) / max(c1 - c0, 1e-6), (v - d0) / max(d1 - d0, 1e-6)
         return u0 + u * (u1 - u0), v0 + v * (v1 - v0)
 
     def centre(self):
@@ -416,7 +453,13 @@ class Atlas:
 
     def __init__(self, name, layout, swatch_rect):
         self.name = name
-        self.regions = {k: Region(k, r, m) for k, r, m in layout}
+        self.regions = {}
+        for entry in layout:
+            if isinstance(entry, Region):
+                self.regions[entry.name] = entry
+            else:
+                k, r, m = entry
+                self.regions[k] = Region(k, r, m)
         u0, v0, u1, v1 = swatch_rect
         keys = list(SWATCH_S)
         h = (v1 - v0) / len(keys)
@@ -456,10 +499,16 @@ class Atlas:
                     key = next((k for k in self.regions if mname.startswith(k)), None)
                 if key is None:
                     raise RuntimeError(f'{obj.name}: material {mname!r} has no atlas region in {self.name}')
-                u0, v0, u1, v1 = self.regions[key].rect
+                reg = self.regions[key]
+                u0, v0, u1, v1 = reg.rect
                 sel = loop_mat == mi
-                out[sel, 0] = u0 + uv[sel, 0] * (u1 - u0)
-                out[sel, 1] = v0 + uv[sel, 1] * (v1 - v0)
+                su, sv = uv[sel, 0], uv[sel, 1]
+                if reg.crop:
+                    c0, d0, c1, d1 = reg.crop
+                    su = np.clip((su - c0) / max(c1 - c0, 1e-6), 0, 1)
+                    sv = np.clip((sv - d0) / max(d1 - d0, 1e-6), 0, 1)
+                out[sel, 0] = u0 + su * (u1 - u0)
+                out[sel, 1] = v0 + sv * (v1 - v0)
             uv = out.ravel()
         else:
             cu, cv = self.swatches[swatch].centre()
@@ -487,11 +536,12 @@ class Atlas:
                 nrm[y0:y1, x0:x1] = (0.5, 0.5, 1.0, 1.0)
                 continue
             mp = reg.maps
-            base = sample(mp.get('base'), w, h, (0.2, 0.2, 0.2))
-            rough = sample(mp.get('rough'), w, h, 0.6)
-            metal = sample(mp.get('metal'), w, h, 0.0)
-            ao = sample(mp.get('ao'), w, h, 1.0)
-            n = sample(mp.get('normal'), w, h, (0.5, 0.5, 1.0))
+            cr = reg.crop
+            base = sample(mp.get('base'), w, h, (0.2, 0.2, 0.2), cr)
+            rough = sample(mp.get('rough'), w, h, 0.6, cr)
+            metal = sample(mp.get('metal'), w, h, 0.0, cr)
+            ao = sample(mp.get('ao'), w, h, 1.0, cr)
+            n = sample(mp.get('normal'), w, h, (0.5, 0.5, 1.0), cr)
             g = 1.0 - rough
             s = metal * (0.55 + 0.35 * g) + (1.0 - metal) * (0.10 + 0.30 * g)
             # Metal: the sources' gun-black base colour (about 0.2) is lifted so the client's studio reflection reads
@@ -500,6 +550,9 @@ class Atlas:
             # s is smoothed and stepped (it only has to tell metal from polymer and shiny from worn): the WebP
             # alpha plane is stored losslessly, and a smooth stepped plane costs little.
             alb[y0:y1, x0:x1, 3] = np.round(box_blur(s, 2) * S_LEVELS) / S_LEVELS
+            if reg.post:
+                rgb, sv = alb[y0:y1, x0:x1, :3], alb[y0:y1, x0:x1, 3]
+                reg.post(rgb, sv)
             nrm[y0:y1, x0:x1, :3] = n
             nrm[y0:y1, x0:x1, 3] = 1.0
             log(self.name, 'region', reg.name, f'{w}x{h}', 'mean s', round(float(s.mean()), 3),
@@ -516,14 +569,40 @@ class Atlas:
         return paths
 
 
-def sample(src, w, h, default):
-    """A source map resampled to w x h (rows bottom-up, raw stored values): (h, w, 3) for colour, (h, w) for a channel."""
+_CROPPED = {}
+
+
+def sample(src, w, h, default, crop=None):
+    """A source map resampled to w x h (rows bottom-up, raw stored values): (h, w, 3) for colour, (h, w) for a channel.
+    With `crop` (u0, v0, u1, v1), only that part of the image."""
     if src is None:
         if isinstance(default, tuple):
             return np.broadcast_to(np.array(default, np.float32), (h, w, 3)).copy()
         return np.full((h, w), default, np.float32)
     img, ch = src
     img.colorspace_settings.name = 'Non-Color'     # raw stored values (sRGB-encoded colours stay encoded)
+    if crop:
+        key = (img.name, tuple(round(x, 5) for x in crop))
+        if key not in _CROPPED:
+            iw, ih = img.size
+            px = np.empty(iw * ih * 4, np.float32)
+            img.pixels.foreach_get(px)
+            px = px.reshape(ih, iw, 4)
+            x0, x1 = int(crop[0] * iw), max(int(crop[0] * iw) + 1, int(math.ceil(crop[2] * iw)))
+            y0, y1 = int(crop[1] * ih), max(int(crop[1] * ih) + 1, int(math.ceil(crop[3] * ih)))
+            _CROPPED[key] = np.ascontiguousarray(px[y0:y1, x0:x1])
+        sub = _CROPPED[key]
+        c = bpy.data.images.new('sb_crop', sub.shape[1], sub.shape[0], alpha=True, float_buffer=True)
+        c.colorspace_settings.name = 'Non-Color'
+        c.pixels.foreach_set(sub.ravel())
+        c.scale(w, h)
+        a = np.empty(w * h * 4, np.float32)
+        c.pixels.foreach_get(a)
+        bpy.data.images.remove(c)
+        a = a.reshape(h, w, 4)
+        if isinstance(default, tuple):
+            return a[..., :3].copy()
+        return a[..., ch if ch is not None else 0].copy()
     c = img.copy()
     c.scale(w, h)
     a = np.empty(w * h * 4, np.float32)

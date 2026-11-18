@@ -7,7 +7,7 @@ Renders review frames of the shipped animations in headless Blender (no browser,
 fp: the first-person viewmodels (client/public/models/viewmodel_*.glb) seen from the game camera (vertical field of
     view 74 degrees, the default setting), each gun rig placed at its hip pose exactly as client/src/presenter.ts
     places it, the knife rig at the camera. Every frame of each clip at 30 fps.
-tp: the third-person character (character.glb with weapons.glb in its hand sockets), upper-body clips over the legs
+tp: the third-person character (character_high.glb with weapons.glb in its hand sockets), upper-body clips over the legs
     of a base clip as client/src/characters.ts layers them, plus its crouch lean, from a three-quarter view.
 Each clip is written as numbered PNGs under <frames dir>/<name>/; tools/review-animations.mjs turns them into the
 contact sheets and videos in docs/review/animations/.
@@ -180,7 +180,7 @@ def sample_basis(arm, act, frame):
 def tp(frames_dir, jobs):
     sc = reset_scene()
     # TEMPERANCE: the default heuristic gives this rig zero-length bones, which throws bone-parented sockets off.
-    objs = import_glb(os.path.join(MODELS, 'character.glb'), bone_heuristic='TEMPERANCE')
+    objs = import_glb(os.path.join(MODELS, 'character_high.glb'), bone_heuristic='TEMPERANCE')
     arm = next(o for o in objs if o.type == 'ARMATURE')
     body = [o for o in objs if o.type == 'MESH']
     wobjs = import_glb(os.path.join(MODELS, 'weapons.glb'))

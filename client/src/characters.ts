@@ -7,10 +7,12 @@ import { instantiateWeapon, WEAPON_MESH, type WeaponInstance, type WeaponMateria
 /**
  * Animated remote-player characters.
  *
- * One shared GLB (client/public/models/character.glb, built by tools/blender/characters.py:
- * "SWAT" by Quaternius, CC0) is loaded once; every remote player gets its own instance of the
- * hierarchy + skin, pooled together with the presenter's Remote record. The model is a single
- * skinned mesh with one material (vertex colours), so a character is one draw call.
+ * One shared GLB per graphics tier (client/public/models/character_{high,low}.glb, built by tools/blender/soldier.py
+ * from the "Quantum Modular Character" soldier by Quantum Assets, package O) is loaded; every remote player gets its
+ * own instance of the hierarchy + skin, pooled together with the presenter's Remote record. The file holds two skinned
+ * meshes on one 51-bone skeleton: "char_defender" (the soldier: cap, orange shirt, plate carrier, jeans; one material,
+ * the character texture atlas) and "char_ghost" (a close-fitting stealth suit with a balaclava, drawn only with the
+ * ghost shimmer). Only the mesh for the player's look is enabled, so a character is one draw call.
  *
  * Animation runs on PlayCanvas's `anim` component:
  *   - "Base" layer: idle / walk / run / crouch_idle / crouch_walk / death, switched with
@@ -24,11 +26,12 @@ import { instantiateWeapon, WEAPON_MESH, type WeaponInstance, type WeaponMateria
  * scaled by speed / (clip's own ground speed) so feet slide as little as possible.
  *
  * Looks:
- *   - Defender: one shared lit StandardMaterial using the vertex colours (orange suit).
+ *   - Defender: the "char_defender" mesh with the character atlas material (weapons.ts WeaponMaterials.character()).
  *   - Enemy ghost: one shared skinned shimmer ShaderMaterial; opacity per mesh instance (uVis).
  *   - Ally ghost: the same shader, steady violet, fixed opacity.
  *
- * Weapons (weapons.ts) hang from the "socket_gun" / "socket_knife" nodes on the right wrist bone:
+ * Weapons (weapons.ts) hang from the "socket_gun" (rifle), "socket_pistol" and "socket_knife" nodes on the right wrist
+ * bone (an older file without socket_pistol hangs every gun from socket_gun):
  *   - Defenders carry every gun in the table (shared/weapons.ts; the textured weapon materials, weapons.ts),
  *     all in socket_gun with only the one in hand (RemoteView.weapon) enabled, held with the rifle's two-handed
  *     "aim" pose or the pistol's one-handed "pistol" pose; a remote shot plays "shoot" / "pistol_shoot" (a recoil
@@ -50,10 +53,14 @@ import { instantiateWeapon, WEAPON_MESH, type WeaponInstance, type WeaponMateria
 export const CharLook = { None: 0, Defender: 1, EnemyGhost: 2, AllyGhost: 3 } as const;
 export type CharLook = typeof CharLook[keyof typeof CharLook];
 
-// Ground speed (m/s) of each locomotion clip at playback speed 1, measured by characters.py.
-const WALK_CLIP_SPEED = 1.358;
-const RUN_CLIP_SPEED = 2.969;
-const CROUCH_CLIP_SPEED = 1.358;
+// Ground speed (m/s) of each locomotion clip at playback speed 1, measured by tools/blender/clips.py (package O).
+const WALK_CLIP_SPEED = 1.45;
+const RUN_CLIP_SPEED = 3.22;
+// crouch_walk keeps walk's planted feet (clips.py), so it has walk's ground speed.
+const CROUCH_CLIP_SPEED = 1.45;
+/** Mesh node names of the two looks (tools/blender/soldier.py). */
+const MESH_DEFENDER = 'char_defender';
+const MESH_GHOST = 'char_ghost';
 const MIN_PLAYBACK = 0.6;
 const MAX_PLAYBACK = 1.8;
 
@@ -86,15 +93,15 @@ const S_CIDLE = 'crouch_idle';
 const S_CWALK = 'crouch_walk';
 const S_DEATH = 'death';
 const U_HIT = 'hit';
-/** Defenders: static two-handed rifle hold, and a short recoil that ends exactly on it (characters.py). */
+/** Defenders: static two-handed rifle hold, and a short recoil that ends exactly on it (tools/blender/clips.py). */
 const U_AIM = 'aim';
 const U_SHOOT = 'shoot';
-/** One-handed pistol hold and its recoil; reloads per gun; the knife hold and the knife swing (characters.py). */
+/** One-handed pistol hold and its recoil; reloads per gun; the knife hold and the knife swing (tools/blender/clips.py). */
 const U_PISTOL = 'pistol';
 const U_PISTOL_SHOOT = 'pistol_shoot';
 const U_KNIFE = 'knife_hold';
 const U_SWING = 'knife_swing';
-/** Clip seconds of the swing's windup (characters.py): the slash event brings the swing to this point. */
+/** Clip seconds of the swing's windup (tools/blender/clips.py): the slash event brings the swing to this point. */
 const SWING_WINDUP = 0.2;
 const BASE_STATES = [S_IDLE, S_WALK, S_RUN, S_CIDLE, S_CWALK, S_DEATH];
 /** Per gun in the weapon table (shared/weapons.ts): hold, recoil and reload clips. */
@@ -218,28 +225,18 @@ export function makeSkinnedGhostMaterial(tint: Float32Array): pc.ShaderMaterial 
     return m;
 }
 
-function makeDefenderMaterial(): pc.StandardMaterial {
-    const m = new pc.StandardMaterial();
-    m.diffuse = new pc.Color(1, 1, 1);
-    m.diffuseVertexColor = true;
-    m.diffuseVertexColorChannel = 'rgb';
-    m.gloss = 0.25;
-    m.update();
-    return m;
-}
-
 // ---------------------------------------------------------------------------------------------
 
 export interface CharacterModel {
     asset: pc.Asset;
     tracks: Map<string, pc.AnimTrack>;
-    defenderMat: pc.StandardMaterial;
+    defenderMat: pc.Material;
     ghostMat: pc.ShaderMaterial;
 }
 
 /** Loads the shared character GLB. Rejects if it fails to load or lacks a required clip. */
 export function loadCharacterModel(app: pc.Application, url: string, ghostMat: pc.ShaderMaterial,
-    filename = 'character.glb'): Promise<CharacterModel> {
+    defenderMat: pc.Material, filename = 'character_low.glb'): Promise<CharacterModel> {
     return new Promise((resolve, reject) => {
         const asset = new pc.Asset('character', 'container', { url, filename });
         asset.once('load', () => {
@@ -253,7 +250,7 @@ export function loadCharacterModel(app: pc.Application, url: string, ghostMat: p
             for (const s of BASE_STATES.concat(UPPER_STATES)) {
                 if (!tracks.has(s)) { reject(new Error(`character model has no "${s}" clip`)); return; }
             }
-            resolve({ asset, tracks, defenderMat: makeDefenderMaterial(), ghostMat });
+            resolve({ asset, tracks, defenderMat, ghostMat });
         });
         asset.once('error', (err: unknown) => {
             app.assets.remove(asset);
@@ -292,6 +289,11 @@ function smooth(x: number): number {
 export class Character {
     readonly entity: pc.Entity;
     readonly meshInstances: pc.MeshInstance[] = [];
+    /** The two looks' meshes (one shown); both the same entity for a file with one mesh. */
+    private readonly defenderMesh: pc.Entity | null;
+    private readonly ghostMesh: pc.Entity | null;
+    private readonly defenderMis: pc.MeshInstance[] = [];
+    private readonly ghostMis: pc.MeshInstance[] = [];
     private readonly anim: pc.AnimComponent;
     private readonly base: pc.AnimComponentLayer;
     private readonly upper: pc.AnimComponentLayer | null;
@@ -353,10 +355,16 @@ export class Character {
         e.name = 'character';
         parent.addChild(e);
         this.entity = e;
+        this.defenderMesh = e.findByName(MESH_DEFENDER) as pc.Entity | null;
+        this.ghostMesh = e.findByName(MESH_GHOST) as pc.Entity | null;
         for (const r of e.findComponents('render') as pc.RenderComponent[]) {
             r.castShadows = false;
             r.receiveShadows = false;
-            for (const mi of r.meshInstances) this.meshInstances.push(mi);
+            for (const mi of r.meshInstances) {
+                this.meshInstances.push(mi);
+                if (this.ghostMesh ? r.entity === this.ghostMesh : true) this.ghostMis.push(mi);
+                if (this.defenderMesh ? r.entity === this.defenderMesh : true) this.defenderMis.push(mi);
+            }
         }
         e.addComponent('anim', { activate: true, speed: 1 });
         this.anim = e.anim!;
@@ -402,15 +410,17 @@ export class Character {
     setWeapons(w: WeaponModel, mats: WeaponMaterials): void {
         if (this.guns.length > 0 || this.knife) return;
         const gs = this.entity.findByName('socket_gun');
+        const ps = this.entity.findByName('socket_pistol') ?? gs;
         const ks = this.entity.findByName('socket_knife');
-        if (gs) {
-            // Every gun's origin is its grip, so all share the socket; still one draw call, as only one is enabled.
+        if (gs && ps) {
+            // Every gun's origin is its grip; the pistol has its own socket (its grip is raked differently). Still one
+            // draw call, as only the gun in hand is enabled.
             for (let i = 0; i < WEAPONS.length; i++) {
                 const name = WEAPON_MESH[WEAPONS[i].id];
                 const g = instantiateWeapon(w, name, mats.of(name));
                 g.setSuppressed(this.suppressed);
                 g.setSight(this.sight);
-                gs.addChild(g.entity);
+                (name === 'pistol' ? ps : gs).addChild(g.entity);
                 this.guns.push(g.entity);
                 this.gunInstances.push(g);
             }
@@ -488,9 +498,13 @@ export class Character {
         this.tint = tint;
         this.fixedVis = fixedVis;
         const ghost = look !== CharLook.Defender;
-        const mat = ghost ? this.model.ghostMat : this.model.defenderMat;
-        for (const mi of this.meshInstances) {
-            mi.material = mat;
+        if (this.defenderMesh && this.ghostMesh && this.defenderMesh !== this.ghostMesh) {
+            this.defenderMesh.enabled = !ghost;
+            this.ghostMesh.enabled = ghost;
+        }
+        const mis = ghost ? this.ghostMis : this.defenderMis;
+        for (const mi of mis) {
+            mi.material = ghost ? this.model.ghostMat : this.model.defenderMat;
             if (ghost && tint) {
                 mi.setParameter('uTint', tint);
                 mi.setParameter('uVis', fixedVis);
@@ -595,7 +609,7 @@ export class Character {
     }
 
     setVis(vis: number): void {
-        for (let i = 0; i < this.meshInstances.length; i++) this.meshInstances[i].setParameter('uVis', vis);
+        for (let i = 0; i < this.ghostMis.length; i++) this.ghostMis[i].setParameter('uVis', vis);
         if (this.knifeMi) this.knifeMi.setParameter('uVis', vis);
     }
 

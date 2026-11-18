@@ -126,10 +126,14 @@ describe('realistic weapons (package M part 2)', () => {
         expect(g.nodes.filter(n => n.name === 'vm_knife').length).toBe(1);
     });
 
-    it('ships both atlas sizes per gun, and the Low tier download stays within 4 MB', () => {
+    it('ships both atlas sizes per gun and for the characters, and the Low tier download stays within 4.5 MB', () => {
+        // Everything a Low player downloads for models: the weapons, the three rigs, the Low characters and the 1024
+        // atlases (package O added the characters' file and atlas: 3.55 MB before it, about 4.27 MB after; MB = 10^6 bytes).
         let low = 0;
-        for (const f of ['weapons.glb', 'viewmodel_rifle.glb', 'viewmodel_pistol.glb', 'viewmodel_knife.glb']) low += statSync(join(models, f)).size;
-        for (const atlas of ['rifle', 'pistol', 'knife']) {
+        for (const f of ['weapons.glb', 'viewmodel_rifle.glb', 'viewmodel_pistol.glb', 'viewmodel_knife.glb', 'character_low.glb']) {
+            low += statSync(join(models, f)).size;
+        }
+        for (const atlas of ['rifle', 'pistol', 'knife', 'character']) {
             for (const kind of ['albedo', 'normal']) {
                 for (const size of [1024, 2048]) {
                     const b = readFileSync(join(models, 'textures', `${atlas}_${kind}_${size}.webp`));
@@ -138,18 +142,49 @@ describe('realistic weapons (package M part 2)', () => {
                 }
             }
         }
-        expect(low).toBeLessThan(4 * 1024 * 1024);
+        expect(low).toBeLessThan(4.5 * 1024 * 1024);
     });
 });
 
-describe('third-person character', () => {
-    it('has every clip characters.ts plays, reloads as long as the rules', () => {
-        const c = clips(readGlb('character.glb'));
-        for (const n of ['idle', 'walk', 'run', 'crouch_idle', 'crouch_walk', 'death', 'hit', 'aim', 'shoot', 'pistol',
-            'pistol_shoot', 'knife_hold', 'knife_swing']) {
-            expect(c.has(n), n).toBe(true);
-        }
-        // The client plays reloads at clip length / rule length, so they only need to be close; check they are.
-        for (const w of WEAPONS) expect(Math.abs(c.get(`reload_${w.id}`)! - w.reloadTicks / TICK_RATE)).toBeLessThan(0.05);
-    });
+describe('third-person characters (package O)', () => {
+    type Prim = { attributes: Record<string, number>; indices?: number };
+    interface Skinned extends Gltf { skins?: { joints: number[] }[]; meshes: { name?: string; primitives: Prim[] }[] }
+    const triangles = (g: Skinned, mesh: string): number => {
+        const m = g.meshes.find(x => x.name === mesh)!;
+        return m.primitives.reduce((n, p) => n + ((g.accessors[p.indices!] as { count: number }).count / 3), 0);
+    };
+    // Triangles per look and tier: High about 10-15k, Low about 6-8k (ROADMAP.md, package O).
+    const budget: Record<string, [number, number]> = { high: [9000, 15000], low: [4500, 8000] };
+
+    for (const tier of ['high', 'low']) {
+        it(`character_${tier}.glb: every clip characters.ts plays, reloads as long as the rules`, () => {
+            const c = clips(readGlb(`character_${tier}.glb`));
+            for (const n of ['idle', 'walk', 'run', 'crouch_idle', 'crouch_walk', 'death', 'hit', 'aim', 'shoot', 'pistol',
+                'pistol_shoot', 'knife_hold', 'knife_swing']) {
+                expect(c.has(n), n).toBe(true);
+            }
+            // The client plays reloads at clip length / rule length, so they only need to be close; check they are.
+            for (const w of WEAPONS) expect(Math.abs(c.get(`reload_${w.id}`)! - w.reloadTicks / TICK_RATE)).toBeLessThan(0.05);
+        });
+
+        it(`character_${tier}.glb: two looks on one skeleton of at most 70 bones, the bones and sockets the client uses`, () => {
+            const g = readGlb(`character_${tier}.glb`) as Skinned;
+            expect(g.meshes.map(m => m.name).sort()).toEqual(['char_defender', 'char_ghost']);
+            for (const m of g.meshes) expect(m.primitives.length, m.name).toBe(1); // one material: one draw call
+            expect(g.skins!.length).toBe(1);
+            expect(g.skins![0].joints.length).toBeLessThanOrEqual(70);
+            const names = nodeNames(g);
+            // characters.ts: the upper-body mask root, the bones it bends, the hand sockets.
+            for (const n of ['Abdomen', 'Chest', 'Neck', 'UpperArm.R', 'UpperArm.L', 'Wrist.R', 'Index3.R', 'socket_gun',
+                'socket_pistol', 'socket_knife']) expect(names.has(n), n).toBe(true);
+            for (const look of ['char_defender', 'char_ghost']) {
+                const t = triangles(g, look);
+                expect(t, `${look} ${tier}`).toBeGreaterThan(budget[tier][0]);
+                expect(t, `${look} ${tier}`).toBeLessThan(budget[tier][1]);
+            }
+            const prim = g.meshes[0].primitives[0];
+            expect(prim.attributes.TEXCOORD_0).toBeDefined();
+            expect(prim.attributes.COLOR_0).toBeDefined();
+        });
+    }
 });

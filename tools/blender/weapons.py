@@ -15,7 +15,7 @@ Writes:
   tools/blender/source-art/realistic/build/weapons_fp.glb   full-detail parts, landmarks and aim points for
                                                    viewmodel.py (git-ignored, rebuilt from the sources)
 
-Node layout of weapons.glb (unchanged names, so the client and characters.py keep working):
+Node layout of weapons.glb (unchanged names, so the client and soldier.py keep working):
   gun (mesh) with children gun_suppressor, gun_sight_reddot, gun_sight_scope2x (meshes in gun's own frame), the
       empties gun_muzzle (suppressor front), gun_muzzle_bare (muzzle brake front) and gun_aim_<sight> (where the eye
       sits when aiming with that sight: on its optical axis, at its eye relief; presenter.ts aims the gun by them);
@@ -28,7 +28,7 @@ knife.
 Axis convention (glTF / engine space), origin = centre of the hand's grip (a third of the way down the pistol grip
 for the guns, the middle of the handle for the knife):
   -Z forward (gun: muzzle; knife: blade tip), +Y up (gun: sights; knife: spine), +X right.
-The gun and pistol share the character's "socket_gun"; the knife sits in "socket_knife" (characters.py).
+The character (soldier.py, clips.py) holds the rifle in "socket_gun", the pistol in "socket_pistol" and the knife in "socket_knife".
 
 Suppressors (room option): a realistic can generated here (the AK's slips over its muzzle brake; the pistol's screws
 on its muzzle), its own node, merged into the gun's one mesh by the client when the room has suppressors.
@@ -46,6 +46,7 @@ from mathutils import Matrix, Vector
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import realistic as rl  # noqa: E402
+import soldier  # noqa: E402
 
 ROOT = rl.ROOT
 OUT = os.path.join(ROOT, 'client', 'public', 'models', 'weapons.glb')
@@ -64,16 +65,21 @@ FP_RIFLE = {'BARREL': 1900, 'FOLDING_STOCK_CHICK_REST': 900, 'MUZZLE_BRAKE': 700
             'FOLDING_STOCK': 750, 'HAND_GUARD': 1500, 'RECEIVER': 2300}
 FP_REDDOT = {'main_shape': 1300, 'main_bat_1': 220, 'main_buttons_1': 90, 'main_buttons_2': 90, 'main_a': 220}
 FP_KNIFE = 1300                     # per source mesh (two)
-TP_PISTOL_SCALE = 1.35
+TP_PISTOL_SCALE = 1.0               # real size (package O: the new hands hold it; M part 2 drew it 1.35x)
 TP = {'gun': 3200, 'pistol': 1700, 'knife': 800, 'reddot': 380, 'scope_dl': 380}
-FP_SCOPE_DL = 1500                  # a downloaded scope, first person
+FP_SCOPE_DL = 3000                  # a downloaded scope, first person
+# The downloaded 2x sight (AR Scope by Scape): its axes in the model's own frame, scale to metres, the lens material.
+SCOPE_DL = {'forward': (0, 1, 0), 'up': (0, 0, 1), 'scale': 1.0, 'lens': ('scope_Material.003',)}
+# Its four remaining materials, each in its own rectangle of the rifle atlas (inside the 'scope' region).
+SCOPE_DL_REGIONS = {'scope_Material.001': (0.75, 0.375, 1.0, 0.5), 'scope_Material': (0.75, 0.25, 0.875, 0.375),
+                    'scope_Material.002': (0.875, 0.3125, 1.0, 0.375), 'scope_Material.004': (0.875, 0.25, 1.0, 0.3125)}
 
 # Eye positions when aimed (the shipped frame, metres): iron sights put the eye this far behind the grip (over the
 # end of the stock, so the receiver and rear sight lead the eye to the front post); the red dot this far behind its
 # glass; the 2x scope this far behind its eyepiece, so the eyepiece fills the view like a real combat scope.
 EYE_BEHIND_GRIP = {'rifle': 0.44, 'pistol': 0.30}
 REDDOT_EYE_RELIEF = 0.26
-SCOPE_EYE_RELIEF = 0.068
+SCOPE_EYE_RELIEF = 0.045
 
 # Atlas layouts: realistic.LAYOUTS (shared with viewmodel.py, whose arms use the swatches).
 RIFLE_LAYOUT, RIFLE_SWATCHES = rl.LAYOUTS['rifle']
@@ -278,60 +284,42 @@ def build_scope_generated(segments, name):
 
 def build_scope_downloaded(path):
     """
-    The owner's "AR Scope (Game-Ready)" (or any scope model dropped into source-art/realistic/scope2x/). Its
-    orientation is guessed: the optical axis is the longest side, the wider end is the objective (front), and the
-    mount hangs below the tube (the side the mesh reaches furthest from the eyepiece's centre line is down).
-    Glass and lens meshes are dropped. Returns (meshes, maps, axis height, eyepiece y, front y) in the scope's own
-    frame (origin = rail contact, Y forward, Z up), scaled to SCOPE_LENGTH.
+    The owner's "AR Scope (Game-Ready)" by Scape (Fab, CC-BY): a compact sight on a riser, modelled in metres at real
+    size (60 mm long), glTF with five materials. Its frame is set explicitly (SCOPE_DL): forward is the model's +Y
+    (elevation knob on top, windage knob on the right, as on a real sight), up +Z, and the lens tube's material is
+    dropped so the aimed view looks through the housing. Returns (meshes, {material name: maps}, axis height,
+    eyepiece y, front y) in the scope's own frame (origin under the optical axis, on the rail; Y forward, Z up).
     """
     log('2x scope source (downloaded)', path)
     objs = rl.import_model(path)
+    # Name each material after its base colour image ("Material.001_baseColor.png" -> "scope_Material.001"), so the
+    # names do not depend on what else this Blender session has imported.
+    for m in {m for o in objs for m in o.data.materials if m}:
+        img = rl.material_maps(m).get('base')
+        if img:
+            m.name = 'scope_' + os.path.basename(img[0].filepath or img[0].name).split('_baseColor')[0]
+    lens = []
     for o in list(objs):
-        names = (o.name + ' ' + ' '.join(m.name for m in o.data.materials if m)).lower()
-        if 'glass' in names or 'lens' in names:
+        names = {m.name for m in o.data.materials if m}
+        if names & set(SCOPE_DL['lens']) or any('glass' in n.lower() or 'lens' in n.lower() for n in names):
+            lens.append(o)
             objs.remove(o)
-            bpy.data.objects.remove(o)
-    pts = rl.points(objs)
-    lo = Vector((min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts)))
-    hi = Vector((max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts)))
-    ext = hi - lo
-    ai = max(range(3), key=lambda i: ext[i])
-    axis = Vector([1.0 if i == ai else 0.0 for i in range(3)])
-
-    def end(sign):
-        t0, t1 = (lo[ai], lo[ai] + ext[ai] * 0.12) if sign < 0 else (hi[ai] - ext[ai] * 0.12, hi[ai])
-        sel = [p for p in pts if t0 <= p[ai] <= t1]
-        c = sum(sel, Vector()) / len(sel)
-        r = max((p - c - axis * (p - c).dot(axis)).length for p in sel)
-        return c, r
-
-    (c_lo, r_lo), (c_hi, r_hi) = end(-1), end(1)
-    fwd = axis if r_hi >= r_lo else -axis
-    rear_c = c_lo if r_hi >= r_lo else c_hi
-    # Down: of the two other axes (both directions), the one the mesh reaches furthest along from the eyepiece line.
-    others = [Vector([1.0 if i == j else 0.0 for i in range(3)]) * sgn for j in range(3) if j != ai for sgn in (1, -1)]
-    reach = {tuple(d): max((p - rear_c).dot(d) for p in pts) for d in others}
-    down = Vector(max(reach, key=reach.get))
-    up = -down
-    log('scope: optical axis', tuple(fwd), 'up', tuple(up), 'end radii', round(r_lo, 4), round(r_hi, 4))
-    mats = [m for o in objs for m in o.data.materials if m]
-    maps = rl.material_maps(mats[0]) if mats else {}
-    if len({m.name for m in mats}) > 1:
-        log('WARNING scope has', len({m.name for m in mats}), 'materials; all use the first one\'s maps')
-    length = ext[ai]
-    s = SCOPE_LENGTH / length
-    origin = rear_c.copy()
-    rl.to_frame(objs, fwd, up, origin, s)
+    rl.to_frame(objs + lens, SCOPE_DL['forward'], SCOPE_DL['up'], (0, 0, 0), SCOPE_DL['scale'])
+    lp = rl.points(lens) if lens else rl.points(objs)
+    cx = (min(p.x for p in lp) + max(p.x for p in lp)) / 2
+    cz = (min(p.z for p in lp) + max(p.z for p in lp)) / 2
+    for o in lens:
+        bpy.data.objects.remove(o)
     pts = rl.points(objs)
     base = min(p.z for p in pts)
     for o in objs:
-        o.data.transform(Matrix.Translation((0, 0, -base)))
-    y_rear = min(p.y for p in pts)
-    return objs, maps, -base, y_rear, y_rear + SCOPE_LENGTH
+        o.data.transform(Matrix.Translation((-cx, 0, -base)))
+    pts = rl.points(objs)
+    y_rear, y_front = min(p.y for p in pts), max(p.y for p in pts)
+    maps = {m.name: rl.material_maps(m) for o in objs for m in o.data.materials if m}
+    log('scope: axis height', round(cz - base, 4), 'length', round(y_front - y_rear, 4), 'materials', sorted(maps))
+    return objs, maps, cz - base, y_rear, y_front
 
-
-# ---------------------------------------------------------------------------------------------
-# Pistol: Makarov PM
 
 def build_pistol():
     path = rl.find_source('pistol', ('.fbx',))
@@ -425,6 +413,22 @@ def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     os.makedirs(rl.BUILD, exist_ok=True)
 
+    # The first-person arms' textures (package O) go into each gun's atlas: crops of the soldier's maps.
+    arm_crops = {}
+    if os.path.isdir(soldier.SRC):
+        before = set(bpy.data.objects)
+        _, sparts = soldier.fp_sources()
+        arm_crops = soldier.fp_crops(sparts)
+        for o in set(bpy.data.objects) - before:
+            bpy.data.objects.remove(o)
+    else:
+        log('WARNING soldier sources missing: the arm regions of the atlases stay flat grey')
+
+    def arm_regions(name):
+        if not arm_crops:
+            return [rl.Region(k, r, constant=0.2) for k, r in rl.ARM_LAYOUTS[name].items()]
+        return soldier.fp_regions(rl.ARM_LAYOUTS[name], arm_crops)
+
     # --- Rifle and its sights -------------------------------------------------------------------
     rifle = build_rifle()
     bore_x, bore_z = rifle['bore']
@@ -440,8 +444,9 @@ def main():
     scope_maps = {}
     if scope_path:
         sobjs, scope_maps, sc_axis, sc_rear, sc_front = build_scope_downloaded(scope_path)
+        total = sum(rl.tris(o.data) for o in sobjs)
         for o in sobjs:
-            rl.decimate(o, FP_SCOPE_DL // max(1, len(sobjs)))
+            rl.decimate(o, max(60, FP_SCOPE_DL * rl.tris(o.data) // max(1, total)))
         scope = rl.join(sobjs, 'fp_gun_sight_scope2x')
         scope_source = 'downloaded'
     else:
@@ -453,9 +458,13 @@ def main():
     log('2x scope', scope_source, 'axis height', round(sc_axis, 4), 'eyepiece y', round(sc_y + sc_rear, 4),
         'tris', rl.tris(scope.data))
 
-    atlas = rl.Atlas('rifle', [(k, r, {'ak105': rifle['maps']['ak105'], 'folding_stock': rifle['maps']['folding_stock'],
-                                       'sight': reddot_maps, 'scope': scope_maps}[k]) for k, r in RIFLE_LAYOUT],
-                     RIFLE_SWATCHES)
+    regions = [(k, r, {'ak105': rifle['maps']['ak105'], 'folding_stock': rifle['maps']['folding_stock'],
+                       'sight': reddot_maps, 'scope': {}}[k]) for k, r in RIFLE_LAYOUT if not (scope_path and k == 'scope')]
+    if scope_path:
+        # The downloaded sight: one rectangle per material, cropped to the part of its maps the model uses.
+        for mname, rect in SCOPE_DL_REGIONS.items():
+            regions.append(rl.Region(mname, rect, scope_maps.get(mname, {}), crop=rl.uv_crop([scope], mname)))
+    atlas = rl.Atlas('rifle', regions + arm_regions('rifle'), RIFLE_SWATCHES)
     for o in (rifle['body'], rifle['mag'], rifle['bolt'], rifle['cheek']):
         rl.prepare(o, atlas, 'rifle')
     rl.prepare(reddot, atlas, 'rifle', material_region={m.name: 'sight' for m in reddot.data.materials if m})
@@ -463,7 +472,7 @@ def main():
     reddot = rl.join([reddot, dot], 'fp_gun_sight_reddot')
     rl.prepare(rifle['sup'], atlas, 'rifle', swatch='metal', colour=SUPPRESSOR_RGBA)
     if scope_path:
-        rl.prepare(scope, atlas, 'rifle', material_region={m.name: 'scope' for m in scope.data.materials if m})
+        rl.prepare(scope, atlas, 'rifle')
     else:
         keep = [tuple(c.color) for c in scope.data.color_attributes['Col'].data]
         atlas.remap(scope, swatch='metal')
@@ -482,7 +491,8 @@ def main():
 
     # --- Pistol ---------------------------------------------------------------------------------
     pistol = build_pistol()
-    patlas = rl.Atlas('pistol', [(k, r, pistol['maps']) for k, r in PISTOL_LAYOUT], SIDE_SWATCHES)
+    patlas = rl.Atlas('pistol', [(k, r, pistol['maps']) for k, r in PISTOL_LAYOUT] + arm_regions('pistol'),
+                      SIDE_SWATCHES)
     for o in (pistol['body'], pistol['slide'], pistol['mag']):
         rl.prepare(o, patlas, 'pistol')
     rl.prepare(pistol['sup'], patlas, 'pistol', swatch='metal', colour=SUPPRESSOR_RGBA)
@@ -491,7 +501,8 @@ def main():
 
     # --- Knife ----------------------------------------------------------------------------------
     knife = build_knife()
-    katlas = rl.Atlas('knife', [(knife['material'], KNIFE_LAYOUT[0][1], knife['maps'])], SIDE_SWATCHES)
+    katlas = rl.Atlas('knife', [(knife['material'], KNIFE_LAYOUT[0][1], knife['maps'])] + arm_regions('knife'),
+                      SIDE_SWATCHES)
     rl.prepare(knife['body'], katlas, 'knife')
     katlas.write()
 

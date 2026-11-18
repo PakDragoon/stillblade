@@ -1,6 +1,6 @@
 # Stillblade — handoff
 
-Last rewritten 2026-11-15; **status updated 2026-11-18 (wave 5 is merged into the local `main`, protocol 15, 457 tests, NOT pushed: package M parts 1 and 2 (rifle sights, stuck-aim fix, realistic AK-105, Makarov, knife, red dot, ACOG-style 2x) and package N (recorded gunshots and breathing). Push only when the owner can restart his game server; see their sections at the end. Next: package O, realistic soldiers): everything through wave 4 is on `main` and pushed (github.com/PakDragoon/stillblade): packages A to F (waves 1 to 3), G (graphics tiers and effects), L (menus and settings redesign, scoreboard ping column) and H (recorded sounds). Protocol 14, 415 tests, typecheck clean.** The live site rebuilds from `main` on every push. **The game server on the owner's PC must be restarted from `main` to match protocol 14** (an old server refuses the new client; on 2026-11-17 its `/health` answered 502, meaning it was not running). **Nothing from waves 3 and 4 has been played with a mouse, seen on a real GPU or listened to**: wave 3's animations were judged from Blender renders, wave 4 from headless Chrome (software GL) screenshots and measured sound levels. Older sections below describe each package as it was when built, so some numbers in them (test counts, protocol versions, "not on `main`") are historical; **"What to do next" near the end is the current summary, read it first.** The owner's live server holds port 8080 on his PC, so `npm run dev` needs that server stopped first.
+Last rewritten 2026-11-15; **status updated 2026-11-18: everything through wave 5 is on `main`, pushed and deployed (packages A to H, L, M parts 1 and 2, N; protocol 15). Two later commits are merged into the local `main` and NOT pushed: the real pistol recordings (package N follow-up, audio only) and package O (realistic soldiers, first-person arms, the downloaded AR Scope; no protocol change, 460 tests, typecheck clean; see "Package O" at the end). Pushing them needs no server restart (protocol unchanged).** The live site rebuilds from `main` on every push; the game server runs on the owner's PC behind a Cloudflare Tunnel and must run a `main` with the same protocol as the site. **Nothing from waves 3 to 6 has been played with a mouse, seen on a real GPU or listened to**: animations and models were judged from Blender renders and headless Chrome (software GL) screenshots, sounds from measured levels. Older sections below describe each package as it was when built, so some numbers in them (test counts, protocol versions, "not on `main`") are historical; **"What to do next" near the end is the current summary, read it first.** The owner's live server holds port 8080 on his PC, so `npm run dev` needs that server stopped first.
 
 **If you are a new session:** this file tells you what exists, what has and has not been verified, the rules that must not be broken, and how the owner wants work done. `ROADMAP.md` tells you what to build next and what is already decided. Read both before changing anything. `DEPLOY.md` covers hosting. You need nothing else: no memory files or earlier conversations are assumed.
 
@@ -221,7 +221,7 @@ This starts the game server (ws://localhost:8080) and the web client (http://loc
 | `client/src/viewmodel.ts`, `corpse.ts` | First-person arms rigs (load, clip sampling by time) and where a body lies (package F). |
 | `client/src/audio.ts` | Synthesised spatial audio. Implements `audio-api.ts`. |
 | `client/src/maplook.ts` | Map shader (albedo × baked light) and sky. |
-| `tools/blender/` | Headless Blender scripts that generate the shipped assets. Characters `characters.py`, weapons `weapons.py`, first-person arms `viewmodel.py` (needs `weapons.glb` built first), shared posing helpers `rigkit.py`, review renders `review.py` (with `tools/review-animations.mjs`). Maps: `mapkit.py` (definitions and verification, plain Python), `mapbuilder.py` (Blender side), `build_map.py` (entry), `maps/<id>.py` (one per map), `mapplan.py` (plan images). |
+| `tools/blender/` | Headless Blender scripts that generate the shipped assets. Characters `soldier.py` + `clips.py` (package O), weapons `weapons.py`, first-person arms `viewmodel.py` (run `weapons.py` first, then `viewmodel.py`, then `soldier.py`), shared posing helpers `rigkit.py`, review renders `review.py` (with `tools/review-animations.mjs`). Maps: `mapkit.py` (definitions and verification, plain Python), `mapbuilder.py` (Blender side), `build_map.py` (entry), `maps/<id>.py` (one per map), `mapplan.py` (plan images). |
 | `server/src/rooms.ts`, `maps.ts` | Room registry (one map per room) and map loading. |
 | `server/src/game.ts` (match flow part) | Lobby, stats, chat, idle rule, disconnect hold, damage messages: JSON only, tested in `matchflow.test.ts`. |
 | `shared/stats.ts`, `chat.ts`, `maps.ts` | Most-valuable-player score, chat cleaning, map ids and the default map. |
@@ -287,7 +287,7 @@ Warehouse routes from the ghost spawn: to A through the yard stair and service c
 
 ## Assets and licences
 
-Maps: CC0 textures and sky from Poly Haven, listed in `client/public/maps/CREDITS.md`. Models (`client/public/models/CREDITS.md`): the Quaternius "SWAT" character and arms (CC0, via poly.pizza); since package M part 2 the weapons are CC-BY models from Fab (AK-105 by SpatialNeglect, Makarov PM by TaigaForest, Tactical Knife and Red Dot Sight by Gerardo Justel), whose authors must stay credited. Raw downloads live in the git-ignored `tools/blender/source-art/`; the Blender scripts fall back to the shipped files if it is missing, but rebuilding characters or weapons from source needs those files present.
+Maps: CC0 textures and sky from Poly Haven, listed in `client/public/maps/CREDITS.md`. Models (`client/public/models/CREDITS.md`): since package O the characters and first-person arms are the Fab "Quantum Modular Character Free Sample" by Quantum Assets (Fab Standard License: its source files must never be shipped or committed, only the processed models), animated with clips retargeted from the Quaternius "SWAT" character (CC0); since package M part 2 the weapons are CC-BY models from Fab (AK-105 by SpatialNeglect, Makarov PM by TaigaForest, Tactical Knife and Red Dot Sight by Gerardo Justel, and since package O the AR Scope by Scape), whose authors must stay credited. Raw downloads live in the git-ignored `tools/blender/source-art/`; the Blender scripts fall back to the shipped files if it is missing, but rebuilding characters or weapons from source needs those files present.
 
 ## Hosting
 
@@ -378,6 +378,7 @@ Follow `ROADMAP.md`. **State on 2026-11-17, when the owner moved to a new sessio
 - **Package M part 2 (2026-11-18, realistic AK-105, Makarov, knife, red dot, a generated 2x scope; no protocol change): merged into `main` on the owner's word 2026-11-18 after a hip-pose fix, NOT pushed.** Review: `git diff main -- shared server` empty; the build's numbers read (Low download 3.15 MB, one draw call per gun in hand); about 10 screenshots looked at, which found the canted hip pose (fixed in `34d439e`); tests and typecheck run on the branch and on merged `main` (457 with package N). The first-person arms are still the cartoon SWAT arms (package O). The 2x scope model still needs the owner's download ("AR Scope (Game-Ready)" by Scape into `tools/blender/source-art/realistic/scope2x/`). See "Package M part 2" at the end.
 - **Package M part 1 (2026-11-17, protocol 15): merged into `main` on the owner's word, NOT pushed.** Push only when the owner is at his PC to restart the game server, since the pushed client needs protocol 15. Rifle sights (iron, 1x red dot, 2x scope) chosen in a Loadout page and mounted at the next spawn, and the stuck-aim fix. Review: the shared, protocol, server and input diffs were read line by line; tests (447) and typecheck run on the branch and on merged `main`; two of 19 screenshots looked at. Reviewer's notes: the 2x scope blacks out everything outside its circle like a sniper scope, which should become an ACOG-style sight picture with part 2's real model; the warmup respawn edge (Known problems) predates this package. Part 2 waits for the owner's downloads. See "Package M part 1" below.
 - **Package N (real gunshots and breathing, 2026-11-18): merged into `main` on the owner's word 2026-11-18, NOT pushed; client audio only, no protocol change, 453 tests.** Review: `git diff main -- shared server` empty, `audio.ts` diff read (breathing keeps distance gain, occlusion, panner; recorded breaths add one source and gain node per breath, every couple of seconds per ghost), variant files checked distinct, tests and typecheck run on the branch and on merged `main`. The owner's sound files live in `tools/blender/source-art/realistic/sound/` in the main checkout; `tools/process-audio.mjs` reads `tools/audio-source/freesound/`, so copy them there before re-running it. Real AK-47 recordings (Freesound, CC0) are the gunshots, with a distant tail and filtered suppressed versions; the pistol is still an AK stand-in until the owner downloads real pistol files; ghost breathing is two real recordings cut into single breaths; hurt stays synthesised. Nothing has been listened to. See "Package N" below.
+- **Package O (2026-11-18, realistic soldiers and stealth ghosts, real first-person arms, the downloaded AR Scope; no protocol change): built on `claude/realistic-soldiers-bcc8fb`, NOT reviewed or merged.** For the reviewer: `git diff main -- shared server` is empty; read `client/src/characters.ts`, the character part of `presenter.ts` (`loadCharacters`) and `weapons.ts` (`character()`), then `tools/blender/soldier.py` and `clips.py`; look at `docs/review/soldiers/`. The owner should look at the soldiers in a match and check Low's frame rate on his laptop. See "Package O" at the end.
 - **Recommended next step:** the owner plays and listens to waves 3 and 4 before any new package is built; his findings come first and will likely change the briefs for K, I and J.
 - **How wave 4 was built (it worked; repeat it):** the main session started each build with a self-contained brief, in its own worktree, with no Browser pane; builds checked their screens with headless Chrome driven by script on scratch ports (8090 and up for the server, 5190 and up for Vite; `tools/graphics-shots.mjs` and `tools/sound-check.mjs` are examples). Follow-ups went to the same build session. Parallel packages were told which files the other owned and merged simulation-side first.
 - **Downloads from kenney.nl cannot be scripted** (the site answers 403 and build sessions must not work around it): the owner downloads packs by hand and unzips them into the git-ignored `tools/audio-source/` (one folder per pack). The five audio packs he fetched on 2026-11-17 are in `tools/audio-source/` of the main checkout (copied from the package H worktree), so `node tools/process-audio.mjs` can be re-run there; a fresh worktree does not have them.
@@ -769,3 +770,114 @@ well, not the handguard; package O rebuilds the characters); the downloaded-scop
 `tools/blender/review.py` (its Blender renders assume vertex colours, so the new guns render untextured there). The
 arms are still the cartoon SWAT arms; package O replaces them. There is no in-game credits page: the CC-BY credits
 live in `client/public/models/CREDITS.md`, which the site serves at `/models/CREDITS.md`.
+
+## Package O (realistic soldiers) in detail
+
+Built 2026-11-18 on branch `claude/realistic-soldiers-bcc8fb` (from `main` at `f899118`); **not merged, not pushed**.
+Art and presentation only: `git diff main -- shared server` is empty, no message change, protocol stays 15. 460 tests,
+typecheck clean. Screenshots and how they were made: `docs/review/soldiers/README.md` (headless Chrome, software GL,
+scratch ports 8098 and 5198). **Nothing was seen on a real GPU, in motion or with a mouse.** No downloads were made
+(the owner's Fab files were used; Mixamo was not needed, see "Animations").
+
+**What changed for the player.** Defenders are the Fab "Quantum Modular Character" soldier (cap, rolled-up shirt dyed
+the team orange, plate carrier with pouches, holster, jeans and boots); ghosts are the same body as a close-fitting dark
+suit with a balaclava and boots (no cap, no vest), a very different silhouette, still drawn only through the shimmer
+shader. First-person arms are the soldier's real forearms and hands with the orange rolled sleeves (defenders) or dark
+suit sleeves and gloves (a ghost's knife), fingers closed round the AK's grip and handguard, the Makarov's grip (two
+hands) and the knife. Third person: the rifle is shouldered with the left hand on the handguard (it held the old SMG's
+magazine spot), the pistol is real size (the 1.35x scale-up is gone) and held in two hands, the knife sits in the right
+hand. The downloaded "AR Scope (Game-Ready)" by Scape replaces the generated ACOG on the AK (first and third person).
+
+**Pipeline** (`tools/blender/`; order: `weapons.py` (30 s), `viewmodel.py` (10 s), `soldier.py` (45 s); sources in
+the git-ignored `source-art/`, see `client/public/models/CREDITS.md`):
+- `soldier.py` (new, model-agnostic: everything specific to this model is in its tables `BONES`, `PARTS`, `BUDGET`,
+  `MATERIALS`, `REGIONS`): imports `SKM_Character.fbx` and `SKM_Body_Full.fbx` (Blender's FBX importer crashes on these
+  files with a KeyError in `link_hierarchy`; `patch_fbx_importer` works round it), builds the 51-bone skeleton with
+  SWAT-style names (root, hips, three spine bones, neck, head; per side shoulder, upper arm, forearm, wrist, three
+  bones per finger and thumb, thigh, shin, foot; twist, corrective, face, metacarpal and toe bones folded into their
+  kept ancestor), reduces each part to the tier's budget (plain smooth normals afterwards: the per-corner normals
+  copied back by `realistic.decimate`, right for guns, made reduced skin and cloth look faceted), joins each look into ONE mesh
+  with ONE material, and writes `character_high.glb` / `character_low.glb` (both looks, `char_defender` and
+  `char_ghost`, on one skeleton) and the atlas `textures/character_{albedo,normal}_{2048,1024}.webp` (each source
+  material's 4K maps cropped to the part the mesh uses; normal maps at WebP quality 60).
+  It also provides the first-person arms (`fp_sources`, `fp_arms`) and their atlas regions (`fp_regions`).
+- `clips.py` (new): retargeting and the generated clips, sockets, export (24 fps, rotation keys only except the hips,
+  bones that do not move in a clip keep 2 keys).
+- `viewmodel.py`: arms from `soldier.fp_*` instead of SWAT (5,000 triangles for the defender's, 4,500 for the ghost's, 70 % in the hands); hands at real size; shoulders moved for real arm lengths
+  (the rifle's left shoulder forward, a bladed stance, so the support hand reaches the handguard). Clip names, cue
+  times, the hip poses and the aimed poses are unchanged.
+- `weapons.py`: each gun atlas gets the arms' regions (`realistic.ARM_LAYOUTS`; the AK, Makarov and knife textures
+  were moved up to make room: the AK region is now 1536 x 1536 instead of 1536 x 2048 at High); the pistol is drawn
+  real size; the downloaded scope is imported in an explicit frame (`SCOPE_DL`: it is a compact 60 mm optic on a riser,
+  so "longest side = optical axis" guessed the vertical axis), its lens tube is dropped so the aimed view looks through
+  the housing, its four other materials get their own cropped rectangles of the rifle atlas, and the eye sits 4.5 cm
+  behind its eyepiece (`SCOPE_EYE_RELIEF`; 6.8 cm framed the lens at about a third of the screen height, 4.5 cm at
+  about half). The generated ACOG stays as the fallback when the file is absent.
+- `realistic.py`: atlas regions can crop their source maps and recolour (`Region(crop=, post=)`), `uv_crop`.
+- `characters.py` and the old `character.glb` are removed (the SWAT pipeline). `review.py` (package F's Blender
+  renders) now points at `character_high.glb` but was not re-run.
+- `tools/soldier-shots.mjs` (new): the review screenshots.
+
+**Animations.** No Mixamo: the existing Quaternius clips (idle, walk, run, death, hit, from `SWAT.glb`) were retargeted
+onto the new skeleton in Blender (`clips.Retarget`: per bone a rest alignment from the source's T-pose to the target's
+A-pose, world rotation changes copied, hips scaled by the leg-length ratio 1.07, feet put back on the source's
+footprints by two-bone IK; the shoulders take motion only, because the cartoon source's sloping shoulder bones hunched
+the real clavicles). Crouch idle and walk are derived as before (the idle's forward foot pulled under the hips: it made
+a lunge). Aim, shoot, pistol, pistol_shoot, both reloads, knife hold and swing are generated from the guns' landmarks
+with the fingers closed round the grips (the same curl tables as first person). Judged from stills only: walk and run
+looked natural, idle stands slightly knock-kneed with a forward lean (the source's cartoon idle), death falls back and
+lies flat. Clip ground speeds for `characters.ts`: walk and crouch walk 1.45 m/s, run 3.22 m/s. **If the owner finds the
+motion poor in play**, a follow-up can replace the five source clips with Mixamo ones; the list would be: "Rifle Idle",
+"Walking" (in place), "Running" (in place), "Dying" (Death From The Front), "Hit Reaction", downloaded **without
+skin**, FBX for Unity, 24 fps, "In Place" ticked for the locomotion; `clips.RETARGET` then maps them (Mixamo's skeleton
+needs its own `DIRS` and bone names). Not needed now.
+
+**Client** (`characters.ts`, `presenter.ts`, `weapons.ts`; `presenter-api.ts` unchanged):
+- The character file follows the graphics tier: `presenter.setTier` loads `character_<tier>.glb` (the first call
+  loads it; boxes stand in until then); a later tier change loads the other file and rebuilds every character from it.
+- `Character` shows `char_defender` with the new character material (`WeaponMaterials.character()`: the atlas loaded by
+  tier like the weapon atlases, gloss from the albedo alpha, no metalness) or `char_ghost` with the shimmer; both
+  meshes carry vertex colours; an old single-mesh file still works.
+- Weapons: rifle in `socket_gun`, pistol in the new `socket_pistol` (falls back to `socket_gun`), knife in
+  `socket_knife`.
+- Unchanged and still working (code paths read, seen in staged stills): the crouch lean, switch dip and aim raise
+  (bones `Abdomen`, `Chest`, `Neck`, `UpperArm.*` kept), the upper-body mask (`Abdomen`), reload sync, swing and slash,
+  suppressor and sight on remote guns, corpses turned away from walls (the death clip is recentred as before), footstep
+  dust and blob shadows (the soldier is about as wide as the old one at the shoulders, so their sizes were kept).
+
+**Numbers** (before = `main` at `f899118`):
+
+| | Before | After, Low | After, High |
+|---|---|---|---|
+| Third person, triangles per look | 3,798 (one mesh, both teams) | defender 6,641, ghost 5,500 | defender 12,966, ghost 10,500 |
+| Bones | 22 | 51 | 51 |
+| Character texture | none (vertex colours) | 1024² atlas: albedo 195 KB, normal 121 KB | 2048² atlas: albedo 500 KB, normal 538 KB |
+| Character file | `character.glb` 395 KB | `character_low.glb` 656 KB | `character_high.glb` 935 KB |
+| Draw calls per armed player (measured, practice range, 5 players) | at most 2 | 1.8 a player (some culled) | 2.8 a player (High draws players again in the depth prepass; G's budget is 4) |
+| First-person arms, triangles | 1,500 (cartoon) | defender 5,000, ghost 4,500 | same |
+| Rigs (triangles, whole mesh; files) | rifle 16,324 (855 KB), pistol 13,582 (613 KB), knife 4,099 (542 KB) | rifle 22,183 (scope 3,000; 1,003 KB), pistol 17,081 (615 KB), knife 7,598 / ghost 7,099 (572 KB) | same |
+| Draw calls per rig | 1 (+1 flash) | 1 (+1 flash) | same |
+| Model download per player (GLBs and atlases, MB = 10^6 bytes) | Low 3.55 MB, High 4.67 MB | 4.27 MB | 6.65 MB |
+
+A Low frame with ten players draws about 66,000 character triangles with 51-bone skinning (texture-based bone
+matrices) and three texture reads per character pixel (albedo, normal, the studio sphere map), against about 38,000
+untextured before. That should stay comfortable on Intel UHD 620, but **frame rate was not measured** (software GL).
+`models.test.ts` keeps everything a Low player downloads for models under 4.5 MiB (4.72 MB; it was 4 MiB without the characters).
+
+**Decisions taken on my own judgment:** both looks in one file per tier (one skeleton and clip set; a Low player never
+downloads the High file); the ghost made from the bare body with its face and feet smoothed into a balaclava and boots,
+pointing at a dark swatch (it is only ever drawn with the shimmer, so a texture would never show); no gear on the ghost
+(the "drop" part is the vest's magazine pouches and hangs in mid-air without the vest); the holstered pistol, the
+"QUANTUM ASSETS" back patch, the cap flag, teeth and lashes left out; the team orange as a dyed shirt (it reads at a
+glance from front, back and side); the pistol held in two hands in third person (it was one-handed); a bladed stance for
+the rifle (chest turned 22° right, head turned back) so the real-length left arm reaches the handguard; character
+normal maps at WebP quality 60; character materials without metalness; the downloaded scope's frame set by constants
+rather than guessed; eye relief 4.5 cm; the arm textures inside each gun's atlas (one draw call per rig) at the cost of
+a quarter of the AK texture's height.
+
+**Not verified:** anything on a real GPU or in motion (software GL stills only); frame rate on the owner's laptop; the
+retargeted clips in motion (feet sliding, the idle's lean); how the shirt orange reads against the real maps at a
+distance and in Warehouse's dark corners; the tier switch rebuilding characters during a match (code read, not run);
+remote characters during real fights (all third-person poses in the screenshots are staged on practice targets); the
+first-person arms at real screen sizes with sway, kick and draw (in the software-GL stills the hands still look a little angular when the pistol brings them close); whether the left hand clips the AK's magazine during
+the reload; the aimed 2x view on other screen shapes; `review.py`.
