@@ -28,6 +28,10 @@ const SERVER = arg('server', 'ws://localhost:8098');
 const CHROME = arg('chrome', 'C:/Program Files/Google/Chrome/Application/chrome.exe');
 const PORT = Number(arg('cdp', '9238'));
 const ONLY = arg('only', '');
+/** Field of view setting (degrees) for the first-person pictures; file names get `-fov<N>` when given. */
+const FOV = arg('fov', '');
+/** Skip the extra tiers and maps of the first-person set (40-43). */
+const QUICK = process.argv.includes('--quick');
 const W = 1366, H = 768;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -85,6 +89,7 @@ async function waitFor(cdp, expr, ms, what) {
 }
 
 async function shoot(cdp, name) {
+    if (FOV) name = `${name}-fov${FOV}`;
     const r = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 90 });
     writeFileSync(join(OUT, `${name}.jpg`), Buffer.from(r.data, 'base64'));
     console.log('  saved', name);
@@ -108,7 +113,7 @@ const HOOKS = `(() => {
   return true;
 })()`;
 
-const setLoadout = (cdp, sight) => cdp.eval(`localStorage.setItem('sb-loadout', JSON.stringify({ sight: '${sight}' })); localStorage.setItem('sb-howto', '1'); true`);
+const setLoadout = (cdp, sight) => cdp.eval(`localStorage.setItem('sb-loadout', JSON.stringify({ sight: '${sight}' })); localStorage.setItem('sb-howto', '1');${FOV ? ` localStorage.setItem('sb-settings', JSON.stringify({ fov: ${Number(FOV)} }));` : ''} true`);
 
 async function practice(cdp, { sight = 'iron', tier = 'low', map = 'greybox', side = 'defenders' }) {
     await setLoadout(cdp, sight);
@@ -354,7 +359,7 @@ async function run() {
             await sleep(200);
             await shoot(cdp, '33-ghost-knife-swing');
             await cdp.eval('__thaw(30)');
-            for (const [tier, map, sight] of [['high', 'greybox', 'scope2x'], ['low', 'warehouse', 'iron'], ['high', 'warehouse', 'reddot']]) {
+            for (const [tier, map, sight] of QUICK ? [] : [['high', 'greybox', 'scope2x'], ['low', 'warehouse', 'iron'], ['high', 'warehouse', 'reddot']]) {
                 console.log(`${tier} ${map} ${sight}`);
                 await practice(cdp, { sight, tier, map });
                 await shoot(cdp, `40-${tier}-${map}-${sight}-hip`);
