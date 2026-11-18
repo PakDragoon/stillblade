@@ -195,7 +195,7 @@ const SLOT_LOOKS: readonly SlotLook[] = WEAPONS.map(w => {
  * Clip names per gun slot, built once (no string building per frame). Package R: the rifle rig also has
  * `rifle_reload_empty` (played for an empty reload), `rifle_draw` (the switch, sampled by draw progress, in place of
  * the procedural rise) and `rifle_fire` (one fire interval long, sampled by the time since the last local shot);
- * a rig without them (the pistol, or an older file) keeps the old behaviour. `rifle_holster` is in the file but unused:
+ * a rig without them (the pistol, or an older file) keeps the old behaviour. There is no holster clip in the file:
  * the rule has no holster time (a switch only draws the new weapon).
  */
 const IDLE_CLIP: readonly string[] = WEAPONS.map(w => `${w.id}_idle`);

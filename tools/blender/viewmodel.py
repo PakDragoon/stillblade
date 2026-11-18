@@ -673,14 +673,17 @@ def build_gun_clips(rig):
 # Our clip: (pack clip, first and last pack second used, our duration = the rule's). The pack's Reload ends its motion
 # by about 2.95 s and Reload_Empty by 3.45 s (both then hold still); they are played 1.34x and 1.28x faster to fit the
 # rule. The draw's motion is over by 0.7 s; it is played in the rule's 0.4 s (1.75x). Fire: the kick and bolt cycle
-# (0.3 s) in one fire interval (0.1 s). Holster keeps the pack's speed (the rule has no holster time).
+# (0.3 s) in one fire interval (0.1 s). The pack's Holster is not exported: the rule has no holster time, so nothing
+# played it, and the Low tier's download budget needed its bytes for the shirt sleeves (SB_PACK_HOLSTER=1 adds it back,
+# at the pack's speed).
 PACK_CLIPS = {
     'rifle_reload': ('Reload', 0.0, 2.95, 132 / 60),
     'rifle_reload_empty': ('Reload_Empty', 0.0, 3.45, 162 / 60),
     'rifle_draw': ('Draw', 0.0, 0.70, 24 / 60),
     'rifle_fire': ('Fire', 0.0, 0.30, 6 / 60),
-    'rifle_holster': ('Holster', 0.0, 0.567, 0.567),
 }
+if os.environ.get('SB_PACK_HOLSTER') == '1':
+    PACK_CLIPS['rifle_holster'] = ('Holster', 0.0, 0.567, 0.567)
 # The left hand's anchors over each pack clip (pack seconds): weight keys of the magazine anchor (the hand holds the
 # magazine; it was on the handguard before and is again after) and, in the empty reload, of the charging handle.
 PACK_MAG_KEYS = {
@@ -998,6 +1001,8 @@ def build_knife_clips(rig):
 
 # ---------------------------------------------------------------------------------------------
 
+# Defenders' sleeves from the soldier's shirt (packhands.sleeve_from_shirt); SB_SHIRT_SLEEVE=0 keeps the generated tube.
+SHIRT_SLEEVE = os.environ.get('SB_SHIRT_SLEEVE', '1') != '0'
 # Ghost suit forearm with the pack's hands: its own hand is cut away (faces wholly on the hand bones) and the forearm
 # reduced to this many triangles.
 GHOST_FOREARM_TRIS = 1200
@@ -1051,6 +1056,7 @@ def build(rig_name):
         # The pack's gloved hands (packhands.py, built once the armature exists): defenders get a sleeve to the wrist
         # instead of the soldier's bare forearm and rolled sleeve; ghosts keep their suit forearm, its hand cut away.
         arms = []
+        shirt = None
         for pal, objs in sparts.items():
             if pal == 'ghost' and pal in palettes:
                 for o in objs:
@@ -1059,7 +1065,11 @@ def build(rig_name):
                 arms.append((pal, soldier.fp_arms(pal, objs, atlas, rig_name)))
             else:
                 for o in objs:
-                    bpy.data.objects.remove(o)
+                    # The defender's shirt sleeve is kept: its upper-arm part becomes the forearm sleeve.
+                    if pal == 'defender' and 'Shirt' in o.name and SHIRT_SLEEVE:
+                        shirt = o
+                    else:
+                        bpy.data.objects.remove(o)
     else:
         arms = [(pal, soldier.fp_arms(pal, sparts[pal], atlas, rig_name)) for pal in palettes]
         for pal, objs in sparts.items():
@@ -1091,7 +1101,12 @@ def build(rig_name):
             rl.weld(hands, 1e-5)
             atlas.remap(hands, material_region={'Glove_D': 'glove', 'Hand_D': 'handskin'})
             parts_ = [hands]
-            if pal == 'defender':
+            if pal == 'defender' and shirt is not None:
+                # The soldier's own shirt sleeve, moved onto the forearm (packhands.sleeve_from_shirt).
+                sl = packhands.sleeve_from_shirt(arm, hands, shirt)
+                atlas.remap(sl, material_region={m.name: 'sleeve' for m in sl.data.materials if m})
+                parts_.append(sl)
+            elif pal == 'defender':
                 sl = packhands.sleeve(arm, hands, pal, crops.get('sleeve'))
                 atlas.remap(sl, material_region={'sleeve_tube': 'sleeve'})
                 parts_.append(sl)
@@ -1101,6 +1116,8 @@ def build(rig_name):
             rl.single_material(a, rig_name)
             arms.append((pal, a))
             log(pal, 'pack hands: arms tris', tris(a.data), 'verts', len(a.data.vertices))
+        if shirt is not None:
+            bpy.data.objects.remove(shirt)
     for a in list(bpy.data.actions):
         bpy.data.actions.remove(a)
 
