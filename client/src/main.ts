@@ -40,6 +40,10 @@ import { Net } from './net';
 import { isTouchOnly, showPhoneNotice } from './phone';
 import { reporter } from './report';
 import { createPresenter } from './presenter';
+import { mapFiles } from 'virtual:asset-sizes';
+import { fetchTracked, loadAssetTracked, sizeOf } from './fetch-progress';
+import { LoadTracker, type FileTrack, type LoadScreen, type StepId } from './loading';
+import type { LoadActions, LoadingView } from './loading-ui';
 import type { LocalView, MatchView, RemoteView, WeaponSlotView } from './presenter-api';
 
 const RAD = Math.PI / 180;
@@ -120,6 +124,53 @@ camera.addComponent('camera', {
 });
 app.root.addChild(camera);
 
+// ---- Load progress (the loading screen; client/src/loading.ts) ------------------------------------------------
+/**
+ * Every download and slow step reports here. Download steps weigh by their bytes; the time-only ones (connecting,
+ * the graphics check, building the map's lighting) by a fixed share of the bar. Only connecting, the map and its
+ * lighting are needed to play; the others have stand-ins (box models, synthesised sounds, the Low tier until the
+ * check ends), so their failure can be skipped and a stall offers Play now.
+ */
+const loads = new LoadTracker(() => performance.now(), sizeOf);
+loads.define('connect', 'Connecting to server', { kind: 'timed', share: 0.05, expectedMs: 1500 });
+// Optional: it counts frames, which stop in a background tab, so a join must never hang on it (Play now after 10 s).
+loads.define('graphics', 'Checking your graphics', { kind: 'timed', share: 0.04, expectedMs: 2500, optional: true });
+loads.skip('graphics'); // shown only while the measurement runs (startMeasuring)
+const defineMapSteps = (name: string): void => {
+    loads.define('map', name ? `Map: ${name}` : 'Map', { kind: 'bytes' });
+    loads.define('lighting', 'Building lighting', { kind: 'timed', share: 0.04, expectedMs: 600 });
+};
+defineMapSteps('');
+loads.define('weapons', 'Weapons', { kind: 'bytes', optional: true });
+loads.define('characters', 'Characters', { kind: 'bytes', optional: true });
+loads.define('hands', 'First-person hands', { kind: 'bytes', optional: true });
+loads.define('sounds', 'Sounds', { kind: 'bytes', optional: true });
+/** The steps a join waits for, in the order the screen lists them. */
+const JOIN_STEPS: readonly StepId[] = ['connect', 'graphics', 'map', 'lighting', 'weapons', 'characters', 'hands', 'sounds'];
+/** What the menu's quiet line follows while the player picks a room. */
+const PREP_STEPS: readonly StepId[] = ['weapons', 'characters', 'hands'];
+/** Redraws the loading screen now (before a step that blocks the page for a moment); a no-op without one. */
+let refreshLoad: () => void = () => { /* no screen */ };
+/** Lets the page paint (the loading screen's text) before a synchronous step; never waits long in a hidden tab. */
+const yieldToPaint = (): Promise<void> => new Promise(resolve => {
+    let done = false;
+    const go = (): void => { if (!done) { done = true; resolve(); } };
+    requestAnimationFrame(() => setTimeout(go, 0));
+    setTimeout(go, 100);
+});
+/** Polls a loading screen into its view a few times a second until the returned function is called. */
+function pollLoad(screen: LoadScreen, view: () => LoadingView, onRead?: (complete: boolean) => void): () => void {
+    const tickLoad = (): void => {
+        const v = screen.read(performance.now());
+        view().update(v);
+        onRead?.(v.complete);
+    };
+    refreshLoad = tickLoad;
+    const timer = setInterval(tickLoad, 200);
+    tickLoad();
+    return () => { clearInterval(timer); refreshLoad = () => { /* no screen */ }; };
+}
+
 // ---- Graphics tier (package G) -------------------------------------------------------------------------------
 /** The GPU's name, and what it alone says about the tier (null: measure). */
 const gpuName = rendererName(app.graphicsDevice);
@@ -147,7 +198,9 @@ let measuring = false;
 const startMeasuring = (): void => {
     if (measuring || measuredTier || forcedTier || tierChoice !== 'auto') return;
     measuring = true;
+    loads.begin('graphics');
     void measureTier(app, camera).then(t => {
+        loads.end('graphics');
         measuredTier = t;
         try { sessionStorage.setItem('sb-tier', t); } catch { /* not kept */ }
         applyTier();
@@ -222,14 +275,22 @@ const setSceneFog = (t: LookTuning): void => {
 };
 tierListeners.push(t => setPostProcessing(t === 'high'));
 
-function loadContainer(url: string): Promise<pc.Asset> {
+function loadContainer(url: string, file: FileTrack | null): Promise<pc.Asset> {
     return new Promise((resolve, reject) => {
         const asset = new pc.Asset(url, 'container', { url });
         asset.once('load', () => resolve(asset));
         asset.once('error', (err: unknown) => reject(new Error(`Failed to load ${url}: ${err}`)));
-        app.assets.add(asset);
-        app.assets.load(asset);
+        loadAssetTracked(app, asset, file);
     });
+}
+
+/** What a map file is, in the loading screen's words. */
+function mapPart(id: string, path: string): string {
+    if (path.endsWith('.json')) return 'layout';
+    if (path === `maps/${id}.glb`) return 'geometry';
+    if (path.includes('_baked')) return 'lighting';
+    if (path.startsWith('maps/sky')) return 'sky';
+    return 'textures';
 }
 
 /** The maps this build ships (client/public/maps/index.json, written by the map builder). */
@@ -254,15 +315,19 @@ interface LoadedMap {
     unload(): void;
 }
 
-/** Loads a map's collision/gameplay data and its baked visuals, and adds it to the scene. Can run again after `unload`. */
+/**
+ * Loads a map's collision/gameplay data and its baked visuals, and adds it to the scene. Can run again after `unload`.
+ * Reports to the loading screen's 'map' and 'lighting' steps, which the caller defines for this map first
+ * (`defineMapSteps`); every file is announced before any is fetched, so the total is right from the start.
+ */
 async function loadMap(id: string): Promise<LoadedMap> {
     if (!isMapId(id)) throw new Error(`Bad map id ${JSON.stringify(id)}`);
+    for (const f of mapFiles[id] ?? []) loads.file('map', ASSETS + f, mapPart(id, f));
+    const dataUrl = `${ASSETS}maps/${id}.json`, glbUrl = `${ASSETS}maps/${id}.glb`;
     const [mapData, mapAsset] = await Promise.all([
-        fetch(`${ASSETS}maps/${id}.json`).then(r => {
-            if (!r.ok) throw new Error(`Failed to load map data: ${r.status}`);
-            return r.json() as Promise<MapData>;
-        }),
-        loadContainer(`${ASSETS}maps/${id}.glb`)
+        fetchTracked(dataUrl, loads.file('map', dataUrl, 'layout'))
+            .then(({ buffer }) => JSON.parse(new TextDecoder().decode(buffer)) as MapData),
+        loadContainer(glbUrl, loads.file('map', glbUrl, 'geometry'))
     ]);
     const mapEntity = (mapAsset.resource as pc.ContainerResource).instantiateRenderEntity();
     app.root.addChild(mapEntity);
@@ -277,14 +342,19 @@ async function loadMap(id: string): Promise<LoadedMap> {
     };
     // Baked maps draw unlit (albedo x baked light): no realtime lighting cost on the world at all.
     if (mapData.look) {
-        try { look = await applyMapLook(app, mapEntity, camera, mapData, `${ASSETS}maps/`, tier); } catch (err) { unload(); throw err; }
-        // Looks only: if it fails, players and weapons keep a fixed outdoor light.
+        try { look = await applyMapLook(app, mapEntity, camera, mapData, `${ASSETS}maps/`, tier, loads); } catch (err) { unload(); throw err; }
+        // Looks only: if it fails, players and weapons keep a fixed outdoor light. It blocks the page for a moment,
+        // so the screen says so first.
+        loads.begin('lighting');
+        refreshLoad();
+        await yieldToPaint();
         try {
             lighting = buildMapLighting(app, mapEntity, mapData, look.sources, look.tuning, mapData.boxes);
         } catch (err) {
             console.warn('[stillblade] map lighting for players failed; using a fixed light.', err);
         }
     }
+    loads.end('lighting');
     return { data: mapData, look, lighting, unload };
 }
 
@@ -303,12 +373,13 @@ async function start(): Promise<void> {
     tier = resolveTier(forcedTier, tierChoice, measuredTier);
     startMeasuring();
     const input = new Input(canvas);
-    const presenter = createPresenter(app, camera);
+    const presenter = createPresenter(app, camera, loads);
     presenter.setTier(tier);
     setPostProcessing(tier === 'high');
-    // Audio needs the map's boxes for occlusion; the array is filled once the room's map is known.
+    // Audio needs the map's boxes for occlusion; the array is filled once the room's map is known. The samples load
+    // as soon as audio unlocks (the join), on the loading screen, instead of after a delay in the game.
     const boxes: Box[] = [];
-    const audio = createAudio(boxes);
+    const audio = createAudio(boxes, { loads, loadDelayMs: 0 });
     presenter.setWorld(boxes);
     const radar = new Radar(document.body);
     /** `?auto=1` skips the menu and the lobby panel; `?quiet=1` also stops the pause menu opening (for scripted checks). */
@@ -358,10 +429,19 @@ async function start(): Promise<void> {
     else if (rejoin && typeof rejoin.room === 'string') choice = rejoin;
     else {
         const wanted = params.get('map') ?? '';
+        // While the player picks a room, a quiet line under the menu follows the models downloading in the background.
+        const prep = loads.screen(PREP_STEPS);
+        const prepTimer = setInterval(() => {
+            const v = prep.read(performance.now());
+            ui.setPreparing(v.complete ? null : `Preparing game files · ${v.percent} %`, v.shown);
+            if (v.complete) clearInterval(prepTimer);
+        }, 250);
         choice = await ui.showMenu(mapList, {
             name: params.get('name') ?? saved, room: params.get('room') ?? '',
             map: mapList.some(m => m.id === wanted) ? wanted : DEFAULT_MAP
         }, fetchRooms);
+        clearInterval(prepTimer);
+        ui.setPreparing(null);
         // An invite link's map is only a request for a new room; a joiner takes the room's own.
         if (params.get('room') && choice.room === params.get('room')!.trim()) choice.map = wanted;
     }
@@ -380,15 +460,37 @@ async function start(): Promise<void> {
     roomOptionsQuery(choice.options ?? DEFAULT_ROOM_OPTIONS, query);
     const serverUrl = `${serverBase}/?${query}`;
 
-    // The room decides the map: connect, learn it from the welcome, load it, then start simulating.
-    // A refused join shows why, with a button to try again.
+    // The room decides the map: connect, learn it from the welcome, load it, then start simulating. One loading screen
+    // follows all of it (loading.ts): connecting, the graphics check, the map, its lighting, and the models and sounds
+    // that started downloading when the page opened. A refused join shows why, with a button to try again.
+    const joinScreen = loads.screen(JOIN_STEPS);
+    /** The join's "Back to menu" (a failed map download, given up). */
+    const toMenu = (): void => { try { sessionStorage.removeItem('sb-rejoin'); } catch { /* fine */ } location.assign(location.pathname); };
+    /** Play now: start while only optional steps (models, sounds) are still slow; they finish in the background. */
+    let playNow: () => void = () => { /* set while waiting */ };
+    const joinActions: LoadActions = {
+        retry: () => loads.retryFailed(),
+        giveUp: () => { if (joinScreen.read(performance.now()).canContinue) loads.giveUpFailed(); else toMenu(); },
+        playNow: () => playNow()
+    };
+    const joinSub = choice.practice ? 'Practice range' : choice.room ? `Room ${choice.room}` : 'Quick play';
+    loads.holding = true;
+    loads.begin('connect');
+    let loadView = ui.showProgress('Joining', joinSub, joinActions);
+    const stopJoinPoll = pollLoad(joinScreen, () => loadView);
     let welcome: Awaited<Net['welcome']>;
-    for (;;) {
-        ui.showLoading('Connecting', 'Looking for the game server');
+    for (let attempt = 0; ; attempt++) {
+        if (attempt > 0) {
+            // Back from the error screen's Try again.
+            loads.begin('connect');
+            loadView = ui.showProgress('Joining', joinSub, joinActions);
+            refreshLoad();
+        }
         net = new Net(serverUrl, lagMs);
         reporter.setSocket(msg => { if (!net.isOpen) return false; net.sendMsg(msg); return true; });
         try {
             welcome = await net.welcome;
+            loads.end('connect');
             break;
         } catch (err) {
             const f = explainFailure(err instanceof Error ? err.message : String(err));
@@ -397,20 +499,38 @@ async function start(): Promise<void> {
         }
     }
     try { sessionStorage.removeItem('sb-rejoin-tried'); } catch { /* fine */ }
-    ui.showLoading(welcome.mapName, 'Downloading the map');
     /** The room's map as it is now: it changes between matches (the map vote). */
     let loaded: LoadedMap;
     let mapData: MapData;
     let mapId = welcome.map;
     const roomCode = welcome.room || choice.room || 'public';
+    defineMapSteps(welcome.mapName);
+    loadView = ui.showProgress(welcome.mapName, welcome.practice ? 'Practice range' : `Room ${roomCode}`, joinActions);
+    refreshLoad();
     try {
         loaded = await loadMap(welcome.map);
         mapData = loaded.data;
     } catch (err) {
         console.error(err);
+        stopJoinPoll();
+        loads.holding = false;
         ui.showError('Could not load the map', `${welcome.mapName} failed to download. Check your connection and try again.`, false);
         return;
     }
+    // Wait for the rest (the models and sounds already downloading), unless the player chooses to play now.
+    await new Promise<void>(resolve => {
+        const finish = (): void => { clearInterval(timer); resolve(); };
+        const timer = setInterval(() => { if (joinScreen.read(performance.now()).complete) finish(); }, 100);
+        playNow = finish;
+        if (joinScreen.read(performance.now()).complete) finish();
+    });
+    // Show the full bar for a moment, then the game.
+    refreshLoad();
+    await new Promise(resolve => setTimeout(resolve, 150));
+    stopJoinPoll();
+    // Anything still failing now is given up (its stand-in stays); nobody is left to answer.
+    loads.holding = false;
+    loads.giveUpFailed();
     boxes.push(...mapData.boxes);
     radar.setMap(mapData);
     /** A map's look is in: the presenter's effects and the scene fog follow it. */
@@ -566,8 +686,18 @@ async function start(): Promise<void> {
         alive = false;
         pending.length = 0;
         ui.setMapStatus(`Downloading ${name}…`);
+        // The loading screen over the result card: the new map and its lighting (the models and sounds are in).
+        // Giving up on a failed download falls back to rejoining the room, as before.
+        // The new map's steps first: a screen that saw the old, finished ones would read 100 % and could not go back.
+        defineMapSteps(name);
+        const swapScreen = loads.screen(['map', 'lighting']);
+        loads.holding = true;
+        const swapView = ui.showProgress(name, 'Next map', { retry: () => loads.retryFailed(), giveUp: () => loads.giveUpFailed() }, true);
+        const stopSwapPoll = pollLoad(swapScreen, () => swapView);
+        const closeSwap = (): void => { stopSwapPoll(); loads.holding = false; ui.hideProgress(); };
         try {
             const next = await loadMap(id);
+            closeSwap();
             const old = loaded;
             loaded = next;
             mapData = next.data;
@@ -583,6 +713,7 @@ async function start(): Promise<void> {
             ui.setMapStatus(`${name} is ready.`);
         } catch (err) {
             console.error(err);
+            closeSwap();
             try { sessionStorage.setItem('sb-rejoin', JSON.stringify({ ...choice, room: roomCode, quick: false, map: id })); } catch { /* nothing to resume from */ }
             location.reload();
         }

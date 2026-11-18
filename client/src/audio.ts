@@ -32,6 +32,8 @@ import {
     pickBreathSet, pickVariant, sampleFiles, stepVariation, surfaceUnder, useRecorded, varied, type SoundMode
 } from './audio-logic';
 import { faceAt, type Surface } from './effects';
+import { fetchTracked } from './fetch-progress';
+import type { FileTrack } from './loading';
 
 // ---------------------------------------------------------------------------------------------
 // Tuning
@@ -296,23 +298,36 @@ class SampleBank {
     }
 }
 
-/** Fetches and decodes every sample file in small batches. A file that is missing or will not decode is skipped. */
-async function loadSamples(ctx: BaseAudioContext, bank: SampleBank, base: string): Promise<void> {
+/** Every sample file, in loading order. */
+function sampleJobs(base: string): { set: string; index: number; url: string }[] {
     const jobs: { set: string; index: number; url: string }[] = [];
     for (const set of Object.keys(SAMPLE_SETS)) {
         const files = sampleFiles(set);
         for (let i = 0; i < files.length; i++) jobs.push({ set, index: i, url: base + files[i] });
     }
+    return jobs;
+}
+
+/**
+ * Fetches and decodes every sample file in small batches. A file that is missing or will not decode is skipped.
+ * `tracks` (by URL) report each file to the loading screen; a failed download there can be tried again.
+ */
+async function loadSamples(ctx: BaseAudioContext, bank: SampleBank, base: string, tracks: Map<string, FileTrack>): Promise<void> {
+    const jobs = sampleJobs(base);
     const one = async (j: { set: string; index: number; url: string }): Promise<void> => {
+        const file = tracks.get(j.url) ?? null;
+        let fetched = false;
         try {
-            const r = await fetch(j.url);
-            if (!r.ok) return;
-            const type = r.headers.get('content-type') ?? '';
-            if (type.includes('text/html')) return; // a dev server answering a missing file with its index page
-            const buf = await ctx.decodeAudioData(await r.arrayBuffer());
+            // A dev server answers a missing file with its index page: rejectHtml treats that as missing.
+            const { buffer } = await fetchTracked(j.url, file, { rejectHtml: true });
+            fetched = true;
+            const buf = await ctx.decodeAudioData(buffer);
             const arr = bank.sets.get(j.set);
             if (arr && !arr[j.index]) { arr[j.index] = buf; bank.loaded++; }
-        } catch { /* missing or undecodable: that sound stays synthesised */ }
+        } catch {
+            // Missing or undecodable: that sound stays synthesised (a failed download already told its track).
+            if (fetched) file?.fail('could not decode');
+        }
     };
     for (let i = 0; i < jobs.length; i += 6) await Promise.all(jobs.slice(i, i + 6).map(one));
 }
@@ -1104,6 +1119,12 @@ export const createAudio: CreateAudio = (boxes: readonly Box[], opts?: AudioOpti
     const samples = new SampleBank();
     let loadDone: () => void = () => { /* replaced below */ };
     const loadedPromise = new Promise<void>(res => { loadDone = res; });
+    // Every sample file is announced to the loading screen now, so its total is known before the first unlock.
+    const sampleBase = (import.meta.env?.BASE_URL ?? './') + 'audio/';
+    const sampleTracks = new Map<string, FileTrack>();
+    if (opts?.loads) for (const j of sampleJobs(sampleBase)) sampleTracks.set(j.url, opts.loads.file('sounds', j.url, j.set));
+    /** No Web Audio: nothing will load. */
+    const skipSamples = (): void => { for (const t of sampleTracks.values()) t.skip(); };
     const faceScratch = { axis: 0, sign: 0, surface: 'concrete' as Surface };
     let failed = false;
     let master: GainNode | null = null;
@@ -1428,7 +1449,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[], opts?: AudioOpti
             try {
                 const Ctor: typeof AudioContext | undefined = window.AudioContext
                     ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-                if (!Ctor && !opts?.context) { failed = true; loadDone(); return; }
+                if (!Ctor && !opts?.context) { failed = true; skipSamples(); loadDone(); return; }
                 const c = opts?.context ? opts.context as AudioContext : new Ctor!({ latencyHint: 'interactive' });
                 // Gentle glue compressor, then a fast high-ratio limiter so pile-ups never clip.
                 // Thresholds sit well above normal single-sound levels so quiet breathing is never pumped.
@@ -1454,9 +1475,9 @@ export const createAudio: CreateAudio = (boxes: readonly Box[], opts?: AudioOpti
                 ctx = c;
                 if (!opts?.context && c.state !== 'running') c.resume().catch(() => { /* retried on next gesture */ });
                 // The samples load after the game is playable: a moment after the first unlock, a few at a time.
-                const base = (import.meta.env?.BASE_URL ?? './') + 'audio/';
-                setTimeout(() => { void loadSamples(c, samples, base).finally(loadDone); }, opts?.loadDelayMs ?? 1500);
+                setTimeout(() => { void loadSamples(c, samples, sampleBase, sampleTracks).finally(loadDone); }, opts?.loadDelayMs ?? 1500);
             } catch {
+                skipSamples();
                 loadDone();
                 failed = true;
                 ctx = null;

@@ -3,6 +3,8 @@ import { defaultLight, LIGHT_FLOATS, useProbeLighting } from './lighting';
 import { readStream } from './meshdata';
 import { SIGHTS, SIGHT_COUNT, SIGHT_IRON, type WeaponId } from '@shared/weapons';
 import type { Tier } from './graphics';
+import { loadAssetTracked } from './fetch-progress';
+import type { FileTrack, LoadReporter } from './loading';
 
 /**
  * Weapon meshes: client/public/models/weapons.glb, built by tools/blender/weapons.py (package M part 2) from the
@@ -132,7 +134,7 @@ function mergedMesh(device: pc.GraphicsDevice, parts: readonly MeshPart[]): pc.M
 const meshOf = (e: pc.Entity | null): pc.Mesh | null => e?.render?.meshInstances[0]?.mesh ?? null;
 
 /** Loads the shared weapons GLB. Rejects if it fails to load or lacks a required node. */
-export function loadWeaponModel(app: pc.Application, url: string, filename = 'weapons.glb'): Promise<WeaponModel> {
+export function loadWeaponModel(app: pc.Application, url: string, filename = 'weapons.glb', file: FileTrack | null = null): Promise<WeaponModel> {
     return new Promise((resolve, reject) => {
         const asset = new pc.Asset('weapons', 'container', { url, filename });
         asset.once('load', () => {
@@ -184,8 +186,7 @@ export function loadWeaponModel(app: pc.Application, url: string, filename = 'we
             app.assets.remove(asset);
             reject(new Error(`Failed to load ${url}: ${String(err)}`));
         });
-        app.assets.add(asset);
-        app.assets.load(asset);
+        loadAssetTracked(app, asset, file);
     });
 }
 
@@ -315,7 +316,7 @@ export class WeaponMaterials {
     private env: { atlas: pc.Texture; sphere: pc.Texture } | null = null;
     private readonly loaded = new Map<string, Promise<pc.Texture>>();
 
-    constructor(private readonly app: pc.Application, private readonly baseUrl: string) {
+    constructor(private readonly app: pc.Application, private readonly baseUrl: string, private readonly loads: LoadReporter | null = null) {
         const env = makeStudioSphere(app.graphicsDevice);
         this.studio = env;
         const make = (): pc.StandardMaterial => {
@@ -422,8 +423,10 @@ export class WeaponMaterials {
                 this.loaded.delete(file);
                 reject(new Error(`Failed to load ${url}: ${String(err)}`));
             });
-            this.app.assets.add(asset);
-            this.app.assets.load(asset);
+            // The loading screen lists the characters' atlas under Characters, the rest under Weapons by gun.
+            const forChar = file.startsWith('character');
+            const track = this.loads?.file(forChar ? 'characters' : 'weapons', url, forChar ? 'textures' : file.replace(/_.*$/, '')) ?? null;
+            loadAssetTracked(this.app, asset, track);
         });
         this.loaded.set(file, p);
         return p;

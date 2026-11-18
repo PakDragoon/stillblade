@@ -5,6 +5,7 @@ import type { Box, Vec3 } from '@shared/types';
 import type { HitZone } from '@shared/zones';
 import type { Tier } from './graphics';
 import type { MapLighting } from './lighting';
+import type { LoadReporter } from './loading';
 import type { LookTuning } from './maplook';
 
 /** Another player, already interpolated for this frame. `pos` is the feet position. */
@@ -286,4 +287,8 @@ export interface Presenter {
     knifeHit(victimId: number): void;
 }
 
-export type CreatePresenter = (app: pc.Application, camera: pc.Entity) => Presenter;
+/**
+ * `loads` (optional) hears the progress of every file the presenter downloads (weapons, characters, first-person hands)
+ * for the loading screen (`loading.ts`); without it they load exactly as before.
+ */
+export type CreatePresenter = (app: pc.Application, camera: pc.Entity, loads?: LoadReporter) => Presenter;

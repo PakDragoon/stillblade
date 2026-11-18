@@ -76,6 +76,35 @@
 #loading-screen .bar { width: 320px; height: 4px; background: rgba(255,255,255,.12); margin-top: 18px; overflow: hidden; }
 #loading-screen .bar i { display: block; width: 40%; height: 100%; background: var(--bone); animation: slide 1.1s ease-in-out infinite; }
 @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+/* the loading screen with real progress (loading-ui.ts): one bar, what is loading now, the steps */
+#loading-screen.over { z-index: 4; }
+#loading-screen .card.load { width: min(460px, calc(100vw - 32px)); }
+#loading-screen .card.load .sub { margin-top: 4px; }
+#loading-screen .meter { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+#loading-screen .meter .bar { flex: 1; width: auto; margin: 0; }
+#loading-screen .meter .bar i { width: 0; animation: none; transition: width .25s ease-out; }
+#loading-screen .meter .pct { min-width: 48px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+#loading-screen .now { margin-top: 10px; min-height: 20px; font-size: 14px; color: #d1d7dc; font-variant-numeric: tabular-nums;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#loading-screen .now.bad { color: var(--warn); }
+#loading-screen .steps { list-style: none; margin: 14px 0 0; padding: 10px 0 0; border-top: 1px solid var(--line); display: grid; gap: 6px; }
+#loading-screen .steps li { display: flex; align-items: baseline; gap: 10px; font-size: 13px; color: var(--dim); }
+#loading-screen .steps .mark { width: 14px; flex: none; text-align: center; font-weight: 700; }
+#loading-screen .steps .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#loading-screen .steps .size { flex: none; font-variant-numeric: tabular-nums; }
+#loading-screen .steps li.waiting .mark::before { content: ''; display: inline-block; width: 6px; height: 6px; border: 1px solid var(--dim); border-radius: 50%; }
+#loading-screen .steps li.active { color: var(--bone); }
+#loading-screen .steps li.active .mark::before { content: ''; display: inline-block; width: 7px; height: 7px; background: var(--bone); border-radius: 50%; animation: pulse 1s ease-in-out infinite alternate; }
+#loading-screen .steps li.done { color: #b9c3ca; } #loading-screen .steps li.done .mark { color: var(--go); }
+#loading-screen .steps li.failed, #loading-screen .steps li.failed .mark { color: var(--warn); }
+@keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
+#loading-screen .note { margin-top: 14px; font-size: 13px; line-height: 1.45; color: #d1d7dc; }
+#loading-screen .card.load .row { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 10px; }
+#load-prep { position: absolute; z-index: 3; left: 50%; bottom: 18px; transform: translateX(-50%); width: min(320px, calc(100vw - 32px));
+    font-size: 12px; letter-spacing: .04em; color: var(--dim); pointer-events: none; text-align: center; }
+#load-prep b { display: block; height: 2px; margin-top: 6px; background: rgba(255,255,255,.1); }
+#load-prep b i { display: block; height: 100%; width: 0; background: var(--dim); transition: width .3s ease-out; }
+#ui #menu-screen:not(.open) ~ #load-prep { display: none !important; }
 #error-screen .card { max-width: 460px; border-left-color: var(--warn); }
 #error-screen p { margin: 10px 0 18px; line-height: 1.45; color: #d1d7dc; }
 
@@ -236,4 +265,4 @@ body.no-stats #hud, body.no-stats #sb-info .ping { display: none; }
 @media (max-width: 900px) { #ui .settings .bind-grid { grid-template-columns: 1fr; } #ui .settings .bindbar { flex-direction: column; align-items: stretch; } }
 @media (max-width: 760px) { #lobby-screen .teams { grid-template-columns: 1fr; } #lobby-screen .optgrid { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 640px) { #room-list .room { grid-template-columns: 1fr 1fr 64px; } #room-list .room.cols { display: none; } #ui .optgrid { grid-template-columns: 1fr; } }
-@media (prefers-reduced-motion: reduce) { #menu-screen .rings i, #loading-screen .bar i { animation: none; } }
+@media (prefers-reduced-motion: reduce) { #menu-screen .rings i, #loading-screen .bar i, #loading-screen .steps li .mark::before { animation: none; } }

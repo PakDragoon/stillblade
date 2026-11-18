@@ -1,6 +1,8 @@
 import * as pc from 'playcanvas';
 import type { MapData, MapLook } from '@shared/types';
 import type { Tier } from './graphics';
+import { loadAssetTracked } from './fetch-progress';
+import type { FileTrack, LoadReporter } from './loading';
 
 /**
  * Map look: baked light x tiling albedo, plus the sky.
@@ -245,7 +247,7 @@ interface TextureOptions {
  */
 const textureHolders = new Map<string, number>();
 
-function loadTexture(app: pc.Application, url: string, opt: TextureOptions, loaded: pc.Asset[]): Promise<pc.Texture> {
+function loadTexture(app: pc.Application, url: string, opt: TextureOptions, loaded: pc.Asset[], file: FileTrack | null): Promise<pc.Texture> {
     return new Promise((resolve, reject) => {
         const asset = new pc.Asset(url, 'texture', { url }, { srgb: true, mipmaps: opt.mipmaps });
         loaded.push(asset);
@@ -269,8 +271,7 @@ function loadTexture(app: pc.Application, url: string, opt: TextureOptions, load
             app.assets.remove(asset);
             reject(new Error(`Failed to load texture ${url}: ${String(err)}`));
         });
-        app.assets.add(asset);
-        app.assets.load(asset);
+        loadAssetTracked(app, asset, file);
     });
 }
 
@@ -369,16 +370,18 @@ export interface MapLookHandle {
  * and the textures) for a map change: call `dispose` when the map is unloaded.
  */
 export async function applyMapLook(app: pc.Application, mapRoot: pc.Entity, camera: pc.Entity,
-    mapData: MapData, baseUrl: string, tier: Tier): Promise<MapLookHandle> {
+    mapData: MapData, baseUrl: string, tier: Tier, loads?: LoadReporter): Promise<MapLookHandle> {
     const look: MapLook | undefined = mapData.look;
     if (!look) throw new Error('applyMapLook: map has no look data');
     const tuning = lookTuning(mapData.name);
     const loaded: pc.Asset[] = [];
     const albedoFiles = [...new Set(Object.values(look.materials).map(m => m.albedo))];
+    // Each file's track for the loading screen ('map' step), named by what it is.
+    const track = (f: string, label: string): FileTrack | null => loads?.file('map', baseUrl + f, label) ?? null;
     const [light, sky, ...albedos] = await Promise.all([
-        loadTexture(app, baseUrl + look.lightmap, { mipmaps: true, repeat: false, anisotropy: MAX_ANISOTROPY }, loaded),
-        loadTexture(app, baseUrl + look.sky.texture, { mipmaps: false, repeat: true, clampV: true, anisotropy: 1 }, loaded),
-        ...albedoFiles.map(f => loadTexture(app, baseUrl + f, { mipmaps: true, repeat: true, anisotropy: MAX_ANISOTROPY }, loaded))
+        loadTexture(app, baseUrl + look.lightmap, { mipmaps: true, repeat: false, anisotropy: MAX_ANISOTROPY }, loaded, track(look.lightmap, 'lighting')),
+        loadTexture(app, baseUrl + look.sky.texture, { mipmaps: false, repeat: true, clampV: true, anisotropy: 1 }, loaded, track(look.sky.texture, 'sky')),
+        ...albedoFiles.map(f => loadTexture(app, baseUrl + f, { mipmaps: true, repeat: true, anisotropy: MAX_ANISOTROPY }, loaded, track(f, 'textures')))
     ]);
     const albedoByFile = new Map(albedoFiles.map((f, i) => [f, albedos[i]]));
 

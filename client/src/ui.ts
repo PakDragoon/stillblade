@@ -13,6 +13,7 @@ import {
 import { optionControls, optionSummary, roomListView, segmented } from './community-ui';
 import { PageNav, canCallVoteKick, type PageId } from './menu-logic';
 import { button, h } from './dom';
+import { LoadingView, type LoadActions } from './loading-ui';
 import { reporter } from './report';
 import type { Settings, SettingsStore } from './settings';
 import { loadout } from './loadout';
@@ -87,6 +88,10 @@ export class Ui {
     private readonly hint = h('div', '', 'Click to play', this.root);
     private readonly toastEl = h('div', '', '', this.root);
     private readonly voteBanner = h('div', '', '', this.root);
+    /** The menu's quiet "Preparing game files" line while the models download in the background. */
+    private readonly prep = h('div', '', '', this.root);
+    private readonly prepFill: HTMLElement;
+    private readonly prepText: HTMLElement;
     private toastTimer = 0;
     /** Scripted runs: no automatic lobby panel, pause menu or click hint. */
     quiet = false;
@@ -138,6 +143,10 @@ export class Ui {
         this.strip.id = 'lobby-strip'; this.chatLog.id = 'chat-log'; this.chatForm.id = 'chat-form'; this.hint.id = 'click-hint';
         this.toastEl.id = 'toast';
         this.voteBanner.id = 'vote-banner';
+        this.prep.id = 'load-prep';
+        this.prepText = h('span', '', '', this.prep);
+        this.prepFill = h('i', '', '', h('b', '', '', this.prep));
+        this.prep.style.display = 'none';
         this.chatInput.maxLength = CHAT_MAX_CHARS * 2;
         this.chatInput.autocomplete = 'off';
         this.chatInput.spellcheck = false;
@@ -474,12 +483,44 @@ export class Ui {
     showLoading(text: string, sub = ''): void {
         this.hideScreens();
         this.loading.replaceChildren();
+        this.loading.classList.add('solid');
+        this.loading.classList.remove('over');
         const c = h('div', 'card', '', this.loading);
         h('h2', '', text, c);
         if (sub) h('p', 'dim', sub, c);
         const bar = h('div', 'bar', '', c);
         h('i', '', '', bar);
         this.loading.classList.add('open');
+    }
+
+    /**
+     * The loading screen with real progress (loading.ts, loading-ui.ts). `overlay` draws it over the game (a map
+     * change between matches, with the result card behind it) instead of on the menu's background.
+     * Call `update` on the returned view to redraw it; `hideProgress` takes it away.
+     */
+    showProgress(title: string, sub: string, actions: LoadActions, overlay = false): LoadingView {
+        if (!overlay) this.hideScreens();
+        this.loading.replaceChildren();
+        this.loading.classList.toggle('solid', !overlay);
+        this.loading.classList.toggle('over', overlay);
+        const view = new LoadingView(this.loading, title, sub, actions);
+        this.open(this.loading);
+        return view;
+    }
+
+    /** Takes the loading screen away (the pre-game screens otherwise go with `enterGame`). */
+    hideProgress(): void {
+        this.loading.classList.remove('open');
+        this.loading.replaceChildren();
+        this.refreshHint();
+    }
+
+    /** The menu's background download line: null hides it. */
+    setPreparing(text: string | null, fraction = 0): void {
+        if (text === null) { this.prep.style.display = 'none'; return; }
+        this.prep.style.display = '';
+        if (this.prepText.textContent !== text) this.prepText.textContent = text;
+        this.prepFill.style.width = `${(Math.min(1, Math.max(0, fraction)) * 100).toFixed(1)}%`;
     }
 
     showError(title: string, message: string, canRetry = true): void {
