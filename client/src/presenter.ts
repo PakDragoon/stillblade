@@ -123,11 +123,12 @@ interface VmLook {
 
 const VM_LOOKS: Record<WeaponId, VmLook> = {
     rifle: {
-        hip: [0.155, -0.155, -0.21, 2, 15, -1],
+        hip: [0.155, -0.168, -0.155, 2, 11, -1],
         aim: [-0.013, -0.226, -0.47, 0, 0, 0],
         draw: [0.03, -0.24, 0.06, -40, 12, 25],
-        // Lowered, pulled in toward the centre and canted so the magazine well faces the support hand.
-        reload: [-0.05, -0.085, 0.05, 12, 16, -28],
+        // Raised, the muzzle tipped up and to the right, rolled clockwise so the magazine well faces the support hand
+        // (only without the arms rig: its reload clip moves the gun, viewmodel.py RELOAD_MAG).
+        reload: [0.01, 0.05, -0.08, 40, -40, -30],
         reloadIn: 0.2, reloadOut: 0.2,
         // The magazine seats (1.4 s) and the bolt slams home (about 2.05 s).
         jolts: [[1400, 110, 1], [2050, 88, 0.7]],

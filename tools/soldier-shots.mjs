@@ -372,6 +372,18 @@ async function run() {
                 }
             }
         }
+        if (ONLY === 'ref') {
+            // Framed like the owner's reference stills (docs/review/viewmodel/reference): rifle with the red dot at the
+            // hip and aimed, the reload as the left hand comes in and as it carries the magazine away and back, and the
+            // ghost's knife. (The 0.4 s draw cannot be frozen here: the simulation runs on while the picture is taken.)
+            console.log('reference set');
+            await practice(cdp, { sight: 'reddot' });
+            await shoot(cdp, 'r1-hip');
+            await aimShot(cdp, 'r2-aimed', 12);
+            await reloadShots(cdp, 'r3-reload', 132, [[0.11, 'a-hand-in'], [0.2, 'b-magazine-out'], [0.52, 'c-magazine-back'], [0.885, 'd-bolt']]);
+            await practice(cdp, { side: 'ghosts' });
+            await shoot(cdp, 'r5-ghost-knife');
+        }
         if (!ONLY || ONLY === 'tp') {
             for (const [tier, map] of [['low', 'greybox'], ['high', 'greybox'], ['low', 'warehouse'], ['high', 'warehouse']]) {
                 await thirdPerson(cdp, report, { tier, map });

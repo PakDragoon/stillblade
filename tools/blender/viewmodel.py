@@ -81,7 +81,7 @@ TWIST_SHARE = {'LowerArm': 0.1, 'ForeTwist1': 0.5, 'ForeTwist2': 0.85}
 
 # Hip poses of the guns in PlayCanvas camera space (position, Euler degrees): presenter.ts VM_LOOKS[..].hip.
 HIP = {
-    'rifle': ((0.155, -0.155, -0.21), (2, 15, -1)),
+    'rifle': ((0.155, -0.168, -0.155), (2, 11, -1)),
     'pistol': ((0.085, -0.105, -0.18), (-2, 12, -1)),
 }
 
@@ -116,6 +116,13 @@ THUMB_FWD_L = (0, 5, 0)
 PISTOL_SUPPORT = (-0.034, 0.016, -0.03)
 PISTOL_SUPPORT_PITCH = -14
 THUMB_RELAX = (20, 10, 5)
+# Rifle reload, gun offsets from the hip (rk.offset_frame: x right, y forward, z up, metres; pitch muzzle up, yaw muzzle
+# left, roll top to the right, degrees, about the grip): while the magazine is changed, and while the bolt is pulled.
+# The left hand takes the old magazine away to RELOAD_BELT (camera space, Blender axes: down and to the left, out of
+# view) and brings the new one back up the same way.
+RELOAD_MAG = (0.01, 0.1, 0.06, 40, -42, 30)
+RELOAD_BOLT = (-0.05, 0.07, 0.04, 16, 0, -14)
+RELOAD_BELT = (-0.2, 0.4, -0.6)
 # Knife: the thumb wraps over the fingers round the handle.
 THUMB_KNIFE = (70, 45, 35)
 
@@ -538,14 +545,15 @@ def build_gun_clips(rig):
     rig.shoulder, rig.pole = hip_shoulder, hip_pole
 
     if rifle:
-        # Brought in toward the middle of the view, muzzle up, canted so the magazine well faces the left hand.
-        G1 = (-0.10, 0.02, 0.07, 12, 10, 32)
-        G1b = (-0.10, 0.02, 0.078, 15, 10, 32)             # magazine seated: a small jolt up
-        G2 = (-0.06, 0.0, 0.04, 6, 4, -14)             # rolled the other way: the charging handle faces the hand
-        G2c = (-0.065, -0.015, 0.04, 4, 6, -17)           # bolt pulled: the gun rocks back
+        # Raised, the muzzle tipped steeply up and to the right, rolled clockwise so the magazine well faces the left
+        # hand coming up from the bottom centre (the common shooter reload; RELOAD_* below).
+        G1 = RELOAD_MAG
+        G1b = tuple(a + b for a, b in zip(RELOAD_MAG, (0, 0, 0.008, 3, 0, 0)))     # magazine seated: a small jolt up
+        G2 = RELOAD_BOLT                                                           # the charging handle toward the hand
+        G2c = tuple(a + b for a, b in zip(RELOAD_BOLT, (-0.005, -0.015, 0, -2, 2, -3)))  # bolt pulled: rocks back
         gun_keys = [(0.0, (0, 0, 0, 0, 0, 0)), (0.25, G1), (1.36, G1), (1.42, G1b), (1.55, G1), (1.8, G2), (1.9, G2),
                     (1.97, G2c), (2.07, G2c), (2.1, G2), (2.2, (0, 0, 0, 0, 0, 0))]
-        belt = rig.cam(Matrix.Translation(Vector((-0.02, 0.4, -0.66))) @ Matrix.Rotation(math.radians(-30), 4, 'X'))
+        belt = rig.cam(Matrix.Translation(Vector(RELOAD_BELT)) @ Matrix.Rotation(math.radians(-30), 4, 'X'))
         bolt_keys = [(0.0, (0.0,)), (1.9, (0.0,)), (1.97, (-BOLT_TRAVEL,)), (2.07, (-BOLT_TRAVEL,)), (2.1, (0.0,))]
 
         def gunm(t):
@@ -559,8 +567,9 @@ def build_gun_clips(rig):
 
         down = lambda d: (lambda t: Matrix.Translation(-max_ * d))
         left_keys = [
-            (0.0, on_gun(support)), (0.2, on_gun(support)), (0.3, on_gun(mag_grip)),
-            (0.55, on_gun(mag_grip, down(0.24))), (0.75, belt), (1.0, belt),
+            # The left hand lets go of the handguard as the gun rises and comes up open under the magazine well.
+            (0.0, on_gun(support)), (0.06, on_gun(support)), (0.2, on_gun(mag_grip, down(0.07))), (0.3, on_gun(mag_grip)),
+            (0.55, on_gun(mag_grip, down(0.12))), (0.75, belt), (1.0, belt),
             (1.25, on_gun(mag_grip, down(0.09))), (1.4, on_gun(mag_grip)), (1.5, on_gun(mag_grip)),
             (1.8, on_gun(bolt_grip)), (1.9, on_gun(bolt_grip)),
             (1.97, lambda t: gunm(t) @ Matrix.Translation(Vector((0, bolt_off(t), 0))) @ bolt_grip),
@@ -584,9 +593,9 @@ def build_gun_clips(rig):
             sw = rk.keyed([(0.0, (0.0,)), (1.55, (0.0,)), (1.8, (1.0,)), (2.07, (1.0,)), (2.2, (0.0,))], t)[0]
             # Both shoulders follow the gun up while it is raised for the reload.
             rw = rk.keyed([(0.0, (0.0,)), (0.25, (1.0,)), (2.05, (1.0,)), (2.2, (0.0,))], t)[0]
-            shift = {'L': (0.08 * sw, 0.06 * sw + 0.05 * rw, 0.02 * sw + 0.07 * rw), 'R': (0.0, 0.05 * rw, 0.07 * rw)}
+            shift = {'L': (0.08 * sw, 0.06 * sw + 0.09 * rw, 0.02 * sw + 0.07 * rw), 'R': (0.0, 0.1 * rw, 0.07 * rw)}
             holding = 0.28 <= t < 1.45
-            lc = WRAP_CURL if holding else (PINCH_CURL if 1.75 <= t < 2.12 else (RELAX_CURL if 0.2 <= t < 0.28 else support_curl))
+            lc = WRAP_CURL if holding else (PINCH_CURL if 1.75 <= t < 2.12 else (RELAX_CURL if 0.06 <= t < 0.28 else support_curl))
             return rig.pose(gun, parts, {'R': gun @ grip_r, 'L': left}, {'R': TRIGGER_CURL, 'L': lc},
                             {'R': THUMB_GRIP, 'L': THUMB_GRIP}, shift)
 
@@ -891,7 +900,8 @@ def preview(rig, out_dir, shots):
 
 PREVIEW_DIR = ''
 PREVIEW_SHOTS = {
-    'rifle': [('rifle_idle', 0, 'rifle-idle'), ('rifle_reload', 0.6, 'rifle-reload-a'), ('rifle_reload', 1.1, 'rifle-reload-b'),
+    'rifle': [('rifle_idle', 0, 'rifle-idle'), ('rifle_reload', 0.25, 'rifle-reload-0-hand-in'),
+              ('rifle_reload', 0.5, 'rifle-reload-a'), ('rifle_reload', 1.15, 'rifle-reload-b'),
               ('rifle_reload', 1.95, 'rifle-reload-c')],
     'pistol': [('pistol_idle', 0, 'pistol-idle'), ('pistol_reload', 0.42, 'pistol-reload-a'), ('pistol_reload', 1.06, 'pistol-reload-c')],
     'knife': [('knife_idle', 0, 'knife-idle')] + [('knife_swing', t, f'knife-swing-{int(t * 100):02d}') for t in
