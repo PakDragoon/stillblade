@@ -91,6 +91,11 @@ export interface LocalView {
      * not reloading. Predicted, so it can jump back to 0 if the reload is cancelled (death, round reset).
      */
     reload: number;
+    /**
+     * The reload in progress is an empty reload (the magazine was empty: the rule's longer `reloadEmptyTicks`, and the
+     * first person plays the empty clip with the bolt pulled); false when not reloading or for a tactical reload.
+     */
+    reloadEmpty: boolean;
     /** Current spread cone half-angle in radians (where shots may land around the crosshair centre). */
     spread: number;
     /** The local view yaw in radians (0 faces -Z): damage direction markers turn with it. */

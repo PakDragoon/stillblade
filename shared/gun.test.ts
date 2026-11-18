@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { DRY_FIRE_TICKS, KNIFE_COOLDOWN_TICKS, KNIFE_WINDUP_TICKS, RUN_SPEED, WALK_SPEED } from './constants';
 import {
-    GUN_DRY, GUN_IDLE, GUN_RELOAD, aimFraction, cancelReloads, copyLoadout, createGunState, createLoadout, heldGun,
-    justSwitched, recoilPitch, recoilScale, recoilYaw, resetGun, resetLoadout, sameLoadout, shotDirection,
+    GUN_DRY, GUN_IDLE, GUN_RELOAD, aimFraction, cancelReloads, copyLoadout, createGunState, createLoadout, emptyReload, heldGun,
+    justSwitched, recoilPitch, reloadProgress, reloadTicksOf, recoilScale, recoilYaw, resetGun, resetLoadout, sameLoadout, shotDirection,
     shotDirectionFor, spreadAngle, spreadOffset, spreadSeed, stepGun, stepLoadout, type GunState, type LoadoutInput,
     type LoadoutState
 } from './gun';
@@ -55,7 +55,7 @@ describe('weapon table', () => {
     it('fits every counter of every weapon in the one byte the snapshot gives it', () => {
         expect(SLOT_COUNT).toBeLessThanOrEqual(15); // the command's slot field and the remote weapon byte
         for (const d of WEAPONS) {
-            for (const v of [d.magSize, d.reserve, d.reloadTicks, d.drawTicks, d.adsTicks, d.fireInterval, d.patternDeg.length, DRY_FIRE_TICKS]) {
+            for (const v of [d.magSize, d.reserve, d.reloadTicks, d.reloadEmptyTicks, d.drawTicks, d.adsTicks, d.fireInterval, d.patternDeg.length, DRY_FIRE_TICKS]) {
                 expect(Number.isInteger(v)).toBe(true);
                 expect(v).toBeGreaterThan(0);
                 expect(v).toBeLessThanOrEqual(255);
@@ -94,12 +94,12 @@ describe.each([
         expect(g.reserve).toBe(def.reserve);
     });
 
-    it('reloads automatically when firing on empty, blocking fire for exactly the reload time', () => {
+    it('reloads automatically when firing on empty, blocking fire for exactly the empty reload time', () => {
         const g = createGunState(def);
         g.mag = 0;
         expect(stepGun(g, def, true, false, true)).toBe(GUN_RELOAD);
-        expect(g.reload).toBe(def.reloadTicks);
-        const during = run(g, def, def.reloadTicks - 1, true);
+        expect(g.reload).toBe(def.reloadEmptyTicks);
+        const during = run(g, def, def.reloadEmptyTicks - 1, true);
         expect(during.every(r => r === GUN_IDLE)).toBe(true);
         expect(g.mag).toBe(0);
         expect(stepGun(g, def, true, false, true)).toBe(0); // reload completes and the shot goes
@@ -128,7 +128,7 @@ describe.each([
         g.mag = 0;
         g.reserve = 7;
         stepGun(g, def, true, false, true);
-        run(g, def, def.reloadTicks, false);
+        run(g, def, def.reloadEmptyTicks, false);
         expect(g).toMatchObject({ mag: 7, reserve: 0 });
         const results = run(g, def, 7 * def.fireInterval + 2 * DRY_FIRE_TICKS, true);
         expect(shotsIn(results)).toBe(7);
@@ -157,6 +157,73 @@ describe.each([
         expect(g.burst).toBe(shots - 2);
         run(g, def, 255, false);
         expect(g.burst).toBe(0);
+    });
+});
+
+describe('empty reload (package R)', () => {
+    it('makes the rifle take 2.7 s (162 commands) from an empty magazine and keeps 2.2 s for a tactical reload', () => {
+        expect(RIFLE.reloadEmptyTicks).toBe(162);
+        expect(RIFLE.reloadTicks).toBe(132);
+        // The pistol has no separate empty reload.
+        expect(PISTOL.reloadEmptyTicks).toBe(PISTOL.reloadTicks);
+        for (const d of WEAPONS) expect(d.reloadEmptyTicks).toBeGreaterThanOrEqual(d.reloadTicks);
+    });
+
+    for (const def of WEAPONS) {
+        it(`${def.id}: R on an empty magazine starts the empty reload, R on a partial one the tactical reload`, () => {
+            const empty = createGunState(def);
+            empty.mag = 0;
+            expect(reloadTicksOf(empty, def)).toBe(def.reloadEmptyTicks);
+            expect(stepGun(empty, def, false, true, true)).toBe(GUN_RELOAD);
+            expect(empty.reload).toBe(def.reloadEmptyTicks);
+            expect(emptyReload(empty)).toBe(true);
+
+            const partial = createGunState(def);
+            partial.mag = 1;
+            expect(reloadTicksOf(partial, def)).toBe(def.reloadTicks);
+            expect(stepGun(partial, def, false, true, true)).toBe(GUN_RELOAD);
+            expect(partial.reload).toBe(def.reloadTicks);
+            expect(emptyReload(partial)).toBe(false);
+        });
+    }
+
+    it('stays an empty reload from its first to its last command, its progress running 0 to 1 over its own length', () => {
+        const g = createGunState(RIFLE);
+        g.mag = 0;
+        stepGun(g, RIFLE, true, false, true);
+        expect(reloadProgress(g, RIFLE)).toBe(0);
+        const seen: number[] = [];
+        for (let i = 1; i < RIFLE.reloadEmptyTicks; i++) {
+            expect(stepGun(g, RIFLE, false, false, true)).toBe(GUN_IDLE);
+            expect(emptyReload(g)).toBe(true); // the magazine stays empty until the last command
+            seen.push(reloadProgress(g, RIFLE));
+        }
+        expect(seen[0]).toBeCloseTo(1 / RIFLE.reloadEmptyTicks, 9);
+        expect(seen[seen.length - 1]).toBeCloseTo(1 - 1 / RIFLE.reloadEmptyTicks, 9);
+        for (let i = 1; i < seen.length; i++) expect(seen[i]).toBeGreaterThan(seen[i - 1]);
+        stepGun(g, RIFLE, false, false, true); // completes
+        expect(g).toMatchObject({ mag: RIFLE.magSize, reload: 0 });
+        expect(emptyReload(g)).toBe(false);
+        expect(reloadProgress(g, RIFLE)).toBe(0);
+    });
+
+    it('counts only commands the loadout steps: frozen or busy commands still run it, a switch cancels it for nothing', () => {
+        const l = createLoadout();
+        l.guns[SLOT_RIFLE].mag = 0;
+        expect(stepLoadout(l, input({ fire: true }), true)).toBe(GUN_RELOAD);
+        // Timers run while unarmed (freeze, defusing): the reload completes exactly its length after it started.
+        runL(l, RIFLE.reloadEmptyTicks - 1, () => ({}), false);
+        expect(l.guns[SLOT_RIFLE]).toMatchObject({ mag: 0, reload: 1 });
+        runL(l, 1, () => ({}), false);
+        expect(l.guns[SLOT_RIFLE]).toMatchObject({ mag: RIFLE.magSize, reload: 0 });
+
+        const c = createLoadout();
+        c.guns[SLOT_RIFLE].mag = 0;
+        stepLoadout(c, input({ reload: true }), true);
+        runL(c, RIFLE.reloadTicks); // past a tactical reload's length: still going
+        expect(c.guns[SLOT_RIFLE]).toMatchObject({ mag: 0, reload: RIFLE.reloadEmptyTicks - RIFLE.reloadTicks });
+        stepLoadout(c, input({ slot: 2 }), true);
+        expect(c.guns[SLOT_RIFLE]).toMatchObject({ mag: 0, reserve: RIFLE.reserve, reload: 0 });
     });
 });
 

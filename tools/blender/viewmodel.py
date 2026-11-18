@@ -55,6 +55,8 @@ from mathutils import Matrix, Vector
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import fpanims  # noqa: E402
+import packhands  # noqa: E402
 import rigkit as rk  # noqa: E402
 import soldier  # noqa: E402
 
@@ -544,9 +546,14 @@ def build_gun_clips(rig):
         clip(rig, f'{rig.name}_aim_{sight}', 1 / FPS, idle)
     rig.shoulder, rig.pole = hip_shoulder, hip_pole
 
-    if rifle:
-        # Raised, the muzzle tipped steeply up and to the right, rolled clockwise so the magazine well faces the left
-        # hand coming up from the bottom centre (the common shooter reload; RELOAD_* below).
+    if rifle and pack_available():
+        # Package R: the downloaded pack's reload, empty reload, draw, fire and holster on our AK.
+        build_pack_clips(rig, {'grip_r': grip_r, 'support': support, 'mag_grip': mag_grip, 'bolt_grip': bolt_grip,
+                               'rest_parts': rest_parts, 'sight_bones': sight_bones, 'mag_rest': mag_rest,
+                               'thumb_r': thumb_r, 'support_curl': support_curl, 'support_thumb': support_thumb})
+    elif rifle:
+        # Without the pack (package O's generated reload): raised, the muzzle tipped steeply up and to the right,
+        # rolled clockwise so the magazine well faces the left hand coming up from the bottom centre.
         G1 = RELOAD_MAG
         G1b = tuple(a + b for a, b in zip(RELOAD_MAG, (0, 0, 0.008, 3, 0, 0)))     # magazine seated: a small jolt up
         G2 = RELOAD_BOLT                                                           # the charging handle toward the hand
@@ -659,6 +666,285 @@ def build_gun_clips(rig):
         clip(rig, f'{rig.name}_reload', 1.4, reload)
 
 
+
+# ---------------------------------------------------------------------------------------------
+# Package R: the downloaded M4 animation pack's motion on our AK (fpanims.py reads the pack)
+
+# Our clip: (pack clip, first and last pack second used, our duration = the rule's). The pack's Reload ends its motion
+# by about 2.95 s and Reload_Empty by 3.45 s (both then hold still); they are played 1.34x and 1.28x faster to fit the
+# rule. The draw's motion is over by 0.7 s; it is played in the rule's 0.4 s (1.75x). Fire: the kick and bolt cycle
+# (0.3 s) in one fire interval (0.1 s). Holster keeps the pack's speed (the rule has no holster time).
+PACK_CLIPS = {
+    'rifle_reload': ('Reload', 0.0, 2.95, 132 / 60),
+    'rifle_reload_empty': ('Reload_Empty', 0.0, 3.45, 162 / 60),
+    'rifle_draw': ('Draw', 0.0, 0.70, 24 / 60),
+    'rifle_fire': ('Fire', 0.0, 0.30, 6 / 60),
+    'rifle_holster': ('Holster', 0.0, 0.567, 0.567),
+}
+# The left hand's anchors over each pack clip (pack seconds): weight keys of the magazine anchor (the hand holds the
+# magazine; it was on the handguard before and is again after) and, in the empty reload, of the charging handle.
+PACK_MAG_KEYS = {
+    'Reload': [(0.0, (0.0,)), (0.30, (0.0,)), (0.62, (1.0,)), (2.22, (1.0,)), (2.62, (0.0,))],
+    'Reload_Empty': [(0.0, (0.0,)), (0.30, (0.0,)), (0.62, (1.0,)), (2.20, (1.0,)), (2.42, (0.0,))],
+}
+# The pack's hand grips its magazine at this second (the reference for the hand's motion relative to the magazine).
+PACK_MAG_GRAB = {'Reload': 0.75, 'Reload_Empty': 0.75}
+# Empty reload: the M4 slaps its bolt catch (left side) at about 2.6 s. The AK has no bolt catch: its charging handle
+# is on the right, so the left hand is re-keyed to reach under the gun, take the handle, pull it back and let it go.
+PACK_BOLT_KEYS = [(0.0, (0.0,)), (2.20, (0.0,)), (2.42, (1.0,)), (2.66, (1.0,)), (3.05, (0.0,))]
+PACK_BOLT_PULL = [(0.0, (0.0,)), (2.48, (0.0,)), (2.60, (1.0,)), (2.64, (1.0,)), (2.67, (0.0,))]
+PACK_BOLT_RELEASE = 2.64
+# While the handle is worked the left hand racks it overhand: the palm flat on top of the receiver, the fingers over its
+# right edge hooking the handle, the thumb toward the stock (PACK_BOLT_GRIP: the grip point's offset from the handle
+# mark, gun frame). The AK keeps the
+# pack's turn and only tips its muzzle down and rolls its top a little to the left, so the eye looks down onto the
+# receiver and the hand on it, and comes a little toward the centre (x, y, z metres, then pitch, yaw, roll degrees,
+# about the grip; weighted by PACK_BOLT_KEYS). Turning the rifle far enough to show its right side from this close
+# made it point straight at the eye.
+PACK_BOLT_GUN = (-0.03, 0.03, 0.03, -8, 0, -25)
+PACK_BOLT_GRIP = (-0.042, -0.004, 0.004)
+# Our gun sits closer to the eye and lower than the pack's, so its magazine well would be changed below the bottom
+# edge: while the hand works the magazine the gun also rises and comes in a little (camera space metres: right,
+# forward, up; weighted by PACK_MAG_KEYS), as in the owner's reference reload (gun raised, muzzle up).
+PACK_RELOAD_LIFT = (-0.025, 0.02, 0.055)
+# The AK's magazine rocks out and in about the front of its well (the M4's drops straight): degrees at full rock,
+# reached once the magazine has travelled this far along its axis (m).
+MAG_ROCK = 18
+MAG_ROCK_DIST = 0.035
+# Shoulders follow their hand by this share of its travel from the idle hold (camera space), so the elbows stay
+# natural while the hands go down to the belt and back.
+PACK_FOLLOW = 0.35
+# Fraction of a clip at its end blended back onto the exact idle hold (the pack's ends are a few mm off).
+PACK_END_FADE = 0.08
+# Pack events (pack seconds) for the sound cues: magazine out of the well, new one seated.
+PACK_MAG_OUT = 0.95
+PACK_MAG_IN = 2.08
+
+
+def pack_available():
+    return os.path.exists(fpanims.ZIP) and os.environ.get('SB_FP_PACK', '1') != '0'
+
+
+def _flex(pack, side, clip, t):
+    """Per finger (and the thumb): the bend angle (degrees) at each of its three joints, from the pack's skeleton."""
+    out = {}
+    wrist = pack.world(pack.node(side, 'Hand'), clip, t).translation
+    for f in FINGERS + ('Thumb',):
+        pts = [wrist] + [pack.world(pack.node(side, f'Hand{f}{k}'), clip, t).translation for k in (1, 2, 3, 4)]
+        a = []
+        for k in range(1, 4):
+            d0 = (pts[k] - pts[k - 1]).normalized()
+            d1 = (pts[k + 1] - pts[k]).normalized()
+            a.append(math.degrees(d0.angle(d1)))
+        out[f] = a
+    return out
+
+
+class PackRetarget:
+    """The pack's motion, measured relative to its rifle and hands, put on our rig."""
+
+    def __init__(self, rig, ctx):
+        self.rig = rig
+        self.ctx = ctx
+        p = self.p = fpanims.Pack()
+        mk = rig.marks
+        # The pack's grip point (between its right wrist and middle knuckle): its rifle turns about it, as ours does
+        # about our grip (the rig's origin).
+        g0 = p.gun('Reload', 0.0)
+        rw = p.in_gun(p.node('R', 'Hand'), 'Reload', 0.0).translation
+        rm = p.in_gun(p.node('R', 'HandMiddle1'), 'Reload', 0.0).translation
+        self.grip_p = Matrix.Translation((rw + rm) / 2)
+        self.ref = g0 @ self.grip_p
+        # The pack's magazine: its axis (bottom to top, gun frame) and the top of its well.
+        to_gun = g0.inverted() @ p.cam_matrix('Reload', 0.0).inverted()
+        mesh = next(n for n in p.index if n.startswith('Mag1_M4'))
+        pts = [to_gun @ v for v in p.mesh_points(mesh, 'Reload', 0.0)]
+        ax, lo, hi = axis_of(pts)
+        self.mag_axis_p = ax
+        self.well_p = hi
+        self.mag0_p = self.mag_p('Reload', 0.0)
+        # Ours: the AK magazine's axis, the top of its well and the front of the well (the rock's pivot).
+        self.mag_axis_o = mk['mag_axis']
+        self.well_o = mk['mag_centre'] + (mk['mag_centre'] - mk['mag_bottom'])
+        self.front_o = self.well_o + Vector((0.0, 0.03, 0.0))
+        log('pack: grip', tuple(round(x, 3) for x in self.grip_p.translation), 'magazine axis',
+            tuple(round(x, 3) for x in ax), 'well', tuple(round(x, 3) for x in hi), '; ours: well',
+            tuple(round(x, 3) for x in self.well_o), 'axis', tuple(round(x, 3) for x in self.mag_axis_o))
+        self.flex0 = {sd: _flex(p, sd, 'Reload', 0.0) for sd in 'RL'}
+        self.grab_flex = {c: _flex(p, 'L', c, t) for c, t in PACK_MAG_GRAB.items()}
+        self.hand0 = self.hand_p('Reload', 0.0)
+        self.idle_wrist = {}
+
+    # --- the pack, in its rifle's frame
+    def gun_delta(self, clip, t):
+        """The pack rifle's motion from its idle hold, about its grip: our gun's frame in rig space."""
+        return self.ref.inverted() @ self.p.gun(clip, t) @ self.grip_p
+
+    def mag_p(self, clip, t):
+        return self.p.in_gun(fpanims.MAG_OLD, clip, t)
+
+    def mag_rel(self, clip, t):
+        """The pack magazine's motion from its seated place (gun frame)."""
+        return self.mag_p(clip, t) @ self.mag0_p.inverted()
+
+    def hand_p(self, clip, t):
+        """The pack's left hand (gun frame): (palm point, rotation)."""
+        p = self.p
+        w = p.in_gun(p.node('L', 'Hand'), clip, t)
+        m = p.in_gun(p.node('L', 'HandMiddle1'), clip, t)
+        return (w.translation + m.translation) / 2, w.to_quaternion()
+
+    # --- ours
+    def our_mag(self, clip, t):
+        """Our magazine's move (gun frame): the pack's well point displacement and turn, its travel along the M4's axis
+        put along the AK's, and the AK's rock about the front of its well."""
+        m = self.mag_rel(clip, t)
+        d = m @ self.well_p - self.well_p
+        s = d.dot(self.mag_axis_p)
+        d2 = d - self.mag_axis_p * s + self.mag_axis_o * s
+        r = m.to_3x3().to_4x4()
+        theta = math.radians(MAG_ROCK) * rk.smooth(max(0.0, -s) / MAG_ROCK_DIST)
+        rock = Matrix.Translation(self.front_o) @ Matrix.Rotation(theta, 4, 'X') @ Matrix.Translation(-self.front_o)
+        return Matrix.Translation(self.well_o + d2) @ r @ Matrix.Translation(-self.well_o) @ rock
+
+    @staticmethod
+    def follow(base, palm, rot, palm0, rot0):
+        """`base` (a grip frame) moved like the pack's hand moved from (palm0, rot0) to (palm, rot), about its own
+        grip point."""
+        c = base.translation
+        dr = (rot @ rot0.inverted()).to_matrix().to_4x4()
+        return Matrix.Translation(c + (palm - palm0)) @ dr @ Matrix.Translation(-c) @ base
+
+    def left(self, clip, t, mag, bolt_off):
+        """Our left hand's grip frame (gun frame) and its anchor weights (magazine, charging handle)."""
+        ctx = self.ctx
+        palm, rot = self.hand_p(clip, t)
+        palm0, rot0 = self.hand0
+        grip = self.follow(ctx['support'], palm, rot, palm0, rot0)
+        wm = rk.keyed(PACK_MAG_KEYS[clip], t)[0] if clip in PACK_MAG_KEYS else 0.0
+        wb = rk.keyed(PACK_BOLT_KEYS, t)[0] if clip == 'Reload_Empty' else 0.0
+        if wm > 0:
+            tg = PACK_MAG_GRAB[clip]
+            # The hand relative to the magazine as if the magazine were seated (only the hand's own motion is left).
+            m, mg = self.mag_rel(clip, t), self.mag_rel(clip, tg)
+            pm, rm = self.hand_p(clip, t)
+            pg, rg = self.hand_p(clip, tg)
+            pm = m.inverted() @ pm
+            pg = mg.inverted() @ pg
+            rm = m.to_quaternion().inverted() @ rm
+            rg = mg.to_quaternion().inverted() @ rg
+            on_mag = mag @ self.follow(ctx['mag_grip'], pm, rm, pg, rg)
+            grip = rk.lerp_frame(grip, on_mag, wm)
+        if wb > 0:
+            # Palm down (the left hand's palm is its frame's right axis), fingers toward the gun's right, thumb back.
+            over = rk.frame_from(Vector((0, 0, -1)), Vector((1, 0, 0)), Vector((0, -1, 0)),
+                                 self.rig.marks['handle'] + Vector(PACK_BOLT_GRIP))
+            on_bolt = Matrix.Translation(Vector((0, bolt_off, 0))) @ over
+            grip = rk.lerp_frame(grip, on_bolt, wb)
+        return grip, wm, wb
+
+    def curls(self, clip, t, wm, wb):
+        """Finger curls per side: our hold's table plus the pack's change in each joint's bend since its own hold."""
+        ctx = self.ctx
+        out, thumbs = {}, {}
+        for sd in 'RL':
+            fl = _flex(self.p, sd, clip, t)
+            if sd == 'R':
+                bases = [(1.0, TRIGGER_CURL, ctx['thumb_r'], self.flex0['R'])]
+            else:
+                wg = max(0.0, 1.0 - wm - wb)
+                bases = [(wg, ctx['support_curl'], ctx['support_thumb'], self.flex0['L'])]
+                if wm > 0:
+                    bases.append((wm, WRAP_CURL, THUMB_GRIP, self.grab_flex.get(clip, self.flex0['L'])))
+                if wb > 0:
+                    bases.append((wb, WRAP_CURL, THUMB_RELAX, fl))      # the re-keyed bolt grip: fingers hooked
+            tot = sum(b[0] for b in bases) or 1.0
+            c = {}
+            for f in FINGERS:
+                c[f] = tuple(max(0.0, min(110.0, sum(w * (base[f][k] + fl[f][k] - ref[f][k])
+                                                     for w, base, _, ref in bases) / tot)) for k in range(3))
+            th = tuple(sum(w * (thb[k] + (fl['Thumb'][k] - ref['Thumb'][k]) * (0.5 if k == 0 else 1.0))
+                           for w, _, thb, ref in bases) / tot for k in range(3))
+            out[sd], thumbs[sd] = c, th
+        return out, thumbs
+
+    def shifts(self, grips):
+        """Shoulder shifts (camera space): follow each hand part of the way, and lean in where it is out of reach."""
+        rig = self.rig
+        to_cam = rig.cam_to_rig.inverted()
+        out = {}
+        for sd, g in grips.items():
+            w = to_cam @ rig.wrist_target(sd, g).translation
+            sh = (w - self.idle_wrist[sd]) * PACK_FOLLOW
+            shoulder = to_cam @ rig.shoulder[sd] + sh
+            d = w - shoulder
+            reach = AIM_REACH * (rig.len_upper + rig.len_fore)
+            if d.length > reach:
+                sh = sh + d.normalized() * (d.length - reach)
+            out[sd] = tuple(sh)
+        return out
+
+
+def build_pack_clips(rig, ctx):
+    """The rifle's reload, empty reload, draw, fire and holster from the M4 pack (package R)."""
+    pr = PackRetarget(rig, ctx)
+    to_cam = rig.cam_to_rig.inverted()
+    pr.idle_wrist = {sd: to_cam @ rig.wrist_target(sd, g).translation for sd, g in
+                     (('R', ctx['grip_r']), ('L', ctx['support']))}
+    rest_parts, sight_bones = ctx['rest_parts'], ctx['sight_bones']
+    mag_rest = ctx['mag_rest']
+    for name, (clip_p, t0, t1, dur) in PACK_CLIPS.items():
+        rate = (t1 - t0) / dur
+        fade_end = name != 'rifle_holster'
+
+        def sample(tau, clip_p=clip_p, t0=t0, rate=rate, dur=dur, fade_end=fade_end):
+            t = t0 + tau * rate
+            gun = pr.gun_delta(clip_p, t)
+            if clip_p in PACK_MAG_KEYS:
+                wl = rk.keyed(PACK_MAG_KEYS[clip_p], t)[0]
+                lift = rig.cam_to_rig.to_3x3() @ Vector(PACK_RELOAD_LIFT) * wl
+                gun = Matrix.Translation(lift) @ gun
+            wb = rk.keyed(PACK_BOLT_KEYS, t)[0] if clip_p == 'Reload_Empty' else 0.0
+            if wb > 0:
+                gun = gun @ rk.lerp_frame(Matrix(), rk.offset_frame(*PACK_BOLT_GUN), wb)
+            if clip_p == 'Reload_Empty':
+                bolt_off = -BOLT_TRAVEL * rk.keyed(PACK_BOLT_PULL, t, ease=lambda x: x)[0]
+                hand_bolt = -BOLT_TRAVEL if t >= PACK_BOLT_RELEASE else bolt_off
+            elif clip_p == 'Fire':
+                # The pack's bolt carrier runs 6.4 cm back and forward; ours runs BOLT_TRAVEL.
+                b = (pr.p.in_gun(fpanims.BOLT, clip_p, t).translation.y -
+                     pr.p.in_gun(fpanims.BOLT, clip_p, 0.0).translation.y)
+                bolt_off = max(-BOLT_TRAVEL, b * BOLT_TRAVEL / 0.064)
+                hand_bolt = 0.0
+            else:
+                bolt_off = hand_bolt = 0.0
+            mag = pr.our_mag(clip_p, t) if clip_p in PACK_MAG_KEYS else Matrix()
+            left, wm, wbl = pr.left(clip_p, t, mag, hand_bolt)
+            curls, thumbs = pr.curls(clip_p, t, wm, wbl)
+            # The last few percent blend onto the exact idle hold (the clip hands over to the idle pose there).
+            f = rk.smooth((tau / dur - (1 - PACK_END_FADE)) / PACK_END_FADE) if fade_end else 0.0
+            if f > 0:
+                gun = rk.lerp_frame(gun, Matrix(), f)
+                mag = rk.lerp_frame(mag, Matrix(), f)
+                left = rk.lerp_frame(left, ctx['support'], f)
+                bolt_off *= 1 - f
+            parts = {'sup': gun @ rest_parts['sup'], 'mag': gun @ mag @ mag_rest,
+                     'bolt': gun @ Matrix.Translation(Vector((0, bolt_off, 0))) @ rest_parts['bolt']}
+            for b in sight_bones:
+                parts[b] = gun @ rest_parts[b]
+            grips = {'R': gun @ ctx['grip_r'], 'L': gun @ left}
+            return rig.pose(gun, parts, grips, curls, thumbs, pr.shifts(grips))
+
+        clip(rig, name, dur, sample)
+        log('pack clip', name, 'from', clip_p, t0, '-', t1, 's into', round(dur, 3), 's: speed', round(rate, 2), 'x')
+    # Sound cue times in our clips (client/src/audio-logic.ts RELOAD_CUES): the pack's events at its speed-up.
+    for name, events in (('rifle_reload', (('magazine out', PACK_MAG_OUT), ('magazine in', PACK_MAG_IN))),
+                         ('rifle_reload_empty', (('magazine out', PACK_MAG_OUT), ('magazine in', PACK_MAG_IN),
+                                                 ('bolt pulled', PACK_BOLT_PULL[1][0]), ('bolt released', PACK_BOLT_RELEASE)))):
+        c, t0, t1, d = PACK_CLIPS[name]
+        log('pack cues', name, ', '.join(f'{k} {round((t - t0) * d / (t1 - t0), 3)} s' for k, t in events))
+
+
 def knife_frame(pos, blade, spine):
     """Knife frame in camera space (Blender axes): origin at the handle's middle, Y along the blade, Z = spine."""
     y = Vector(blade).normalized()
@@ -712,6 +998,26 @@ def build_knife_clips(rig):
 
 # ---------------------------------------------------------------------------------------------
 
+# Ghost suit forearm with the pack's hands: its own hand is cut away (faces wholly on the hand bones) and the forearm
+# reduced to this many triangles.
+GHOST_FOREARM_TRIS = 1200
+
+
+def cut_hand(obj):
+    """Removes the faces of a soldier arm part whose every vertex is mostly weighted to the hand (wrist and fingers)."""
+    me = obj.data
+    gname = {g.index: g.name for g in obj.vertex_groups}
+    hand = [sum(g.weight for g in v.groups if gname[g.group] in soldier.HAND_BONES) > 0.5 for v in me.vertices]
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bm.verts.ensure_lookup_table()
+    dead = [f for f in bm.faces if all(hand[v.index] for v in f.verts)]
+    bmesh.ops.delete(bm, geom=dead, context='FACES')
+    bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context='VERTS')
+    bm.to_mesh(me)
+    bm.free()
+
+
 def skin(obj, arm, groups=None):
     if groups:
         for gname in groups:
@@ -734,14 +1040,32 @@ def build(rig_name):
     src, sparts = soldier.fp_sources()
     s = 1.0
     crops = soldier.fp_crops(sparts)
+    pack_hands = packhands.available()
+    arm_layout = rl.ARM_LAYOUTS_PACK[rig_name] if pack_hands else rl.ARM_LAYOUTS[rig_name]
+    if pack_hands:
+        crops.update({k: v for k, v in packhands.crops().items() if v})
     atlas = rl.Atlas(rig_name, [(k, r, {}) for k, r in layout] +
-                     [rl.Region(k, r, crop=crops.get(k)) for k, r in rl.ARM_LAYOUTS[rig_name].items()], swatch_rect)
+                     [rl.Region(k, r, crop=crops.get(k)) for k, r in arm_layout.items()], swatch_rect)
     palettes = ['defender', 'ghost'] if rig_name == 'knife' else ['defender']
-    arms = [(pal, soldier.fp_arms(pal, sparts[pal], atlas, rig_name)) for pal in palettes]
-    for pal, objs in sparts.items():
-        if pal not in palettes:
-            for o in objs:
-                bpy.data.objects.remove(o)
+    if pack_hands:
+        # The pack's gloved hands (packhands.py, built once the armature exists): defenders get a sleeve to the wrist
+        # instead of the soldier's bare forearm and rolled sleeve; ghosts keep their suit forearm, its hand cut away.
+        arms = []
+        for pal, objs in sparts.items():
+            if pal == 'ghost' and pal in palettes:
+                for o in objs:
+                    cut_hand(o)
+                    o['budget'] = GHOST_FOREARM_TRIS
+                arms.append((pal, soldier.fp_arms(pal, objs, atlas, rig_name)))
+            else:
+                for o in objs:
+                    bpy.data.objects.remove(o)
+    else:
+        arms = [(pal, soldier.fp_arms(pal, sparts[pal], atlas, rig_name)) for pal in palettes]
+        for pal, objs in sparts.items():
+            if pal not in palettes:
+                for o in objs:
+                    bpy.data.objects.remove(o)
     for pal, a in arms:
         log(pal, 'arms tris', tris(a.data), 'verts', len(a.data.vertices))
 
@@ -757,6 +1081,26 @@ def build(rig_name):
     # The armature must not share a name with a mesh node (the client picks the knife's variant by node name).
     arm = make_armature(f'rig_{rig_name}', src, s, extra)
     bpy.data.objects.remove(src)
+    if pack_hands:
+        # Our hand bones moved to the pack's hands, then its gloved hands (and the defender's sleeves) on them.
+        fits = packhands.fit_bones(arm)
+        done = dict(arms)
+        arms = []
+        for pal in palettes:
+            hands = packhands.hands_mesh(fits, pal)
+            rl.weld(hands, 1e-5)
+            atlas.remap(hands, material_region={'Glove_D': 'glove', 'Hand_D': 'handskin'})
+            parts_ = [hands]
+            if pal == 'defender':
+                sl = packhands.sleeve(arm, hands, pal, crops.get('sleeve'))
+                atlas.remap(sl, material_region={'sleeve_tube': 'sleeve'})
+                parts_.append(sl)
+            if pal in done:
+                parts_.append(done[pal])
+            a = join(parts_)
+            rl.single_material(a, rig_name)
+            arms.append((pal, a))
+            log(pal, 'pack hands: arms tris', tris(a.data), 'verts', len(a.data.vertices))
     for a in list(bpy.data.actions):
         bpy.data.actions.remove(a)
 
@@ -829,7 +1173,8 @@ def build(rig_name):
         log('WARNING a hand target is out of reach: the arm is straight and the hand floats')
 
     if PREVIEW_DIR:
-        preview(rig, PREVIEW_DIR, PREVIEW_SHOTS[rig_name])
+        shots = PREVIEW_SHOTS['rifle_pack'] if rig_name == 'rifle' and pack_available() else PREVIEW_SHOTS[rig_name]
+        preview(rig, PREVIEW_DIR, shots)
     rk.set_action(arm, next(a for a in bpy.data.actions if a.name.endswith('_idle')))
     scene.frame_set(0)
     for o in bpy.data.objects:
@@ -892,6 +1237,12 @@ def preview(rig, out_dir, shots):
         cam.matrix_world = Matrix.Translation(eye) @ (target - eye).to_track_quat('-Z', 'Y').to_matrix().to_4x4()
         scene.render.filepath = os.path.join(out_dir, f'{stem}-side.jpg')
         bpy.ops.render.render(write_still=True)
+        if 'handle' in stem:
+            # From the right as well: the AK's charging handle is on its right side.
+            eye = target + Vector((0.33, 0.12, 0.06))
+            cam.matrix_world = Matrix.Translation(eye) @ (target - eye).to_track_quat('-Z', 'Y').to_matrix().to_4x4()
+            scene.render.filepath = os.path.join(out_dir, f'{stem}-right.jpg')
+            bpy.ops.render.render(write_still=True)
         cam.matrix_world = Matrix.Rotation(math.radians(90), 4, 'X')
     bpy.data.objects.remove(cam)
     bpy.data.objects.remove(dot)
@@ -903,6 +1254,15 @@ PREVIEW_SHOTS = {
     'rifle': [('rifle_idle', 0, 'rifle-idle'), ('rifle_reload', 0.25, 'rifle-reload-0-hand-in'),
               ('rifle_reload', 0.5, 'rifle-reload-a'), ('rifle_reload', 1.15, 'rifle-reload-b'),
               ('rifle_reload', 1.95, 'rifle-reload-c')],
+    # Package R (the pack's clips; times in our clips): the tactical reload's four phases, the empty reload's magazine
+    # and AK charging handle, the draw and a shot.
+    'rifle_pack': [('rifle_idle', 0, 'rifle-idle'), ('rifle_reload', 0.46, 'rifle-reload-1-hand-on-mag'),
+                   ('rifle_reload', 0.80, 'rifle-reload-2-mag-out'), ('rifle_reload', 1.10, 'rifle-reload-3-mag-low'),
+                   ('rifle_reload', 1.45, 'rifle-reload-4-mag-in'), ('rifle_reload_empty', 0.82, 'rifle-empty-1-mag-out'),
+                   ('rifle_reload_empty', 1.90, 'rifle-empty-2-handle-reach'),
+                   ('rifle_reload_empty', 2.03, 'rifle-empty-3-handle-pulled'),
+                   ('rifle_draw', 0.12, 'rifle-draw-1'), ('rifle_draw', 0.25, 'rifle-draw-2'),
+                   ('rifle_fire', 1 / 30, 'rifle-fire')],
     'pistol': [('pistol_idle', 0, 'pistol-idle'), ('pistol_reload', 0.42, 'pistol-reload-a'), ('pistol_reload', 1.06, 'pistol-reload-c')],
     'knife': [('knife_idle', 0, 'knife-idle')] + [('knife_swing', t, f'knife-swing-{int(t * 100):02d}') for t in
                                                    (0.1, 0.2, 0.26, 0.3, 0.34, 0.42, 0.5)],
@@ -917,7 +1277,7 @@ def main():
             only = rest[rest.index('--rig') + 1]
         if '--preview' in rest:
             global PREVIEW_DIR
-            PREVIEW_DIR = rest[rest.index('--preview') + 1]
+            PREVIEW_DIR = os.path.abspath(rest[rest.index('--preview') + 1])
     for name in ('rifle', 'pistol', 'knife'):
         if only and name != only:
             continue

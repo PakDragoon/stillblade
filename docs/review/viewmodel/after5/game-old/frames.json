@@ -1,0 +1,232 @@
+[
+ {
+  "name": "01-hip",
+  "gun": {
+   "mag": 30,
+   "reserve": 90,
+   "reload": 0,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 255,
+   "shots": 0
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "02-reload-1-hand-on-mag",
+  "gun": {
+   "mag": 21,
+   "reserve": 90,
+   "reload": 97,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 156,
+   "shots": 9
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "02-reload-2-mag-out",
+  "gun": {
+   "mag": 21,
+   "reserve": 90,
+   "reload": 79,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 174,
+   "shots": 9
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "02-reload-3-mag-low",
+  "gun": {
+   "mag": 21,
+   "reserve": 90,
+   "reload": 61,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 192,
+   "shots": 9
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "02-reload-4-mag-in",
+  "gun": {
+   "mag": 21,
+   "reserve": 90,
+   "reload": 43,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 210,
+   "shots": 9
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "03-empty-1-mag-out",
+  "gun": {
+   "mag": 0,
+   "reserve": 90,
+   "reload": 109,
+   "cooldown": 0,
+   "burst": 3,
+   "sinceShot": 59,
+   "shots": 39
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "03-empty-2-mag-in",
+  "gun": {
+   "mag": 0,
+   "reserve": 90,
+   "reload": 67,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 101,
+   "shots": 39
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "03-empty-3-handle-reach",
+  "gun": {
+   "mag": 0,
+   "reserve": 90,
+   "reload": 43,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 125,
+   "shots": 39
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "03-empty-4-handle-pulled",
+  "gun": {
+   "mag": 0,
+   "reserve": 90,
+   "reload": 31,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 137,
+   "shots": 39
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "04-draw-1",
+  "gun": {
+   "mag": 30,
+   "reserve": 90,
+   "reload": 0,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 255,
+   "shots": 39
+  },
+  "draw": 13,
+  "slot": 0
+ },
+ {
+  "name": "04-draw-2",
+  "gun": {
+   "mag": 30,
+   "reserve": 90,
+   "reload": 0,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 255,
+   "shots": 39
+  },
+  "draw": 1,
+  "slot": 0
+ },
+ {
+  "name": "05-pistol-idle",
+  "gun": {
+   "mag": 12,
+   "reserve": 36,
+   "reload": 0,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 255,
+   "shots": 0
+  },
+  "draw": 0,
+  "slot": 1
+ },
+ {
+  "name": "05-pistol-reload-a-mag-out",
+  "gun": {
+   "mag": 11,
+   "reserve": 36,
+   "reload": 49,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 167,
+   "shots": 1
+  },
+  "draw": 0,
+  "slot": 1
+ },
+ {
+  "name": "05-pistol-reload-b-mag-in",
+  "gun": {
+   "mag": 11,
+   "reserve": 36,
+   "reload": 37,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 179,
+   "shots": 1
+  },
+  "draw": 0,
+  "slot": 1
+ },
+ {
+  "name": "05-pistol-reload-c-slide",
+  "gun": {
+   "mag": 11,
+   "reserve": 36,
+   "reload": 19,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 197,
+   "shots": 1
+  },
+  "draw": 0,
+  "slot": 1
+ },
+ {
+  "name": "06-knife-defender",
+  "gun": null,
+  "draw": 0,
+  "slot": 2
+ },
+ {
+  "name": "07-knife-ghost",
+  "gun": {
+   "mag": 30,
+   "reserve": 90,
+   "reload": 0,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 255,
+   "shots": 0
+  },
+  "draw": 0,
+  "slot": 0
+ }
+]

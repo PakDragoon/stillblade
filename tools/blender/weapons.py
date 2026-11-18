@@ -45,6 +45,7 @@ from mathutils import Matrix, Vector
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import packhands  # noqa: E402
 import realistic as rl  # noqa: E402
 import soldier  # noqa: E402
 
@@ -426,6 +427,12 @@ def main():
         log('WARNING soldier sources missing: the arm regions of the atlases stay flat grey')
 
     def arm_regions(name):
+        if packhands.available():
+            # The pack's gloved hands (packhands.py): its glove and fingertip skin, our sleeve and ghost suit.
+            lay = rl.ARM_LAYOUTS_PACK[name]
+            ours = {k: r for k, r in lay.items() if k in ('sleeve', 'ghostarms')}
+            mine = soldier.fp_regions(ours, arm_crops) if arm_crops else [rl.Region(k, r, constant=0.2) for k, r in ours.items()]
+            return mine + packhands.regions(lay)
         if not arm_crops:
             return [rl.Region(k, r, constant=0.2) for k, r in rl.ARM_LAYOUTS[name].items()]
         return soldier.fp_regions(rl.ARM_LAYOUTS[name], arm_crops)

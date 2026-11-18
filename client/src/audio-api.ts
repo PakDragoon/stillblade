@@ -56,14 +56,16 @@ export interface AudioEngine {
     /**
      * Defender `id` (the local player's own id when `isLocal`) started a reload at `pos` of the weapon in slot
      * `weapon`: one call covers the whole sequence, scheduled from the moment of the call and fitted to that
-     * weapon's reload time (rifle 2.2 s: magazine out 0.3 s, magazine in 1.4 s, bolt 1.9 to 2.07 s; pistol 1.4 s:
-     * magazine out 0.15 s, magazine in 0.7 s, slide 1.0 to 1.17 s; the first-person and third-person reload
-     * motions use the same times). A newer reload by the same player replaces the old sequence.
+     * weapon's reload time (rifle 2.2 s: magazine out 0.71 s, magazine in 1.55 s, no bolt; pistol 1.4 s: magazine out
+     * 0.15 s, magazine in 0.7 s, slide 1.0 to 1.17 s; the first-person reload clips use the same times, see
+     * RELOAD_CUES in audio-logic.ts). `empty` (package R): an empty reload, the weapon's `reloadEmptyTicks` long; the
+     * rifle's (2.7 s) takes the magazine out at 0.74 s, seats it at 1.63 s and pulls the charging handle at 1.94 s
+     * (home at 2.07 s); the pistol's is its normal reload. A newer reload by the same player replaces the old sequence.
      * The sequence is cut off (what is playing fades out within 20 ms, what has not started never plays) when the
      * reload ends early: for the local player when `cancelReload` is called; for another player when `frame` sees
      * them dead, or no longer `reloading` (RemoteView) once they had been. A reload that runs to its end is not cut.
      */
-    reload(pos: Vec3, isLocal: boolean, weapon: number, id: number): void;
+    reload(pos: Vec3, isLocal: boolean, weapon: number, id: number, empty?: boolean): void;
     /**
      * Player `id`'s reload stopped (switch, death, round reset). Safe to call when no reload sound is playing for
      * them, and when the reload just completed normally (then nothing is cut).

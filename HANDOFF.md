@@ -1,6 +1,7 @@
 # Stillblade — handoff
 
 Last rewritten 2026-11-15; **status updated 2026-11-18: everything is on `main`, pushed and deployed, protocol 16 (packages A to H, L, M parts 1 and 2, N, O with three follow-ups, P), 481 tests, typecheck clean. Landed 2026-11-18: the real pistol recordings (package N follow-up, audio only), package O (realistic soldiers, first-person arms, the downloaded AR Scope) and its follow-up after the owner's play test (first-person framing like other shooters, the field of view setting fixed); the second follow-up (upright guns, a solid iron-sight view, natural finger curls); package P (armor, protocol 16, the game server restarted on it). See "Package O", its follow-ups and "Package P" at the end. Built, not merged: package Q (visual and feel polish, client only, branch `claude/nostalgic-chebyshev-629c37`; see "Package Q" at the end). Open: the owner is to buy a first-person AK animation pack to replace the generated reload; armor balance is untested in real matches.** The live site rebuilds from `main` on every push; the game server runs on the owner's PC behind a Cloudflare Tunnel and must run a `main` with the same protocol as the site. **Nothing from waves 3 to 6 has been played with a mouse, seen on a real GPU or listened to**: animations and models were judged from Blender renders and headless Chrome (software GL) screenshots, sounds from measured levels. Older sections below describe each package as it was when built, so some numbers in them (test counts, protocol versions, "not on `main`") are historical; **"What to do next" near the end is the current summary, read it first.** The owner's live server holds port 8080 on his PC, so `npm run dev` needs that server stopped first.
+Last rewritten 2026-11-15; **status updated 2026-11-18: everything is on `main`, pushed and deployed, protocol 16 (packages A to H, L, M parts 1 and 2, N, O with three follow-ups, P), 481 tests, typecheck clean. Landed 2026-11-18: the real pistol recordings (package N follow-up, audio only), package O (realistic soldiers, first-person arms, the downloaded AR Scope) and its follow-up after the owner's play test (first-person framing like other shooters, the field of view setting fixed); the second follow-up (upright guns, a solid iron-sight view, natural finger curls); package P (armor, protocol 16, the game server restarted on it). See "Package O", its follow-ups and "Package P" at the end. Open: armor balance is untested in real matches. Package R (the owner's downloaded M4 animation pack on the AK, an empty reload, protocol 17) is built on `claude/happy-shannon-6d78bd`, not merged: see "Package R" at the end.** The live site rebuilds from `main` on every push; the game server runs on the owner's PC behind a Cloudflare Tunnel and must run a `main` with the same protocol as the site. **Nothing from waves 3 to 6 has been played with a mouse, seen on a real GPU or listened to**: animations and models were judged from Blender renders and headless Chrome (software GL) screenshots, sounds from measured levels. Older sections below describe each package as it was when built, so some numbers in them (test counts, protocol versions, "not on `main`") are historical; **"What to do next" near the end is the current summary, read it first.** The owner's live server holds port 8080 on his PC, so `npm run dev` needs that server stopped first.
 
 **If you are a new session:** this file tells you what exists, what has and has not been verified, the rules that must not be broken, and how the owner wants work done. `ROADMAP.md` tells you what to build next and what is already decided. Read both before changing anything. `DEPLOY.md` covers hosting. You need nothing else: no memory files or earlier conversations are assumed.
 
@@ -288,7 +289,7 @@ Warehouse routes from the ghost spawn: to A through the yard stair and service c
 
 ## Assets and licences
 
-Maps: CC0 textures and sky from Poly Haven, listed in `client/public/maps/CREDITS.md`. Models (`client/public/models/CREDITS.md`): since package O the characters and first-person arms are the Fab "Quantum Modular Character Free Sample" by Quantum Assets (Fab Standard License: its source files must never be shipped or committed, only the processed models), animated with clips retargeted from the Quaternius "SWAT" character (CC0); since package M part 2 the weapons are CC-BY models from Fab (AK-105 by SpatialNeglect, Makarov PM by TaigaForest, Tactical Knife and Red Dot Sight by Gerardo Justel, and since package O the AR Scope by Scape), whose authors must stay credited. Raw downloads live in the git-ignored `tools/blender/source-art/`; the Blender scripts fall back to the shipped files if it is missing, but rebuilding characters or weapons from source needs those files present.
+Maps: CC0 textures and sky from Poly Haven, listed in `client/public/maps/CREDITS.md`. Models (`client/public/models/CREDITS.md`): since package O the characters and first-person arms are the Fab "Quantum Modular Character Free Sample" by Quantum Assets (Fab Standard License: its source files must never be shipped or committed, only the processed models), animated with clips retargeted from the Quaternius "SWAT" character (CC0); since package M part 2 the weapons are CC-BY models from Fab (AK-105 by SpatialNeglect, Makarov PM by TaigaForest, Tactical Knife and Red Dot Sight by Gerardo Justel, and since package O the AR Scope by Scape), whose authors must stay credited. Since package R the first-person **gloved hands and their textures** come from the Fab "M4 - FPS Weapon Animations Pack FREE (v.1)" (Fab Standard License, seller name to be filled in by the owner in `CREDITS.md`): processed hands and resampled textures ship inside the game files, the downloaded zip never does. Raw downloads live in the git-ignored `tools/blender/source-art/`; the Blender scripts fall back to the shipped files if it is missing, but rebuilding characters or weapons from source needs those files present.
 
 ## Hosting
 
@@ -1129,3 +1130,169 @@ No draw call was added (still one per viewmodel rig; the probes, the shader hook
 **Decisions taken on my own judgment:** probes from collision boxes (visual-only geometry such as pipes is not seen by the rays); a readability floor in the dark; the camera flick per shot (mostly roll, so the crosshair's point does not move); the Low reflection a by-height picture with a fixed bright patch (a sphere map turns with the view); 4x MSAA on Low by default with `?aa=0` as the way out.
 
 **Not verified:** anything on a real GPU, in motion, or with a mouse. In particular: **the cost of 4x multisampling on Intel UHD 620** (the owner should compare `https://stillblade.orcavalley.com/?tier=low` against `?tier=low&aa=0` with "Show FPS and ping" on, in a firefight on Warehouse; if Low drops below 60 the adaptive resolution steps down, and making `aa` follow the tier at page load is a one-line change); whether the bob, inertia, landing and recoil feel right in motion (only two frozen frames were captured; the sizes are first guesses, all in the constants at the top of `vmfeel.ts` and `VM_LOOKS[..].recoil` in `presenter.ts`); the light easing as a player walks from the yard into the building; the Low tier's gun looks a lighter grey than High's in the yard (different reflection path and tone curve); probes on Test Map 1 (only Warehouse was captured); the knife rig's motion; the map swap rebuilding the lighting (code read, not run); WebGPU (not used by the game).
+## Package R (the M4 animation pack on the AK) in detail
+
+Built 2026-11-18 on `claude/happy-shannon-6d78bd` (from `main` at `321128f`), **protocol 17**; not reviewed, merged or
+pushed. Package Q (visual and feel polish) was built at the same time in another worktree and owns `presenter.ts`
+frame motion, lighting and materials. Pictures: `docs/review/viewmodel/after4/` (README there). **Nothing was seen on a
+real GPU, in motion, with a mouse or by ear.**
+
+**The pack.** "M4 - FPS Weapon Animations Pack FREE (v.1)" (Fab Standard License), downloaded by the owner as
+`tools/blender/source-art/realistic/fp-anims/m4_animations_gltf.zip` (git-ignored; credited in
+`client/public/models/CREDITS.md`, where the owner should add the seller's name, which is not in the download). Checked:
+one glTF scene with one 10 s timeline holding five consecutive clips: Reload 0.03-3.67 s, Reload_Empty 3.70-7.50,
+Fire 7.53-8.33, Holster 8.37-8.93, Draw 8.97-10.0. Its eye never moves, its right hand never moves on the gun; the
+tactical reload pulls the magazine and seats the same one; the empty reload starts with the M4's bolt locked back and
+the left palm slaps the bolt catch at about 2.6 s. **Only motion is used**: none of its meshes or textures ship.
+
+**Decisions taken on my own judgment.**
+- **Hands: ours kept.** The pack's hands are fingerless camo gloves on bare forearms with no sleeves. Our team looks
+  depend on the sleeves (defenders' orange rolled sleeves with coyote gloves, the ghost's dark suit), a tint on bare
+  skin would read as orange skin, and ours already match the third-person soldiers. So the pistol and knife are
+  untouched (the knife grip still closes; `game-after/05`, `06`).
+- **Hip and aim poses: ours kept.** The pack holds its M4 dead centre and close, mostly its rear sight in view; our
+  framing was matched to the owner's reference stills. (The pack's own framing was rendered only to scratch, not
+  committed, since the pack must not be redistributed.)
+- **How the motion is moved** (`tools/blender/fpanims.py` reads the glTF with the standard library and mathutils;
+  `viewmodel.py` `PackRetarget`): the gun's motion relative to the eye, as a change from the pack's idle hold about
+  its grip, applied to our gun at our hip pose; the magazine's motion relative to the gun, pivoted at the top of the
+  well, its travel along the M4's axis put along the AK's (raked) axis, plus an **AK rock** of 18 degrees about the
+  front of the well over the first 3.5 cm (`MAG_ROCK`); the left hand's motion relative to the handguard, then
+  relative to the magazine while it holds it (blended by `PACK_MAG_KEYS`), applied to our own grips; finger curls are
+  our grip tables plus the pack's change in each joint's bend; the shoulders follow the hands by 35 % and lean in when
+  out of reach. The last 8 % of each clip blends exactly onto the idle hold.
+- **Our gun sits closer and lower than the pack's**, so the magazine well would have been changed below the screen
+  edge: during the magazine change the gun also rises 5.5 cm and comes in 2.5 cm (`PACK_RELOAD_LIFT`), as in the
+  owner's reference reload.
+- **Empty reload, the AK's charging handle** (`PACK_BOLT_*`): the M4 bolt-catch slap (2.2-3.05 s in the pack) is
+  replaced by an **overhand rack**: the left hand goes over the top of the receiver, fingers over its right edge onto
+  the handle (the `rifle_handle` mark), pulls it back 7 cm and lets it go; the AK rolls its top 25 degrees left and
+  dips its muzzle so the eye looks down onto the hand. Rolling or turning the AK far enough to show its right side from
+  this close made it point straight at the eye (tried and dropped). Seen from the right in
+  `blender-after/rifle-empty-3-handle-pulled-right.jpg`; from the eye the forearm and hand cross over the receiver
+  (`game-after/03-empty-3`, `-4`). Our AK's bolt stays forward on an empty magazine (an AK has no hold-open), so it
+  only moves when the hand pulls it.
+
+**Timing (the clips fit the rules, never the other way round).**
+
+| Our clip | From the pack | Our length (rule) | Speed-up |
+|---|---|---|---|
+| `rifle_reload` | Reload 0-2.95 s (its motion ends there, then it holds) | 2.2 s (`reloadTicks` 132) | 1.34x |
+| `rifle_reload_empty` | Reload_Empty 0-3.45 s | 2.7 s (`reloadEmptyTicks` 162, new) | 1.28x |
+| `rifle_draw` | Draw 0-0.70 s | 0.4 s (`drawTicks` 24) | 1.75x |
+| `rifle_fire` | Fire 0-0.30 s (kick, bolt back and forward) | 0.1 s (`fireInterval` 6) | 3x |
+| `rifle_holster` | Holster, whole | 0.567 s (no rule) | 1x, **unused** |
+
+The tactical reload stays under the 1.4x line, so 2.2 s is kept and no change is recommended. **The draw is 1.75x**:
+fast but it reads as a quick raise; if the owner finds it rushed, 0.55 s (`drawTicks` 33) would make it 1.27x, a rule
+change for him to decide. The holster clip is in the file but not played: a switch only draws the new weapon (no
+holster time in the rule); playing it would need the rule to add one.
+
+**The empty reload (shared rule, protocol 17).** `WeaponDef.reloadEmptyTicks` (rifle `ticks(2700)` = 162; the pistol's
+equals its `reloadTicks`, it has no separate empty reload). `stepGun` starts a reload from an empty magazine with
+`reloadEmptyTicks` (both by R and by pulling the trigger on empty), otherwise `reloadTicks` (`reloadTicksOf`). The
+magazine does not change while a reload runs, so `emptyReload(g)` (reload running and magazine 0) tells the kind at any
+moment and the snapshot needs no new field; `reloadProgress(g, def)` is the 0..1 the client shows. Counted in processed
+commands like every timer (162 fits the byte). The only message change: the reload `sound` event carries `empty: true`
+for an empty reload (same recipients as before, no position added), so other players hear the bolt; hence protocol 17
+(16 before). The local player's `LocalView` has `reloadEmpty` (presenter interface changed first) and
+`AudioEngine.reload` takes an `empty` flag (audio interface first). **The game server must be restarted with the
+client when this lands.**
+
+**Sounds** (`audio-logic.ts RELOAD_CUES`, `audio.ts`): tactical: magazine out 0.71 s, in 1.55 s, **no bolt** (a round
+is chambered); empty: out 0.74 s, in 1.63 s, charging handle 1.94 s (the synthesised bolt slams home 0.125 s later,
+`RELOAD_BOLT_SLAM`). The times come from the pack's events at the speed-ups above (`viewmodel.py` logs them as
+"pack cues"). The recorded bolt sample (`reload_rifle_bolt`) now plays only in the empty reload. The sound test page
+has "Rifle empty reload (2.7 s)". Pistol unchanged.
+
+**`presenter.ts` changes (all of them; frame motion, lighting, environment and anti-aliasing untouched):**
+`VM_LOOKS` gains `joltsEmpty` and the rifle's `jolts` are re-timed (1.55 s; empty 1.63 and 2.07 s; used only without
+the arms rig); `SLOT_LOOKS` turns both into fractions (`joltsOf`, `joltsEmptyOf`); clip names `RELOAD_EMPTY_CLIP`,
+`DRAW_CLIP`, `FIRE_CLIP`; in `updateViewmodel` the rig's clip is chosen as reload (the empty clip when
+`local.reloadEmpty`) by progress, else the draw clip by draw progress (and then the procedural draw offset `d` is 0),
+else the fire clip by `vmFireT` (seconds since the last local shot, reset in `shot()`), else idle; `d0` moved up for
+that. A rig without the new clips (the pistol, an older file) behaves exactly as before.
+
+**Tests** (490 in all): `shared/gun.test.ts` (the empty reload's length per gun, R on empty versus partial, the kind and
+the progress through every command, unarmed commands still count, a switch cancels it for nothing, every counter in its
+byte), `server/src/empty-reload.test.ts` (162 commands from empty with `empty: true` heard by players in range and not
+the shooter, 132 for a tactical one without the flag, no shortening by jumping command numbers),
+`server/src/prediction.test.ts` now also requires empty reloads among its reloads (zero disagreements),
+`client/src/models.test.ts` (the new clips' lengths equal the rules'), `audio-logic.test.ts` (cue times inside each
+reload). Two timing-sensitive tests (`bots.test.ts`' 11 s fight, `namefilter.test.ts`' 200 ms scan) failed once each in
+a full run while the PC was busy and pass on their own; they were not touched.
+
+**Numbers.** `viewmodel_rifle.glb` 1.10 -> 1.29 MB (five new clips); one skinned mesh, one draw call as before; no
+textures changed; the Low download stays under `models.test.ts`' budget. No per-frame allocation added (clip lookups
+are `Map.get` on prebuilt names).
+
+**Rebuilding.** `viewmodel.py` uses the pack whenever the zip is present (`SB_FP_PACK=0` forces package O's generated
+rifle clips, kept as the fallback). It needs `source-art/realistic/build/weapons_fp.glb` and the soldier sources as
+before (this worktree used a junction to `realistic-soldiers-bcc8fb`'s `source-art`, into which the pack zip was
+copied). The rifle rebuild is deterministic (checked: an unchanged build reproduced `main`'s file byte for byte).
+Review pictures: `tools/fp-anim-shots.mjs`.
+
+**Not verified:** anything in motion on a real GPU, with a mouse or by ear (Blender Workbench stills and SwiftShader
+frozen frames only); whether the 1.34x and 1.75x speed-ups feel rushed; the fire clip under real automatic fire (it is
+replaced by the aimed-arms pose when aiming, so the bolt does not cycle visibly while aimed); the hand passing through
+the red dot or 2x scope during the overhand rack (not seen in the pictures, not checked frame by frame); the
+magazine's rock against the AK's well frame by frame; third person: a remote player's empty reload still plays the
+2.2 s third-person clip and then holds until the 2.7 s reload ends; the in-game draw frames landed late (see the README
+there); the seller's name for the credits.
+
+### Package R, second commit: the pack's gloved hands (a trial, 2026-11-19)
+
+The owner asked to try the pack's gloved hands on all three rigs. **It is one commit on top of package R so it can be
+dropped** (`git revert` it, or rebuild with `SB_PACK_HANDS=0`: `weapons.py`, then `viewmodel.py`). No rule, message,
+client code or protocol change: art and Blender scripts only (`presenter.ts` and `weapons.ts` untouched). Pictures:
+`docs/review/viewmodel/after5/` (README there): old and new side by side for every moment in `compare-blender/` and
+`compare-game/`.
+
+**How** (`tools/blender/packhands.py`, called by `viewmodel.py` and `weapons.py`):
+- **Skeleton:** our rig keeps its arms; its finger and thumb bones are moved onto the pack's hand skeleton (its bind
+  pose), fitted rigidly to our wrist by the two hands' frames (wrist, knuckles, the line across the knuckles). Every
+  grip, curl and clip reads the bones, so the rifle (idle, aimed, both reloads, draw, fire), pistol (idle, reload) and
+  knife (idle, swing) grips refit by themselves; no grip constant was changed.
+- **Size:** the pack's hands are about 1.4 times our soldier's (12.7 cm wrist to knuckles against 9.0, a 10 cm cuff),
+  so they are drawn at 0.71 (`PACK_HAND_SCALE`): our guns, grips and third-person characters are sized for our hand.
+- **Mesh:** the pack's glove (2,412 triangles) and skin (only the fingertips and the wrist under the cuff are kept; its
+  bare forearm above the glove's cuff is cut away), skin weights renamed onto our bones (its hand to `Wrist`, finger
+  joints 1-3 to our 2-4, its forearm to the wrist-end twist bone). Still one skinned mesh and one draw call per rig.
+- **Sleeves:** defenders get a generated tube from just over the glove's cuff to past the elbow, skinned along the
+  forearm twist bones, textured with a plain patch of the Quantum shirt's orange fabric (the whole fabric crop streaked
+  along the tube; the rolled cuff mesh no longer fits a full sleeve and is dropped). Ghosts keep their suit forearm
+  (the Quantum body), its own hand cut away, reduced to 1,200 triangles.
+- **Team looks:** the glove's colour is recoloured coyote in the atlas (its light and dark kept); a ghost's glove is
+  tinted near-black by vertex colour and its bare fingertips darkened to 45 %. The pack's ORM blue channel reads fully
+  metallic although its materials set metalness 0: it is ignored.
+- **Atlases** (`realistic.ARM_LAYOUTS_PACK`): the arms' skin rectangle becomes `glove` (a quarter of the atlas height)
+  and `handskin` (the fingertip crop of the skin map); `sleeve` and `ghostarms` unchanged; 2048 for High, 1024 for Low as
+  before.
+
+**Numbers.** Arms: defender 4,678 triangles (was 5,000), ghost 4,213 (was 4,500). `viewmodel_*.glb` sizes within 1 KB
+of before (rifle 1,293,056, pistol 654,276, knife 583,816 bytes). Atlases (the six albedo and normal files per tier):
+
+| | Before | After | Change |
+|---|---|---|---|
+| Low (1024) | 801,794 bytes | 904,932 bytes | +103 KB |
+| High (2048) | 2,179,830 bytes | 2,482,014 bytes | +302 KB |
+
+`models.test.ts`' Low download budget still passes; 490 tests and typecheck pass.
+
+**What looks better (judged from SwiftShader stills only):** the coyote gloves read as real tactical gloves, with
+stitching, knuckle padding and a wrist strap, where our old hands were bare skin; the fingers wrap the AK grip, the
+Makarov and the knife convincingly; the ghost's near-black glove on the dark suit is a clean, readable silhouette; the
+overhand AK handle pull shows a gloved hand over the receiver.
+
+**What looks worse or is weaker:** the defender's sleeve is a plain smooth tube (no folds, a slightly darker
+burnt-orange than the third-person shirt) where the old rifle view showed the soldier's rolled sleeve; the glove's
+texture is softer than the guns at High (1024 source in a 512-pixel rectangle); the knife's thumb rests along the spine
+rather than wrapping over the fingers (the fist itself is closed round the handle, checked from the side in
+`compare-blender/knife-idle-side.jpg`); the bare fingertips are small and can look like skin-coloured blobs at a
+distance.
+
+**Not verified:** anything on a real GPU, in motion or with a mouse; the glove and sleeve lighting on High and in
+Warehouse; whether the pack's normal map is the right handedness (glTF requires OpenGL style and it was used as is;
+not checked by rendering both ways); fingertips poking through the guns frame by frame during the clips (none seen in
+the stills); the third-person characters, which still have the soldier's own hands (first person only changed); the
+seller's name for the credits.

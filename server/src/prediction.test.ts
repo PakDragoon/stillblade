@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TICK_DT, TICK_RATE } from '../../shared/constants';
-import { MELEE_SLASH, MELEE_SWING, aimFraction, copyLoadout, createLoadout, resetLoadout, sameLoadout, stepLoadout } from '../../shared/gun';
+import { MELEE_SLASH, MELEE_SWING, aimFraction, copyLoadout, createLoadout, emptyReload, resetLoadout, sameLoadout, stepLoadout } from '../../shared/gun';
 import {
     CARRY_DROPPED, CARRY_PICKED, copyCarry, createCarry, resetCarry, restingPoint, sameCarry, stepCarry
 } from '../../shared/bomb';
@@ -76,7 +76,7 @@ function playThrough(opts: {
     const pending: Pending[] = [];
     let alive = false, started = false, yaw = 0, seq = 0, ghostSeq = 0;
     const result = {
-        snapshots: 0, gunMismatches: 0, knifeMismatches: 0, posMismatches: 0, shots: [0, 0], switches: 0, reloads: 0, aimedShots: 0,
+        snapshots: 0, gunMismatches: 0, knifeMismatches: 0, posMismatches: 0, shots: [0, 0], switches: 0, reloads: 0, emptyReloads: 0, aimedShots: 0,
         swings: 0, slashes: 0, knifeSnapshots: 0,
         /** Snapshots of a living defender fully aimed with the rifle, per active sight; and lives started. */
         aimedBySight: [0, 0, 0], spawns: 0, spawnSights: [] as number[]
@@ -176,6 +176,8 @@ function playThrough(opts: {
             if (loadout.slot !== slot) result.switches++;
             if (shot >= 0) { result.shots[loadout.slot]++; if (loadout.aim > 0) result.aimedShots++; }
             if (shot === -2) result.reloads++;
+            // Package R: a reload started on an empty magazine is the longer empty reload, predicted the same way.
+            if (shot === -2 && emptyReload(loadout.guns[loadout.slot])) result.emptyReloads++;
             if (shot === MELEE_SWING) result.swings++;
             if (shot === MELEE_SLASH) result.slashes++;
         }
@@ -200,6 +202,8 @@ describe('client prediction of the loadout through the wire', () => {
         expect(r.shots[SLOT_PISTOL]).toBeGreaterThan(30);
         expect(r.switches).toBeGreaterThan(20);
         expect(r.reloads).toBeGreaterThan(5);
+        expect(r.emptyReloads).toBeGreaterThan(0);
+        expect(r.emptyReloads).toBeLessThan(r.reloads);
         expect(r.aimedShots).toBeGreaterThan(10);
         expect(r.swings).toBeGreaterThan(15); // the knife (slot 3) is predicted and replayed like the guns
         expect(r.slashes).toBeGreaterThan(10);

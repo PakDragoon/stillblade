@@ -57,7 +57,16 @@ ARM_LAYOUTS = {
     'pistol': {'arms': (0.0, 0.0, 0.4375, 0.25), 'sleeve': (0.4375, 0.0, 0.875, 0.25)},
     'knife': {'arms': (0.0, 0.25, 0.4375, 0.5), 'sleeve': (0.4375, 0.25, 0.875, 0.5),
               'ghostarms': (0.0, 0.0, 0.875, 0.25)},
-}          # High, Low
+}
+# With the pack's gloved hands (packhands.py): the arms' skin region becomes the glove (its maps, recoloured coyote) and
+# the bare fingertips' skin; the sleeve and the ghost's suit keep their rectangles.
+ARM_LAYOUTS_PACK = {
+    'rifle': {'glove': (0.0, 0.0, 0.25, 0.25), 'handskin': (0.25, 0.0, 0.375, 0.25), 'sleeve': (0.375, 0.0, 0.75, 0.25)},
+    'pistol': {'glove': (0.0, 0.0, 0.3125, 0.25), 'handskin': (0.3125, 0.0, 0.4375, 0.25),
+               'sleeve': (0.4375, 0.0, 0.875, 0.25)},
+    'knife': {'glove': (0.0, 0.25, 0.3125, 0.5), 'handskin': (0.3125, 0.25, 0.4375, 0.5),
+              'sleeve': (0.4375, 0.25, 0.875, 0.5), 'ghostarms': (0.0, 0.0, 0.875, 0.25)},
+}
 WEBP_QUALITY = {'albedo': 82, 'normal': 85}
 
 
