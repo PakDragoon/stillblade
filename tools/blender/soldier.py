@@ -565,11 +565,41 @@ def fp_regions(rects, crops):
     return out
 
 
+# Share of an arm part's triangles kept for the hands (they fill the bottom of the screen with the pistol and knife).
+FP_HAND_SHARE = 0.7
+
+
+def reduce_hands_first(obj, budget):
+    """Reduces the hands (faces mostly weighted to the wrist and finger bones) and the rest of `obj` separately, giving
+    the hands FP_HAND_SHARE of `budget`, then joins them again (the cut edges are open, so collapse keeps them and the
+    halves weld back together)."""
+    gname = {g.index: g.name for g in obj.vertex_groups}
+    hand = [sum(g.weight for g in v.groups if gname[g.group] in HAND_BONES) > 0.5 for v in obj.data.vertices]
+    if not any(hand) or all(hand):
+        rl.decimate(obj, budget, keep_normals=False)
+        return obj
+    other = rl.duplicate(obj, obj.name + '_rest')
+    for o, keep_hand in ((obj, True), (other, False)):
+        bm = bmesh.new()
+        bm.from_mesh(o.data)
+        dead = [f for f in bm.faces if (2 * sum(hand[v.index] for v in f.verts) > len(f.verts)) != keep_hand]
+        bmesh.ops.delete(bm, geom=dead, context='FACES')
+        bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context='VERTS')
+        bm.to_mesh(o.data)
+        bm.free()
+    rl.decimate(obj, int(budget * FP_HAND_SHARE), keep_normals=False)
+    rl.decimate(other, budget - int(budget * FP_HAND_SHARE), keep_normals=False)
+    name = obj.name
+    obj = rl.join([obj, other], name)
+    rl.weld(obj, 1e-5)
+    return obj
+
+
 def fp_arms(look, parts, atlas, material):
     """One arms object for `look`: parts reduced, UVs into `atlas`, vertex colours, `material`."""
     done = []
     for obj in parts:
-        rl.decimate(obj, obj['budget'], keep_normals=False)
+        reduce_hands_first(obj, obj['budget'])
         smooth_normals(obj)
         atlas.remap(obj, material_region={m.name: FP_REGION.get(m.name.split('.')[0], 'arms')
                                           for m in obj.data.materials if m})

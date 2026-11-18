@@ -128,7 +128,7 @@ describe('realistic weapons (package M part 2)', () => {
 
     it('ships both atlas sizes per gun and for the characters, and the Low tier download stays within 4.5 MB', () => {
         // Everything a Low player downloads for models: the weapons, the three rigs, the Low characters and the 1024
-        // atlases (package O added the characters' file and atlas: 3.55 MB before it, about 4.15 MB after).
+        // atlases (package O added the characters' file and atlas: 3.55 MB before it, about 4.27 MB after; MB = 10^6 bytes).
         let low = 0;
         for (const f of ['weapons.glb', 'viewmodel_rifle.glb', 'viewmodel_pistol.glb', 'viewmodel_knife.glb', 'character_low.glb']) {
             low += statSync(join(models, f)).size;
