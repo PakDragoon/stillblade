@@ -89,6 +89,12 @@ export interface AudioEngine {
     bomb(kind: 'drop' | 'pickup', pos: Vec3, isLocal: boolean): void;
     /** The local player was hurt (non-positional). */
     hurt(): void;
+    /**
+     * A hit on the local player took some of its armor (shared/armor.ts): a short hard tick layered over `hurt`
+     * (non-positional; the metal bullet-impact sample, or its synthesised stand-in). Only the victim hears it:
+     * the attacker is never told about armor.
+     */
+    armorHit(): void;
     /** The local player's attack landed: a short tick, distinct for a headshot and a kill (non-positional). */
     hitMarker(kind: 'body' | 'head' | 'kill'): void;
     /** A menu or HUD button was clicked (non-positional, quiet). */

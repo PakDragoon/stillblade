@@ -133,6 +133,7 @@ const GROUPS: Group[] = [
             { label: 'Hit marker: head', run: () => engine.hitMarker('head') },
             { label: 'Hit marker: kill', run: () => engine.hitMarker('kill') },
             { label: 'Hurt', run: () => engine.hurt() },
+            { label: 'Hurt with armor hit', run: () => { engine.hurt(); engine.armorHit(); } },
             { label: 'UI click', run: () => engine.uiClick() },
             { label: 'Round start', run: () => engine.cue('roundStart') },
             { label: 'Round won', run: () => engine.cue('win') },
