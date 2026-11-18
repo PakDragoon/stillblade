@@ -23,6 +23,14 @@ setting had no effect (the frame loop reset the camera to 74 degrees every frame
 The knife "swing" pictures freeze when the swing's cooldown passes a fixed count, which can land after the slash; the
 slash itself is easier to judge in the Blender previews (`viewmodel.py --preview <dir>`).
 
+## Third follow-up (framing matched to the owner's reference stills)
+
+`reference/` holds the owner's stills from another game (local only, git-ignored; framing reference, nothing copied).
+`before3/` is `main` at 96834ae, `after3/` this change: `tools/soldier-shots.mjs --only ref --fov <N>` (same method as
+above): `r1-hip`, `r2-aimed` (red dot), `r3-reload-{a-hand-in,b-magazine-out,c-magazine-back,d-bolt}`,
+`r5-ghost-knife`; after at FOV 60, 74, 90 and 110. `compare3/` (local only, git-ignored) puts reference, before and
+after side by side. Details in HANDOFF "Package O third follow-up".
+
 ## Second follow-up (roll, the thin aimed gun, knife fingers)
 
 `before2/` is `main` at d2d5098; `after2/` is this fix. Every first-person picture at four fields of view: `-fov60`,
