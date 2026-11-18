@@ -17,6 +17,7 @@ setting had no effect (the frame loop reset the camera to 74 degrees every frame
 | `20-pistol-hip-*`, `21-pistol-aimed-*`, `22-pistol-reload-*` | The Makarov, two hands, thumbs forward |
 | `30-knife-idle-*`, `31-knife-swing-*` | A defender's knife |
 | `32-ghost-knife-idle-*`, `33-ghost-knife-swing-*` | A ghost's knife (the dark suit arms and gloves) |
+| `10-rifle-reddot-hip-fov74` | The rifle hip view framed like the owner's reference screenshot (compare side by side; the reference is not in the repository) |
 | `report-fp.json` | Draw calls with the other players hidden (unchanged: one per rig plus the flash) |
 
 The knife "swing" pictures freeze when the swing's cooldown passes a fixed count, which can land after the slash; the

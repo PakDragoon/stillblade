@@ -81,8 +81,8 @@ TWIST_SHARE = {'LowerArm': 0.1, 'ForeTwist1': 0.5, 'ForeTwist2': 0.85}
 
 # Hip poses of the guns in PlayCanvas camera space (position, Euler degrees): presenter.ts VM_LOOKS[..].hip.
 HIP = {
-    'rifle': ((0.13, -0.16, -0.29), (0, 12, -4)),
-    'pistol': ((0.085, -0.11, -0.21), (-2, 12, -3)),
+    'rifle': ((0.155, -0.155, -0.21), (2, 15, -6)),
+    'pistol': ((0.085, -0.105, -0.18), (-2, 12, -3)),
 }
 
 # The arms, per rig and side, in camera space (Blender axes: X right, Y forward, Z up): the forearm's direction from
@@ -91,10 +91,10 @@ HIP = {
 # shooters frame their arms: each forearm comes in from a bottom corner as one straight line to the hand, the elbow
 # low and a little out, the upper arm out of view.
 ARMS = {
-    'rifle': {'R': {'fore': (-0.30, 0.85, 0.42), 'upper': (0.35, -0.55, -0.76)},
-              'L': {'fore': (0.55, 0.55, 0.63), 'upper': (-0.70, -0.70, 0.10)}},
-    'pistol': {'R': {'fore': (-0.30, 0.82, 0.50), 'upper': (0.35, -0.55, -0.76)},
-               'L': {'fore': (0.45, 0.78, 0.45), 'upper': (-0.40, -0.50, -0.77)}},
+    'rifle': {'R': {'fore': (-0.15, 0.45, 0.88), 'upper': (0.30, -0.85, -0.40)},
+              'L': {'fore': (0.08, 0.30, 0.95), 'upper': (-0.35, -0.85, -0.40)}},
+    'pistol': {'R': {'fore': (-0.12, 0.50, 0.86), 'upper': (0.30, -0.85, -0.40)},
+               'L': {'fore': (0.22, 0.50, 0.84), 'upper': (-0.35, -0.85, -0.40)}},
     'knife': {'R': {'fore': (-0.30, 0.55, 0.78), 'upper': (0.45, -0.85, -0.25)},
               'L': {'fore': (0.30, 0.60, 0.74), 'upper': (-0.60, -0.70, -0.20)}},
 }
@@ -431,7 +431,7 @@ HIDDEN = 0.001
 # gun's left (the side the forearm comes from); the fingers curl over the far side, the thumb lies along the near
 # side. SUPPORT_ALONG: how far the hand turns from straight across the handguard toward the forearm's line (0..1),
 # so the wrist is not bent sideways. SUPPORT_INSET: the grip point inside the handguard's surface (m).
-SUPPORT_TILT = 40
+SUPPORT_TILT = 20
 SUPPORT_ALONG = 0.5
 SUPPORT_INSET = 0.02
 # Right hand on the pistol grip: turned about the grip's axis (degrees, positive: knuckles toward the gun's left) so
@@ -530,10 +530,10 @@ def build_gun_clips(rig):
 
     if rifle:
         # Brought in toward the middle of the view, muzzle up, canted so the magazine well faces the left hand.
-        G1 = (-0.09, -0.03, -0.02, -2, 8, 32)
-        G1b = (-0.09, -0.03, -0.012, 1, 8, 32)             # magazine seated: a small jolt up
-        G2 = (-0.06, -0.02, -0.02, -2, 4, -14)             # rolled the other way: the charging handle faces the hand
-        G2c = (-0.065, -0.035, -0.02, -4, 6, -17)           # bolt pulled: the gun rocks back
+        G1 = (-0.10, 0.02, 0.07, 12, 10, 32)
+        G1b = (-0.10, 0.02, 0.078, 15, 10, 32)             # magazine seated: a small jolt up
+        G2 = (-0.06, 0.0, 0.04, 6, 4, -14)             # rolled the other way: the charging handle faces the hand
+        G2c = (-0.065, -0.015, 0.04, 4, 6, -17)           # bolt pulled: the gun rocks back
         gun_keys = [(0.0, (0, 0, 0, 0, 0, 0)), (0.25, G1), (1.36, G1), (1.42, G1b), (1.55, G1), (1.8, G2), (1.9, G2),
                     (1.97, G2c), (2.07, G2c), (2.1, G2), (2.2, (0, 0, 0, 0, 0, 0))]
         belt = rig.cam(Matrix.Translation(Vector((-0.02, 0.4, -0.66))) @ Matrix.Rotation(math.radians(-30), 4, 'X'))
@@ -573,7 +573,9 @@ def build_gun_clips(rig):
                 parts['mag'] = left @ hand_to_mag
             # The left shoulder reaches forward and across for the charging handle.
             sw = rk.keyed([(0.0, (0.0,)), (1.55, (0.0,)), (1.8, (1.0,)), (2.07, (1.0,)), (2.2, (0.0,))], t)[0]
-            shift = {'L': (0.08 * sw, 0.06 * sw, 0.02 * sw)}
+            # Both shoulders follow the gun up while it is raised for the reload.
+            rw = rk.keyed([(0.0, (0.0,)), (0.25, (1.0,)), (2.05, (1.0,)), (2.2, (0.0,))], t)[0]
+            shift = {'L': (0.08 * sw, 0.06 * sw + 0.05 * rw, 0.02 * sw + 0.07 * rw), 'R': (0.0, 0.05 * rw, 0.07 * rw)}
             holding = 0.28 <= t < 1.45
             lc = WRAP_CURL if holding else (PINCH_CURL if 1.75 <= t < 2.12 else (RELAX_CURL if 0.2 <= t < 0.28 else support_curl))
             return rig.pose(gun, parts, {'R': gun @ grip_r, 'L': left}, {'R': TRIGGER_CURL, 'L': lc},
@@ -662,7 +664,7 @@ KNIFE_DIAGONAL = float(os.environ.get('SB_KNIFE_DIAGONAL', '45'))
 
 
 def build_knife_clips(rig):
-    REST = knife_frame((0.13, 0.30, -0.15), (-0.2, 0.92, 0.33), (0.05, -0.35, 0.94))
+    REST = knife_frame((0.12, 0.26, -0.14), (-0.2, 0.92, 0.33), (0.05, -0.35, 0.94))
     BACK = knife_frame((0.23, 0.32, -0.08), (-0.25, -0.1, 1.0), (0.4, -0.9, 0.0))
     SLASH = knife_frame((-0.04, 0.32, -0.23), (-1.0, 0.45, -0.15), (-0.1, 0.2, 1.0))
     guard = rig.cam(Matrix.Translation(Vector((-0.24, 0.28, -0.46))) @ Matrix.Rotation(math.radians(-60), 4, 'X'))
@@ -682,7 +684,7 @@ def build_knife_clips(rig):
 
     def pose_at(k, t=0.0):
         # The shoulder reaches forward and across into the slash.
-        sw = rk.keyed([(0.0, (0.0,)), (0.2, (0.0,)), (0.32, (1.0,)), (0.52, (0.0,))], t)[0]
+        sw = rk.keyed([(0.0, (0.0,)), (0.2, (0.6,)), (0.32, (1.0,)), (0.52, (0.0,))], t)[0]
         return rig.pose(k, {}, {'R': knife_grip(k), 'L': guard}, {'R': GRIP_CURL, 'L': RELAX_CURL},
                         {'R': THUMB_GRIP, 'L': THUMB_RELAX}, {'R': (-0.08 * sw, 0.12 * sw, 0.04 * sw)})
 

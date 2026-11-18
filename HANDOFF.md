@@ -897,14 +897,20 @@ default and the widest field of view: `docs/review/viewmodel/` (software GL stil
   corner as one straight line to the hand. Two forearm twist bones per arm (`ForeTwist1/2`, from the soldier's
   `lowerarm_twist_02/01`, first person only, `soldier.FP_TWIST`) take 50% and 85% of the hand's roll, the forearm 10%
   (`TWIST_SHARE`). The build log prints each clip's largest wrist bend and roll.
-- **Grips:** rifle support hand cradling the handguard from below (`support_frame`: palm up leaning 40 degrees toward
+- **Grips:** rifle support hand cradling the handguard from below (`support_frame`: palm up leaning 20 degrees toward
   the left, fingers over the far side, thumb along the near side, turned halfway toward the forearm's line); index
   finger on the trigger; pistol thumbs forward with the support hand cupping from below (`PISTOL_SUPPORT`); the knife's
   handle lies diagonally in the palm (`KNIFE_DIAGONAL` 45 degrees), blade forward and slightly up, and the shoulder
   reaches into the slash. Hands get 80% of the arms' triangles (the sleeves now barely show); the budget is unchanged
   (5,000 defender, 4,500 ghost).
-- **Framing:** rifle hip 0.29 m in front of the eye (was 0.40), turned 12 degrees in; pistol 0.21 m (was 0.33), turned
-  12 degrees in, 2 degrees down; knife closer and further left. `viewmodel.py HIP` and `presenter.ts VM_LOOKS.hip` match.
+- **Framing** (matched to a reference screenshot the owner sent from another tactical shooter): the gun is big and
+  close, filling the right half of the screen; the optic sits just right of and below the crosshair; the muzzle points
+  in toward the centre; the stock runs off the bottom-right. The left forearm comes nearly straight up from the bottom
+  edge to the handguard (no elbow or long arm on screen) and the right hand sits low on the grip. Rifle hip 0.21 m in
+  front of the eye (was 0.40), turned 15 degrees in; pistol 0.18 m (was 0.33), turned 12 degrees in, 2 degrees down,
+  both forearms from the bottom edge; knife closer and further left. During the rifle reload the gun is lifted and
+  tipped up (and the shoulders follow) so the magazine change happens in view. `viewmodel.py HIP` and
+  `presenter.ts VM_LOOKS.hip` match.
 - **Aimed arms:** new one-frame clips `<rig>_aim_<sight>` hold the same grip with the arms solved from shoulders that
   keep their place relative to the eye (leaning toward a hand only when it would be out of reach, `AIM_REACH`);
   `presenter.ts` lays them over the idle pose by the aim progress (`VmRig.blend`). The gun's aimed position is computed
