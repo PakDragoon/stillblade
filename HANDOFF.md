@@ -1180,12 +1180,12 @@ the left palm slaps the bolt catch at about 2.6 s. **Only motion is used**: none
 | `rifle_reload_empty` | Reload_Empty 0-3.45 s | 2.7 s (`reloadEmptyTicks` 162, new) | 1.28x |
 | `rifle_draw` | Draw 0-0.70 s | 0.4 s (`drawTicks` 24) | 1.75x |
 | `rifle_fire` | Fire 0-0.30 s (kick, bolt back and forward) | 0.1 s (`fireInterval` 6) | 3x |
-| `rifle_holster` | Holster, whole | 0.567 s (no rule) | 1x, **unused** |
+| `rifle_holster` | Holster, whole | 0.567 s (no rule) | 1x; **no longer exported** since the sleeve follow-up (`SB_PACK_HOLSTER=1`) |
 
 The tactical reload stays under the 1.4x line, so 2.2 s is kept and no change is recommended. **The draw is 1.75x**:
 fast but it reads as a quick raise; if the owner finds it rushed, 0.55 s (`drawTicks` 33) would make it 1.27x, a rule
-change for him to decide. The holster clip is in the file but not played: a switch only draws the new weapon (no
-holster time in the rule); playing it would need the rule to add one.
+change for him to decide. The holster clip was never played (a switch only draws the new weapon; the rule has no
+holster time) and was dropped from the file in the sleeve follow-up to keep the Low download under its budget.
 
 **The empty reload (shared rule, protocol 17).** `WeaponDef.reloadEmptyTicks` (rifle `ticks(2700)` = 162; the pistol's
 equals its `reloadTicks`, it has no separate empty reload). `stepGun` starts a reload from an empty magazine with
@@ -1295,3 +1295,48 @@ Warehouse; whether the pack's normal map is the right handedness (glTF requires 
 not checked by rendering both ways); fingertips poking through the guns frame by frame during the clips (none seen in
 the stills); the third-person characters, which still have the soldier's own hands (first person only changed); the
 seller's name for the credits.
+
+### Package R follow-up: the defender's sleeve from the soldier's own shirt (2026-11-19)
+
+The owner's review of the hands trial: the orange sleeve was a plain smooth tube, blotchy, with no folds, not matching
+the third-person shirt, ending abruptly at the glove. Built on `claude/happy-shannon-6d78bd` after merging `main` at
+`3a5f2e7` (packages Q and R); not merged or pushed. Art and Blender scripts only (no simulation, protocol or client
+logic; one comment in `presenter.ts` about the holster clip). Pictures: `docs/review/viewmodel/after6/` (README there),
+Low and High, lit and dark, under package Q's lighting.
+
+**What it is now** (`tools/blender/packhands.py` `sleeve_from_shirt`, used by `viewmodel.py`; `SB_SHIRT_SLEEVE=0` brings
+back the tube). The Quantum kit has only the rolled-up shirt (no long sleeve), but its upper-arm sleeve is real shirt
+geometry with folds, textured with the same maps as the third-person shirt (already in each gun atlas's `sleeve`
+region, dyed the same orange). Per arm that sleeve is cut out with two planes (from 22 % to 75 % of the upper arm, above
+the rolled cuff and below the armpit) and laid along the forearm: its elbow end at the wrist, its shoulder end 10 cm past
+our elbow (that part follows the upper arm, so the open end never comes into view). Each vertex keeps its angle round the
+arm and its fold relative to the cloth; the radius is fitted so the outer folds (85th percentile) meet the glove's strap
+plus 2.5 mm at the wrist, loosening to 8 mm over 3.5 cm and growing 1.65 times toward the elbow. The source is subdivided
+once and given **compression folds** just above the cuff (ridges 3.5 mm high, 16 mm apart, slanting round the arm,
+fading over 5 cm), then reduced to 600 triangles per arm. The **cuff** is cut on a 7-degree slant (lower under the arm),
+starts 3 mm onto the strap and takes 12 % of the hand's motion at its very edge, so it sits on the strap when the wrist
+bends; the cloth rides mostly on the half-roll twist bone (loose cloth turns less than skin). The pack's wrist skin (under
+the glove; it poked through the cuff in the overhand handle pull) is no longer in the mesh, only the fingertips' skin.
+
+**Bytes and triangles.** The atlases are unchanged. Defender arms 5,091 triangles (were 4,678 with the tube), ghost 4,147
+(4,213: only the wrist skin went). To stay under `models.test.ts`' Low budget (4.5 MiB; `main` was 7 KB under it and the
+sleeves add about 15 KB per rig) the rifle's **holster clip is no longer exported**: nothing played it, the rule has no
+holster time (`SB_PACK_HOLSTER=1` adds it back). Files: rifle 1,293,056 -> 1,264,716 bytes, pistol 654,276 -> 662,324,
+knife 583,816 -> 589,480: **14.6 KB less in all**, on both tiers. 502 tests and typecheck pass.
+
+**Ghosts:** unchanged. Their sleeve is the Quantum body's own forearm as a suit (real geometry, not a tube; it already
+meets the near-black glove), so it does not have the tube's problem.
+
+**Better (SwiftShader stills):** the sleeve has the shirt's fabric, shading and fold texture, and real folds bunched at
+the wrist; the cuff closes onto the glove's strap on a slant, with no gap and no ring, in the hip, aimed, handle-pull,
+pistol and knife views, Low and High, lit and dark; the old blotchy stretched patch and the bare wrist in the handle
+pull are gone.
+
+**Still weak:** the colour still varies along the sleeve (the shirt texture's own baked shading, the same as third person
+up close, but more visible this large); when aiming, a narrow strip of the left sleeve shows below the rail with a
+slightly ragged fold edge; the fold geometry is modest (the source shirt has about 270 faces per sleeve section);
+nothing cloth-like moves (it is skinned, not simulated).
+
+**Not verified:** anything on a real GPU, in motion or with a mouse; the draw and both reloads in motion with the new
+sleeve (only the handle-pull frame was captured in game; the Blender previews cover the reload, draw and knife frames as
+stills); the ghost's sleeve under package Q's lighting (not re-shot); the High tier on a real graphics card.

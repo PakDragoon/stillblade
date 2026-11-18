@@ -295,6 +295,13 @@ def hands_mesh(fits, look):
         me.materials.append(mat)
         verts = {}
         faces = src.kept_faces(prim)
+        if prim['material'] == 'Hand_D':
+            # Only the fingertips' skin: the wrist's lies under the glove and poked through its cuff when the wrist
+            # bent (the overhand handle pull). (The atlas crop still uses kept_faces, so the textures are unchanged.)
+            def dom(k):
+                js, ws = prim['joints'][k], prim['weights'][k]
+                return js[max(range(4), key=lambda i: ws[i])]
+            faces = [f for f in faces if not all(dom(k).endswith(('Hand', 'ForeArm')) for k in f)]
         used = sorted({k for f in faces for k in f})
         for k in used:
             sd = src.side_of(prim['joints'][k], prim['weights'][k])
@@ -432,4 +439,188 @@ def sleeve(arm, hands, look, crop):
     byte_colours(me)
     mat = bpy.data.materials.get('sleeve_tube') or bpy.data.materials.new('sleeve_tube')
     me.materials.append(mat)
+    return obj
+
+
+# ---------------------------------------------------------------------------------------------
+# The defender's sleeve from the soldier's own shirt (package R follow-up)
+
+# The part of the Quantum shirt's upper-arm sleeve that is moved onto the forearm, as fractions from the elbow (0) to
+# the shoulder (1): above the rolled cuff, below the armpit. Its elbow end goes to the wrist, its shoulder end past
+# our elbow (the upper sleeve narrows toward the elbow as a forearm sleeve narrows toward the wrist).
+SHIRT_FROM, SHIRT_TO = 0.22, 0.75
+# At the wrist the sleeve closes onto the glove's strap: its radius there is the strap's plus SHIRT_HUG (m), easing out
+# to the strap's plus SHIRT_LOOSE by SHIRT_HUG_LEN up the forearm, then growing to SLEEVE_ELBOW_GROW at the elbow.
+SHIRT_HUG = 0.0025
+SHIRT_LOOSE = 0.008
+SHIRT_HUG_LEN = 0.035
+# The sleeve's wrist end starts this far past the glove cuff band's centre toward the hand (m), so it covers the whole
+# strap and the wrist when the hand bends; and its end is cut on a slant (degrees), lower under the arm, so the cuff is
+# not a flat ring.
+SHIRT_START = -0.003
+SHIRT_SLANT = 7
+SHIRT_PAST_ELBOW = 0.10
+# Turns the shirt round the forearm (degrees) so its seam runs underneath, out of view.
+SHIRT_TURN = {'L': 0.0, 'R': 0.0}
+# Triangles kept per sleeve (the source is subdivided once first, so the bunching below has edges to bend).
+SHIRT_TRIS = 600
+# Bunching where the sleeve is pushed up against the glove: ridges round the wrist end, slanting round the arm
+# (height m, spacing m along the arm, how far up it fades m).
+BUNCH_HEIGHT = 0.0035
+BUNCH_SPACING = 0.016
+BUNCH_FADE = 0.05
+
+
+def _cuff(arm, hands, sd):
+    """The glove cuff's centre on the forearm, the forearm's axis from it to the elbow, the frame round it and the
+    strap's radii (95th percentile across and through the hand)."""
+    data = arm.data
+    src = source()
+    E = data.bones[f'LowerArm.{sd}'].head_local
+    w0 = data.bones[f'Wrist.{sd}'].head_local
+    a0 = (E - w0).normalized()
+    # This hand's vertices (the glove's cuff and strap; the wrist's own skin is not in the mesh any more).
+    gname = {g.index: g.name for g in hands.vertex_groups}
+    pts = [v.co.copy() for v in hands.data.vertices
+           if v.groups and gname[max(v.groups, key=lambda g: g.weight).group].endswith(f'.{sd}')]
+    top_d = src.cuff[sd][2] * PACK_HAND_SCALE / 100.0
+    band = [p for p in pts if (p - w0).dot(a0) > top_d - SLEEVE_OVER_CUFF / 100.0 - 0.01] or pts
+    W = sum(band, Vector()) / len(band)
+    A = (E - W).normalized()
+    across = data.bones[f'Index2.{sd}'].head_local - data.bones[f'Pinky2.{sd}'].head_local
+    X = (across - A * across.dot(A)).normalized()
+    Y = A.cross(X)
+    ex = sorted(abs((p - W).dot(X)) for p in band)
+    ey = sorted(abs((p - W).dot(Y)) for p in band)
+    return W, E, A, X, Y, ex[int(0.95 * (len(ex) - 1))], ey[int(0.95 * (len(ey) - 1))]
+
+
+def _bone_frame(data, name, axis):
+    """Two unit vectors across a bone (its own X squared up to `axis`, and the third)."""
+    m = data.bones[name].matrix_local.to_3x3()
+    x = m.col[0].normalized()
+    x = (x - axis * x.dot(axis)).normalized()
+    return x, axis.cross(x)
+
+
+def _smooth(x):
+    x = min(1.0, max(0.0, x))
+    return x * x * (3 - 2 * x)
+
+
+def sleeve_from_shirt(arm, hands, shirt):
+    """The defender's sleeves made from the soldier's shirt (`shirt`: its arm part, world space = the rig's rest space,
+    material M_Shirt_RolledUp): per arm the upper-arm sleeve between SHIRT_FROM and SHIRT_TO is cut out with two planes
+    and laid along the forearm, its folds and texture kept, its radius fitted to the forearm and closed onto the
+    glove's strap at the wrist."""
+    data = arm.data
+    gname = {g.index: g.name for g in shirt.vertex_groups}
+    out = []
+    for sd in 'LR':
+        S = data.bones[f'UpperArm.{sd}'].head_local
+        Es = data.bones[f'LowerArm.{sd}'].head_local
+        L_s = (S - Es).length
+        As = (S - Es).normalized()
+        Xs, Ys = _bone_frame(data, f'UpperArm.{sd}', As)
+        W, E, A, X, Y, rx, ry = _cuff(arm, hands, sd)
+        Xf, Yf = _bone_frame(data, f'LowerArm.{sd}', A)
+        # Well past the elbow (SHIRT_PAST_ELBOW), so the sleeve's open upper end never comes into view (it did when
+        # aiming); the part beyond the elbow follows the upper arm.
+        L_e = (E - W).length
+        L_t = L_e + SHIRT_PAST_ELBOW
+        obj = rl.duplicate(shirt, f'sleeve_{sd}')
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        deform = bm.verts.layers.deform.verify()
+        bm.verts.ensure_lookup_table()
+        # Only this side's arm sleeve.
+        side = []
+        for v in bm.verts:
+            ws = v[deform]
+            best = max(ws.items(), key=lambda kv: kv[1])[0] if len(ws) else None
+            n = gname.get(best, '') if best is not None else ''
+            side.append(n.endswith(f'.{sd}') and n.startswith(('UpperArm', 'LowerArm')))
+        bmesh.ops.delete(bm, geom=[f for f in bm.faces if not all(side[v.index] for v in f.verts)], context='FACES')
+        # Clean cuts across the sleeve at both ends.
+        slant = (Matrix.Rotation(math.radians(SHIRT_SLANT), 3, Xs) @ As).normalized()
+        for frac, keep_up, no in ((SHIRT_FROM, True, slant), (SHIRT_TO, False, As)):
+            co = Es + As * (L_s * frac)
+            geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
+            bmesh.ops.bisect_plane(bm, geom=geom, plane_co=co, plane_no=no, clear_inner=keep_up, clear_outer=not keep_up)
+        bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context='VERTS')
+        if not bm.verts:
+            raise RuntimeError(f'no shirt sleeve left on side {sd}')
+        bmesh.ops.subdivide_edges(bm, edges=bm.edges[:], cuts=1, use_grid_fill=True)
+        bmesh.ops.triangulate(bm, faces=bm.faces[:])
+        # The source's radius along the kept part (10 bins), to fit the forearm's radius.
+        bins = [[] for _ in range(10)]
+        for v in bm.verts:
+            q = v.co - Es
+            a = (q.dot(As) / L_s - SHIRT_FROM) / (SHIRT_TO - SHIRT_FROM)
+            bins[min(9, max(0, int(a * 10)))].append((q - As * q.dot(As)).length)
+        # The 85th percentile, not the mean: the folds standing out of the cloth are the ones that must meet the strap.
+        mean = [sorted(b)[int(0.85 * (len(b) - 1))] if b else None for b in bins]
+        known = [m for m in mean if m]
+        mean = [m if m else sum(known) / len(known) for m in mean]
+        turn = math.radians(SHIRT_TURN[sd])
+        ravg = (rx + ry) / 2
+        for v in bm.verts:
+            q = v.co - Es
+            a = min(1.0, max(0.0, (q.dot(As) / L_s - SHIRT_FROM) / (SHIRT_TO - SHIRT_FROM)))
+            radial = q - As * q.dot(As)
+            x, y = radial.dot(Xs), radial.dot(Ys)
+            x, y = x * math.cos(turn) - y * math.sin(turn), x * math.sin(turn) + y * math.cos(turn)
+            f = min(9.0, max(0.0, a * 10 - 0.5))
+            i0 = int(f)
+            src_r = mean[i0] + (mean[min(9, i0 + 1)] - mean[i0]) * (f - i0)
+            d = SHIRT_START + a * (L_t - SHIRT_START)
+            want = ravg + SHIRT_HUG + (SHIRT_LOOSE - SHIRT_HUG) * _smooth(d / SHIRT_HUG_LEN)
+            want *= 1 + (SLEEVE_ELBOW_GROW - 1) * a ** 1.3
+            # Compression folds above the cuff (none on its very edge, which stays on the strap).
+            ang = math.atan2(y, x)
+            ridge = 0.5 + 0.5 * math.sin(2 * math.pi * d / BUNCH_SPACING + 2 * ang + 0.7 * math.sin(3 * ang))
+            want += BUNCH_HEIGHT * ridge * math.exp(-d / BUNCH_FADE) * _smooth(d / 0.008)
+            k = want / max(src_r, 1e-4)
+            v.co = W + A * d + Xf * (x * k * rx / ravg) + Yf * (y * k * ry / ravg)
+        bm.to_mesh(obj.data)
+        bm.free()
+        for g in list(obj.vertex_groups):
+            obj.vertex_groups.remove(g)
+        gi = {n: obj.vertex_groups.new(name=f'{n}.{sd}') for n in ('ForeTwist2', 'ForeTwist1', 'LowerArm', 'Wrist', 'UpperArm')}
+        for v in obj.data.vertices:
+            t = min(1.0, max(0.0, (v.co - W).dot(A) / L_t))
+            # Loose cloth turns less than skin with the hand: the wrist end mostly on the half-roll twist bone
+            # (viewmodel.py TWIST_SHARE: ForeTwist1 0.5, ForeTwist2 0.85), easing onto the forearm toward the elbow.
+            t = min(1.0, max(0.0, (v.co - W).dot(A) / L_e))
+            up = _smooth(((v.co - W).dot(A) - L_e + 0.01) / 0.05)
+            ws = {'ForeTwist2': 0.25 * max(0.0, 1 - 3 * t), 'ForeTwist1': max(0.0, 1 - t * 1.6), 'LowerArm': min(1.0, t * 1.6)}
+            ws = {n: wt * (1 - up) for n, wt in ws.items()}
+            ws['UpperArm'] = up
+            tot = sum(ws.values()) or 1.0
+            for n, wt in ws.items():
+                if wt > 0:
+                    gi[n].add([v.index], wt / tot, 'REPLACE')
+            # (The rig normalises every vertex's weights before export.) The part over the wrist follows the hand a little, so the cuff stays on the strap when the wrist bends.
+            dw = (v.co - W).dot(A)
+            if dw < 0.01:
+                gi["Wrist"].add([v.index], 0.12 * _smooth((0.01 - dw) / 0.02), 'REPLACE')
+        before = len(obj.data.polygons)
+        ds = [(v.co - W).dot(A) for v in obj.data.vertices]
+        for lo, hi in ((0.0, 0.03), (0.08, 0.12), (0.18, 0.22)):
+            ring = [v.co - W for v in obj.data.vertices if lo <= (v.co - W).dot(A) < hi]
+            if ring:
+                log(sd, f'  section {lo}-{hi} m: across', round(min(q.dot(X) for q in ring), 3), round(max(q.dot(X) for q in ring), 3),
+                    'through', round(min(q.dot(Y) for q in ring), 3), round(max(q.dot(Y) for q in ring), 3))
+        log(sd, 'shirt sleeve reaches', round(min(ds), 3), 'to', round(max(ds), 3), 'm up the forearm (elbow at',
+            round((E - W).dot(A), 3), ')')
+        rl.decimate(obj, SHIRT_TRIS, keep_normals=False)
+        log(sd, 'shirt sleeve: source radii elbow to shoulder', [round(m, 3) for m in mean], '; wrist strap radii',
+            round(rx, 3), round(ry, 3), '; faces', before, '->', len(obj.data.polygons))
+        out.append(obj)
+    obj = rl.join(out, 'sleeve')
+    if obj.data.has_custom_normals:
+        with bpy.context.temp_override(object=obj, active_object=obj):
+            bpy.ops.mesh.customdata_custom_splitnormals_clear()
+    obj.data.shade_smooth()
+    rl.set_colour(obj, (1.0, 1.0, 1.0, 0.0))
     return obj
