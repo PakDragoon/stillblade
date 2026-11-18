@@ -125,6 +125,23 @@ function canReload(g: GunState, def: WeaponDef): boolean {
 }
 
 /**
+ * Commands the reload of `g` takes: `reloadEmptyTicks` when it starts (or is running) with an empty magazine, else
+ * `reloadTicks`. The magazine does not change while a reload runs (nothing fires, the rounds go in on its last
+ * command), so the same test tells, at any moment of a reload, which kind it is: the snapshot needs no extra field.
+ */
+export function reloadTicksOf(g: GunState, def: WeaponDef): number {
+    return g.mag === 0 ? def.reloadEmptyTicks : def.reloadTicks;
+}
+
+/** A reload is running and it is the empty kind (the magazine was empty when it started). */
+export const emptyReload = (g: GunState): boolean => g.reload > 0 && g.mag === 0;
+
+/** Progress 0..1 of the reload in progress (0 at its start, nearing 1 at its end), 0 when not reloading. */
+export function reloadProgress(g: GunState, def: WeaponDef): number {
+    return g.reload > 0 ? 1 - g.reload / reloadTicksOf(g, def) : 0;
+}
+
+/**
  * Advances one weapon by one of its owner's commands. `stepLoadout` calls it for every slot on
  * every command a living defender simulates (the weapons not in hand with everything false, so
  * their timers and recoil recovery still run). `armed` is false while the trigger cannot act
@@ -150,7 +167,7 @@ export function stepGun(g: GunState, def: WeaponDef, fire: boolean, reload: bool
         g.mag += take;
         g.reserve -= take;
     } else if (reload && armed && canReload(g, def)) {
-        g.reload = def.reloadTicks;
+        g.reload = reloadTicksOf(g, def);
         return GUN_RELOAD;
     }
 
@@ -165,7 +182,7 @@ export function stepGun(g: GunState, def: WeaponDef, fire: boolean, reload: bool
         return index;
     }
     if (canReload(g, def)) {
-        g.reload = def.reloadTicks; // empty magazine: pulling the trigger reloads
+        g.reload = def.reloadEmptyTicks; // empty magazine: pulling the trigger starts the (longer) empty reload
         return GUN_RELOAD;
     }
     g.cooldown = DRY_FIRE_TICKS;

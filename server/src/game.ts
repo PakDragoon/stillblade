@@ -6,7 +6,7 @@ import {
     STEP_RANGE, TICK_DT, TICK_RATE, VIS_HURT_SPIKE, VIS_SWING_SPIKE
 } from '../../shared/constants';
 import {
-    GUN_RELOAD, MELEE_SLASH, MELEE_SWING, aimFraction, cancelReloads, createLoadout, fillReserves, heldGun, resetLoadout,
+    GUN_RELOAD, MELEE_SLASH, MELEE_SWING, aimFraction, cancelReloads, createLoadout, emptyReload, fillReserves, heldGun, resetLoadout,
     shotDirectionFor, stepLoadout
 } from '../../shared/gun';
 import { KNIFE_SLASH, KNIFE_SWING, createKnifeState, resetKnife, stepKnife } from '../../shared/knife';
@@ -830,7 +830,9 @@ export class Game implements BotWorld {
             const r = stepLoadout(p.loadout, cmd, armed);
             if (this.practice) fillReserves(p.loadout); // after the step, so it always shows full; the client does the same (welcome.practice)
             if (r >= 0) this.fire(p, cmd, r);
-            else if (r === GUN_RELOAD) this.emitSound(p, 'reload', 1, RELOAD_SOUND_RANGE, p.loadout.slot);
+            else if (r === GUN_RELOAD) {
+                this.emitSound(p, 'reload', 1, RELOAD_SOUND_RANGE, p.loadout.slot, emptyReload(p.loadout.guns[p.loadout.slot]));
+            }
             // The defender knife: the same windup warning and the same landing as a ghost's swing.
             else if (r === MELEE_SWING) this.emitSound(p, 'windup', 1, KNIFE_SOUND_RANGE);
             else if (r === MELEE_SLASH) this.slash(p, cmd);
@@ -864,13 +866,14 @@ export class Game implements BotWorld {
     }
 
     /** Sends a sound only to players close enough to hear it. */
-    private emitSound(source: Player, kind: SoundEvent['kind'], loud: number, range: number, weapon?: number): void {
+    private emitSound(source: Player, kind: SoundEvent['kind'], loud: number, range: number, weapon?: number, empty = false): void {
         let event: SoundEvent | undefined;
         for (const p of this.players.values()) {
             if (p === source || dist(p.state.pos, source.state.pos) > range) continue;
             if (!event) {
                 event = { type: 'sound', kind, id: source.id, pos: [...source.state.pos] as Vec3, loud };
                 if (weapon !== undefined) event.weapon = weapon;
+                if (empty) event.empty = true;
             }
             p.conn.send(event);
         }

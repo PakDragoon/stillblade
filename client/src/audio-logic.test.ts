@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Box } from '@shared/types';
 import { GUNSHOT_RANGE, GUNSHOT_RANGE_SUPPRESSED } from '@shared/constants';
+import { WEAPONS } from '@shared/weapons';
 import {
     BREATH_REC_EXERT, BREATH_SETS, DEFAULT_SOUND_MODE, GUN_FAR_FLOOR, breathGap, breathLevel, breathRate, gunBlend, pickBreathSet, RELOAD_CUES, SAMPLE_EXT, SAMPLE_SETS, allSampleFiles, pickVariant, sampleFiles, stepVariation,
     surfaceUnder, useRecorded, varied
@@ -33,7 +34,12 @@ describe('sample manifest', () => {
         for (const k of mapped) expect(map[k].n).toBe(SAMPLE_SETS[k]);
     });
     it('keeps the reload cues at the animation times', () => {
-        expect(RELOAD_CUES.rifle.times).toEqual([0.3, 1.4, 1.9]);
+        // Package R: the pack's clips at the rules' durations (viewmodel.py logs "pack cues").
+        expect(RELOAD_CUES.rifle.times).toEqual([0.71, 1.55]);
+        expect(RELOAD_CUES.rifle_empty.times).toEqual([0.74, 1.63, 1.94]);
+        // Every cue falls inside its reload.
+        expect(Math.max(...RELOAD_CUES.rifle.times)).toBeLessThan(WEAPONS[0].reloadTicks / 60);
+        expect(Math.max(...RELOAD_CUES.rifle_empty.times)).toBeLessThan(WEAPONS[0].reloadEmptyTicks / 60);
         expect(RELOAD_CUES.pistol.times).toEqual([0.15, 0.7, 1.0]);
     });
 });
@@ -68,7 +74,7 @@ describe('pickVariant', () => {
 describe('fallback rule', () => {
     const loaded = (have: readonly string[]) => (s: string) => have.includes(s);
     it('plays recorded only when every part is loaded', () => {
-        const parts = RELOAD_CUES.rifle.parts;
+        const parts = RELOAD_CUES.rifle_empty.parts;
         expect(useRecorded(DEFAULT_SOUND_MODE, loaded(parts), parts)).toBe(true);
         expect(useRecorded(DEFAULT_SOUND_MODE, loaded([parts[0], parts[1]]), parts)).toBe(false);
         expect(useRecorded(DEFAULT_SOUND_MODE, loaded([]), parts)).toBe(false);

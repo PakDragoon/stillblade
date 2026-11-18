@@ -17,6 +17,8 @@ const TICK_MS = 1000 / TICK_RATE;
 const RIFLE = WEAPONS[SLOT_RIFLE];
 const PISTOL = WEAPONS[SLOT_PISTOL];
 const { bodyDamage: BODY_DAMAGE, fireInterval: FIRE_INTERVAL_TICKS, magSize: MAG_SIZE, reloadTicks: RELOAD_TICKS, reserve: RESERVE_AMMO } = RIFLE;
+/** Package R: a reload that starts from an empty magazine takes longer (the bolt is worked). */
+const RELOAD_EMPTY_TICKS = RIFLE.reloadEmptyTicks;
 
 /** Ghost faces -Z, defender faces +Z: by default they look straight at each other along Z. */
 function makeMap(extra: Box[] = [], ghostZ = 10, defenderZ = -10): MapData {
@@ -223,8 +225,8 @@ describe('defender ammunition, reload and recoil', () => {
         run(MAG_SIZE * FIRE_INTERVAL_TICKS, c => (c === defender ? SKY : {}));
         expect(defender.shots()).toHaveLength(MAG_SIZE);
         expect(D.loadout.guns[0]).toMatchObject({ mag: 0, reserve: RESERVE_AMMO });
-        // Holding the trigger on empty starts the reload; nothing fires until it completes.
-        run(RELOAD_TICKS, c => (c === defender ? SKY : {}));
+        // Holding the trigger on empty starts the (empty) reload; nothing fires until it completes.
+        run(RELOAD_EMPTY_TICKS, c => (c === defender ? SKY : {}));
         expect(defender.shots()).toHaveLength(MAG_SIZE);
         expect(D.loadout.guns[0].reload).toBeGreaterThan(0);
         run(1, c => (c === defender ? SKY : {}));

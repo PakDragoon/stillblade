@@ -111,9 +111,11 @@ interface VmLook {
     reloadOut: number;
     /**
      * Jolts during the reload, timed to the sounds in audio.ts: [ms from the start, half-width ms, size].
-     * Size 1 lifts the gun 12 mm and tips it up 5 degrees; negative dips it.
+     * Size 1 lifts the gun 12 mm and tips it up 5 degrees; negative dips it. Only without the arms rig.
      */
     jolts: readonly (readonly [number, number, number])[];
+    /** The same for the empty reload (`LocalView.reloadEmpty`, the weapon's `reloadEmptyTicks` long). */
+    joltsEmpty: readonly (readonly [number, number, number])[];
     /** Firing kick at its peak: lift (m), push back (m), muzzle up (degrees); and its duration (s). */
     kick: readonly number[];
     kickTime: number;
@@ -130,8 +132,10 @@ const VM_LOOKS: Record<WeaponId, VmLook> = {
         // (only without the arms rig: its reload clip moves the gun, viewmodel.py RELOAD_MAG).
         reload: [0.01, 0.05, -0.08, 40, -40, -30],
         reloadIn: 0.2, reloadOut: 0.2,
-        // The magazine seats (1.4 s) and the bolt slams home (about 2.05 s).
-        jolts: [[1400, 110, 1], [2050, 88, 0.7]],
+        // Package R (the pack's clips, audio-logic.ts RELOAD_CUES): the magazine seats at 1.55 s (tactical, no bolt);
+        // in the empty reload at 1.63 s, and the charging handle lets the bolt slam home at about 2.07 s.
+        jolts: [[1550, 110, 1]],
+        joltsEmpty: [[1630, 110, 1], [2070, 88, 0.7]],
         kick: [0.012, 0.035, 4], kickTime: 0.08,
         fx: 1
     },
@@ -144,31 +148,45 @@ const VM_LOOKS: Record<WeaponId, VmLook> = {
         reloadIn: 0.15, reloadOut: 0.13,
         // Magazine drops (0.18 s), new one slapped in (0.7 s), slide pulled (1.08 s) and released (1.17 s).
         jolts: [[180, 90, -0.7], [700, 80, 1], [1080, 60, -0.6], [1170, 60, 1.3]],
+        // The pistol has no separate empty reload (its reloadEmptyTicks equals reloadTicks).
+        joltsEmpty: [[180, 90, -0.7], [700, 80, 1], [1080, 60, -0.6], [1170, 60, 1.3]],
         kick: [0.016, 0.03, 9], kickTime: 0.11,
         fx: 0.75
     }
 };
 
-/** VM_LOOKS per slot, with the jolt times turned into fractions of that weapon's own reload. */
-interface SlotLook extends VmLook {
-    joltAt: number[];
-    joltW: number[];
-    joltSize: number[];
+/** Jolt times as fractions of one reload. */
+interface Jolts {
+    at: number[];
+    w: number[];
+    size: number[];
 }
+/** VM_LOOKS per slot, with the jolt times turned into fractions of that weapon's own reloads (tactical, empty). */
+interface SlotLook extends VmLook {
+    joltsOf: Jolts;
+    joltsEmptyOf: Jolts;
+}
+const toJolts = (js: VmLook['jolts'], ticks: number): Jolts => {
+    const ms = (ticks / TICK_RATE) * 1000;
+    return { at: js.map(j => j[0] / ms), w: js.map(j => j[1] / ms), size: js.map(j => j[2]) };
+};
 const SLOT_LOOKS: readonly SlotLook[] = WEAPONS.map(w => {
     const look = VM_LOOKS[w.id];
-    const ms = (w.reloadTicks / TICK_RATE) * 1000;
-    return {
-        ...look,
-        joltAt: look.jolts.map(j => j[0] / ms),
-        joltW: look.jolts.map(j => j[1] / ms),
-        joltSize: look.jolts.map(j => j[2])
-    };
+    return { ...look, joltsOf: toJolts(look.jolts, w.reloadTicks), joltsEmptyOf: toJolts(look.joltsEmpty, w.reloadEmptyTicks) };
 });
 
-/** Clip names per gun slot, built once (no string building per frame). */
+/**
+ * Clip names per gun slot, built once (no string building per frame). Package R: the rifle rig also has
+ * `rifle_reload_empty` (played for an empty reload), `rifle_draw` (the switch, sampled by draw progress, in place of
+ * the procedural rise) and `rifle_fire` (one fire interval long, sampled by the time since the last local shot);
+ * a rig without them (the pistol, or an older file) keeps the old behaviour. `rifle_holster` is in the file but unused:
+ * the rule has no holster time (a switch only draws the new weapon).
+ */
 const IDLE_CLIP: readonly string[] = WEAPONS.map(w => `${w.id}_idle`);
 const RELOAD_CLIP: readonly string[] = WEAPONS.map(w => `${w.id}_reload`);
+const RELOAD_EMPTY_CLIP: readonly string[] = WEAPONS.map(w => `${w.id}_reload_empty`);
+const DRAW_CLIP: readonly string[] = WEAPONS.map(w => `${w.id}_draw`);
+const FIRE_CLIP: readonly string[] = WEAPONS.map(w => `${w.id}_fire`);
 
 /** Gun slot index clamped into the weapon table (the knife slot is handled before this is used). */
 function slotOf(weapon: number): number {
@@ -1063,6 +1081,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
 
     let recoilT = 0;
     let flashT = 0;
+    /** Seconds since the last local shot (the rig's fire clip, package R); large when none. */
+    let vmFireT = 1e3;
     let localAlive = false;
     /** Seconds since the current knife swing started; < 0 when idle. */
     let swingT = -1;
@@ -1142,16 +1162,33 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             let jolt = 0;
             const rig = vmGuns[slot].rig;
             if (p > 0 && !rig) {
-                for (let i = 0; i < look.joltAt.length; i++) jolt += look.joltSize[i] * bump(p, look.joltAt[i], look.joltW[i]);
+                const j = local.reloadEmpty ? look.joltsEmptyOf : look.joltsOf;
+                for (let i = 0; i < j.at.length; i++) jolt += j.size[i] * bump(p, j.at[i], j.w[i]);
             }
             // With arms, the reload clip moves the gun and hands inside the rig: no procedural reload pose on top.
             const rw = rig ? 0 : w;
             // Aim: blend from the hip pose to the sight line; the reload pose takes over from it.
             const a0 = local.aim > 0 ? Math.min(1, local.aim) : 0;
             const a = a0 * a0 * (3 - 2 * a0) * (1 - w);
+            // Switch progress (1 at its start, 0 drawn). A rig with a draw clip plays it instead of the procedural rise.
+            const d0 = local.draw > 0 ? Math.min(1, local.draw) : 0;
+            vmFireT += dt;
+            let drawByClip = false;
             if (rig) {
-                const clip = p > 0 ? rig.clips.get(RELOAD_CLIP[slot]) : rig.clips.get(IDLE_CLIP[slot]);
-                rig.pose(clip, clip ? p * clip.duration : 0);
+                // Clip selection (package R): reload (empty or tactical) by its progress, else the draw by its
+                // progress, else the shot just fired, else the idle hold.
+                let clip: VmClip | undefined;
+                let ct = 0;
+                if (p > 0) {
+                    clip = (local.reloadEmpty ? rig.clips.get(RELOAD_EMPTY_CLIP[slot]) : undefined) ?? rig.clips.get(RELOAD_CLIP[slot]);
+                    ct = clip ? p * clip.duration : 0;
+                } else if (d0 > 0 && (clip = rig.clips.get(DRAW_CLIP[slot])) !== undefined) {
+                    ct = (1 - d0) * clip.duration;
+                    drawByClip = true;
+                } else if ((clip = rig.clips.get(FIRE_CLIP[slot])) !== undefined && vmFireT < clip.duration) {
+                    ct = vmFireT;
+                } else clip = rig.clips.get(IDLE_CLIP[slot]);
+                rig.pose(clip, ct);
                 // The aimed arms (shoulders kept in place relative to the eye) over the hold, by the aim.
                 if (p <= 0 && a > 0) rig.blend(aimClips[slot][WEAPONS[slot].takesSights ? vmSight : SIGHT_IRON] ?? undefined, 0, a);
             }
@@ -1170,9 +1207,8 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             } else if (WEAPONS[slot].takesSights) {
                 sightDrop = SIGHT_EYE_FALLBACK[sightDef(vmSight).id];
             }
-            // Switch: rises from below, rotated, easing into place as draw falls from 1 to 0.
-            const d0 = local.draw > 0 ? Math.min(1, local.draw) : 0;
-            const d = d0 * d0;
+            // Switch: rises from below, rotated, easing into place as draw falls from 1 to 0 (unless a draw clip does it).
+            const d = drawByClip ? 0 : d0 * d0;
             // Subtle time-based sway (the presenter has no player speed); damped while firing and aiming.
             const s = (1 - 0.7 * k) * (1 - (1 - AIM_SWAY) * a);
             const sx = Math.sin(time * SWAY_RATE) * SWAY_POS * s;
@@ -2048,6 +2084,7 @@ export const createPresenter: CreatePresenter = (app, camera) => {
                 // one, except a shot predicted on the very frame of a switch).
                 kickSlot = slot;
                 recoilT = SLOT_LOOKS[slot].kickTime;
+                vmFireT = 0;
                 flashT = suppressedLook ? FLASH_TIME : LOUD_FLASH_TIME;
                 const v = vmGuns[vmSlot];
                 (suppressedLook ? v.flash : v.loud).setLocalEulerAngles(0, 0, Math.random() * 90);

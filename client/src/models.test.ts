@@ -49,6 +49,19 @@ describe('first-person viewmodels', () => {
         });
     }
 
+    it('rifle (package R): the pack clips at the rule lengths (empty reload, draw, one fire interval) and a holster', () => {
+        const rifle = WEAPONS[0];
+        const c = clips(readGlb('viewmodel_rifle.glb'));
+        // The client samples the reload clips by progress and the draw by draw progress, so their lengths must be the
+        // rules' (an empty reload is longer than a tactical one).
+        expect(c.get('rifle_reload_empty')).toBeCloseTo(rifle.reloadEmptyTicks / TICK_RATE, 2);
+        expect(c.get('rifle_reload')).toBeCloseTo(rifle.reloadTicks / TICK_RATE, 2);
+        expect(c.get('rifle_draw')).toBeCloseTo(rifle.drawTicks / TICK_RATE, 2);
+        expect(c.get('rifle_fire')).toBeCloseTo(rifle.fireInterval / TICK_RATE, 2);
+        expect(c.has('rifle_holster')).toBe(true);
+        expect(rifle.reloadEmptyTicks).toBeGreaterThan(rifle.reloadTicks);
+    });
+
     it('the guns have an aimed-arms clip for each sight they take, and the forearm twist bones', () => {
         for (const w of WEAPONS) {
             const g = readGlb(`viewmodel_${w.id}.glb`);

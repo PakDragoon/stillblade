@@ -13,8 +13,8 @@ const cmd: NetCmd = {
 const SNAP_HEAD = 76 + 6 + 7 * GUN_COUNT + 2 + 2 + 1 + 1;
 
 describe('wire format', () => {
-    it('is protocol version 16', () => {
-        expect(PROTOCOL_VERSION).toBe(16);
+    it('is protocol version 17', () => {
+        expect(PROTOCOL_VERSION).toBe(17);
     });
 
     it('carries the active sight in the self snapshot exactly, for every sight', () => {

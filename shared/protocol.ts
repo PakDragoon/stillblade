@@ -7,7 +7,7 @@ import type { InputCmd, Vec3 } from './types';
 import { GUN_COUNT, SIGHT_COUNT } from './weapons';
 import type { HitZone } from './zones';
 
-export const PROTOCOL_VERSION = 16;
+export const PROTOCOL_VERSION = 17;
 export const DEFAULT_PORT = 8080;
 /** Snapshots per second sent to each client. */
 export const SNAPSHOT_RATE = 30;
@@ -134,6 +134,11 @@ export interface SoundEvent {
     loud: number;
     /** For 'reload': the slot of the weapon being reloaded. */
     weapon?: number;
+    /**
+     * For 'reload' (protocol 17): true when it is an empty reload (the magazine was empty, so the bolt is worked and
+     * the reload takes the weapon's `reloadEmptyTicks`); absent otherwise. Sent to the same players as the sound.
+     */
+    empty?: boolean;
 }
 
 /** The state of the round. Sent whenever it changes and to every player who joins. */

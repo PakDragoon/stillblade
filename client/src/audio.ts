@@ -28,7 +28,7 @@ import type { Box, Vec3 } from '@shared/types';
 import type { AudioEngine, AudioOptions, BombView, CreateAudio, CueKind, ListenerView } from './audio-api';
 import type { RemoteView } from './presenter-api';
 import {
-    BREATH_SETS, DEFAULT_SOUND_MODE, RELOAD_CUES, SAMPLE_GAIN, SAMPLE_SETS, breathGap, breathLevel, breathRate, gunBlend,
+    BREATH_SETS, DEFAULT_SOUND_MODE, RELOAD_BOLT_SLAM, RELOAD_CUES, SAMPLE_GAIN, SAMPLE_SETS, breathGap, breathLevel, breathRate, gunBlend,
     pickBreathSet, pickVariant, sampleFiles, stepVariation, surfaceUnder, useRecorded, varied, type SoundMode
 } from './audio-logic';
 import { faceAt, type Surface } from './effects';
@@ -548,22 +548,26 @@ function scrape(v: Voice, t: number, dur: number, f0: number, f1: number, level:
 }
 
 /**
- * Reload (~2.2 s, all scheduled from `t`): magazine release click and slide out at 0.3 s, magazine
- * seated (clunk + latch click) at 1.4 s, bolt pulled back and slammed home at 1.9 s. Quiet by design.
+ * Rifle reload, all scheduled from `t` at the first-person clip's times (RELOAD_CUES, package R): magazine release
+ * click and the magazine rocked out, the new one seated (clunk + latch click). flag = the empty reload (2.7 s): the
+ * charging handle is then pulled back and let go (a scrape and the bolt slamming home). Quiet by design.
  */
-const synthReload: Synth = (v, t) => {
-    const out = t + 0.3 + Math.random() * 0.03;
+const synthReload: Synth = (v, t, _x, empty) => {
+    const cue = empty ? RELOAD_CUES.rifle_empty : RELOAD_CUES.rifle;
+    const out = t + cue.times[0] + Math.random() * 0.03;
     metalClick(v, out, 3400, 0.5);
     scrape(v, out + 0.02, 0.09, 1500, 900, 0.18);
-    const seat = t + 1.4 + Math.random() * 0.03;
+    const seat = t + cue.times[1] + Math.random() * 0.03;
     scrape(v, seat - 0.06, 0.06, 900, 1600, 0.14);
     clunk(v, seat, 190, 0.55);
     metalClick(v, seat + 0.012, 2800, 0.45);
-    const bolt = t + 1.9;
+    if (!empty) return;
+    const bolt = t + RELOAD_CUES.rifle_empty.times[2];
+    const home = bolt + RELOAD_BOLT_SLAM;
     scrape(v, bolt, 0.07, 1600, 3200, 0.22);
     metalClick(v, bolt + 0.07, 3800, 0.4);
-    metalClick(v, bolt + 0.17, 3000, 0.6);
-    clunk(v, bolt + 0.17, 230, 0.45);
+    metalClick(v, home, 3000, 0.6);
+    clunk(v, home, 230, 0.45);
 };
 
 /**
@@ -891,10 +895,13 @@ const sampledImpact: Synth = (v, t, x, flag) => {
     v.play(set, b, t, 0.9 * varied(0.15, Math.random()), varied(0.08, Math.random()));
 };
 
-/** A reload from three recorded parts at the animation's times; all three or none (the whole synthesised reload). */
-function sampledReload(kind: 'rifle' | 'pistol', fallback: Synth): Synth {
-    const cue = RELOAD_CUES[kind];
+/**
+ * A reload from its recorded parts at the animation's times; all or none (the whole synthesised reload). flag = an
+ * empty reload, which plays `empty`'s cues (the rifle's adds the bolt) when the weapon has them.
+ */
+function sampledReload(kind: 'rifle' | 'pistol', fallback: Synth, empty: keyof typeof RELOAD_CUES = kind): Synth {
     return (v, t, x, flag) => {
+        const cue = RELOAD_CUES[flag ? empty : kind];
         if (!v.has(cue.parts)) { fallback(v, t, x, flag); return; }
         for (let i = 0; i < cue.parts.length; i++) {
             const b = v.pick(cue.parts[i]);
@@ -1078,7 +1085,7 @@ const WEAPON_SOUNDS: Record<WeaponId, { shot: Synth; loud: Synth; reload: Synth 
     rifle: {
         shot: recordedShot('shot_rifle_supp', null, layered('thump_rifle_supp', synthGun, 0.9), 1),
         loud: recordedShot('shot_rifle_loud', 'shot_rifle_far', layered('thump_rifle_loud', synthLoudRifle, 0.9), 1),
-        reload: sampledReload('rifle', synthReload)
+        reload: sampledReload('rifle', synthReload, 'rifle_empty')
     },
     pistol: {
         shot: recordedShot('shot_pistol_supp', null, layered('thump_pistol_supp', synthPistol, 0.9), 1),
@@ -1566,20 +1573,21 @@ export const createAudio: CreateAudio = (boxes: readonly Box[], opts?: AudioOpti
             oneShot(null, CUE_CFG, 0.4, sampledSwitch, WEAPONS[s].drawTicks / TICK_RATE, WEAPONS[s].id === 'pistol', 1, WEAPONS[s].id);
         },
 
-        reload(pos: Vec3, isLocal: boolean, weapon: number, id: number): void {
+        reload(pos: Vec3, isLocal: boolean, weapon: number, id: number, empty = false): void {
             if (!ctx) return;
             const slot = slotOf(weapon);
             const synth = SLOT_SOUNDS[slot].reload;
             // A new reload by the same player means the old one ended: cut whatever is left of it.
             for (let i = reloads.length - 1; i >= 0; i--) if (reloads[i].id === id) endReload(i, ctx.currentTime, true);
             let v: Voice | null;
-            if (isLocal) v = oneShot(null, RELOAD_CFG, 0.45, synth, 0, false);
+            if (isLocal) v = oneShot(null, RELOAD_CFG, 0.45, synth, 0, empty);
             else {
                 // The event carries the feet position: the magazine is worked at about hand height.
                 reloadPos[0] = pos[0]; reloadPos[1] = pos[1] + RELOAD_LIFT; reloadPos[2] = pos[2];
-                v = oneShot(reloadPos, RELOAD_CFG, 1, synth, 0, false);
+                v = oneShot(reloadPos, RELOAD_CFG, 1, synth, 0, empty);
             }
-            if (v) reloads.push({ id, local: isLocal, voice: v, start: v.start, dur: WEAPONS[slot].reloadTicks / TICK_RATE, seen: false });
+            const ticks = empty ? WEAPONS[slot].reloadEmptyTicks : WEAPONS[slot].reloadTicks;
+            if (v) reloads.push({ id, local: isLocal, voice: v, start: v.start, dur: ticks / TICK_RATE, seen: false });
         },
 
         cancelReload(id: number): void {

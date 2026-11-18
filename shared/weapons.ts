@@ -6,8 +6,8 @@ import { KNIFE_COOLDOWN_TICKS, KNIFE_WINDUP_TICKS, TICK_RATE } from './constants
  *
  * Timings are counted in the shooter's own processed commands (60 per second), like movement, so
  * client and server agree on them exactly. Every counter travels in one byte of the snapshot: keep
- * magazine, reserve, reload, draw, aim and fire-interval values at or below 255 (a test checks), and
- * the knife's draw, windup and cooldown too.
+ * magazine, reserve, reload (both kinds), draw, aim and fire-interval values at or below 255 (a test
+ * checks), and the knife's draw, windup and cooldown too.
  */
 export interface WeaponDef {
     /** Stable name used by the presentation (models, sounds). */
@@ -23,6 +23,12 @@ export interface WeaponDef {
     readonly reserve: number;
     /** Commands a reload takes; fire is impossible meanwhile. */
     readonly reloadTicks: number;
+    /**
+     * Commands a reload takes when it starts with an empty magazine (the "empty reload": after the new magazine the
+     * bolt or slide must be worked to chamber a round). At least `reloadTicks`; equal when the gun has no separate
+     * empty reload. `reloadTicksOf` (shared/gun.ts) picks between the two.
+     */
+    readonly reloadEmptyTicks: number;
     /** Commands from selecting this weapon until it can fire (the switch). */
     readonly drawTicks: number;
     /** Damage of a torso hit; other body parts scale it by `ZONE_MULTIPLIER` (shared/zones.ts). */
@@ -103,7 +109,7 @@ export const sightDef = (sight: number): SightDef => SIGHTS[sight >= 0 && sight 
 /** Slot 1: the original defender gun, automatic. */
 const RIFLE: WeaponDef = {
     id: 'rifle', label: 'Rifle', auto: true,
-    fireInterval: ticks(100), magSize: 30, reserve: 90, reloadTicks: ticks(2200), drawTicks: ticks(400),
+    fireInterval: ticks(100), magSize: 30, reserve: 90, reloadTicks: ticks(2200), reloadEmptyTicks: ticks(2700), drawTicks: ticks(400),
     bodyDamage: 34,
     spreadStill: 0.004, spreadCrouched: 0.002, spreadMoving: 0.035, spreadAir: 0.06,
     recoilRecoverTicks: 9, recoilDecayTicks: 2,
@@ -123,7 +129,7 @@ const RIFLE: WeaponDef = {
 /** Slot 2: semi-automatic sidearm. A sharp kick per shot that recovers quickly between taps. */
 const PISTOL: WeaponDef = {
     id: 'pistol', label: 'Pistol', auto: false,
-    fireInterval: ticks(150), magSize: 12, reserve: 36, reloadTicks: ticks(1400), drawTicks: ticks(250),
+    fireInterval: ticks(150), magSize: 12, reserve: 36, reloadTicks: ticks(1400), reloadEmptyTicks: ticks(1400), drawTicks: ticks(250),
     bodyDamage: 26,
     spreadStill: 0.003, spreadCrouched: 0.0015, spreadMoving: 0.02, spreadAir: 0.05,
     // Recovery starts one command after the minimum interval and undoes a row every command:

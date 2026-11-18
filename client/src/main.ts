@@ -4,7 +4,7 @@ import {
     SHOT_RANGE, STEP_DISTANCE, STEP_LOUD_CROUCH, STEP_LOUD_RUN, STEP_LOUD_WALK, TICK_DT
 } from '@shared/constants';
 import {
-    GUN_DRY, GUN_RELOAD, MELEE_SLASH, MELEE_SWING, aimFraction, copyLoadout, createLoadout, heldGun, heldWeapon,
+    GUN_DRY, GUN_RELOAD, MELEE_SLASH, MELEE_SWING, aimFraction, copyLoadout, createLoadout, emptyReload, heldGun, heldWeapon, reloadProgress,
     fillReserves, justSwitched, recoilPitch, recoilScale, recoilYaw, resetLoadout, sameLoadout, shotDirectionFor, spreadAngle, stepLoadout
 } from '@shared/gun';
 import { DEFENDER_KNIFE, GUN_COUNT, SLOT_COUNT, SLOT_KNIFE, WEAPONS, adsZoomOf, slotLabel } from '@shared/weapons';
@@ -674,7 +674,7 @@ async function start(): Promise<void> {
                 audio.step(ev.pos, ev.loud, false);
                 presenter.footstep(ev.id, ev.pos, ev.loud);
             }
-            else if (ev.kind === 'reload') audio.reload(ev.pos, false, ev.weapon ?? 0, ev.id);
+            else if (ev.kind === 'reload') audio.reload(ev.pos, false, ev.weapon ?? 0, ev.id, ev.empty === true);
             else if (ev.kind === 'bombDrop') audio.bomb('drop', ev.pos, false);
             else if (ev.kind === 'bombPickup') audio.bomb('pickup', ev.pos, false);
             else {
@@ -776,7 +776,7 @@ async function start(): Promise<void> {
     const local: LocalView = {
         id: 0, team: 'ghosts', health: MAX_HEALTH, armor: MAX_ARMOR, alive: false, respawnIn: 0, connected: false, ping: 0, firing: false, vis: 0,
         canAct: false, carrier: false, siteNoBomb: false, action: 0, showScores: false, weapon: 0, weapons: [] as WeaponSlotView[],
-        mag: WEAPONS[0].magSize, magSize: WEAPONS[0].magSize, reserve: 0, reload: 0, spread: 0, draw: 0, aim: 0, sight: 0,
+        mag: WEAPONS[0].magSize, magSize: WEAPONS[0].magSize, reserve: 0, reload: 0, reloadEmpty: false, spread: 0, draw: 0, aim: 0, sight: 0,
         yaw: 0, spectating: null, spectateId: -1, overview: false
     };
     const slotViews = local.weapons as WeaponSlotView[];
@@ -923,7 +923,7 @@ async function start(): Promise<void> {
                     presenter.shot(eyePos, shotEnd, true, loadout.slot);
                     audio.gunshot(eyePos, true, loadout.slot, suppressed);
                     audio.impact(shotEnd);
-                } else if (r === GUN_RELOAD) audio.reload(curr.pos, true, loadout.slot, net.id);
+                } else if (r === GUN_RELOAD) audio.reload(curr.pos, true, loadout.slot, net.id, emptyReload(loadout.guns[loadout.slot]));
                 else if (r === GUN_DRY) audio.dryFire();
                 // The defender knife: the same windup and landing as the ghosts' (only the damage differs).
                 else if (r === MELEE_SWING) {
@@ -1021,7 +1021,8 @@ async function start(): Promise<void> {
         local.mag = gun ? gun.mag : 0;
         local.magSize = held ? held.magSize : 0;
         local.reserve = gun ? gun.reserve : 0;
-        local.reload = gun && held && gun.reload > 0 ? 1 - gun.reload / held.reloadTicks : 0;
+        local.reload = gun && held ? reloadProgress(gun, held) : 0;
+        local.reloadEmpty = gun !== null && emptyReload(gun);
         // A reload that stops early (switch, death, round reset) cuts its sound off; one that completes does not.
         const reloadingNow = alive && local.reload > 0;
         if (reloadingShown && !reloadingNow) audio.cancelReload(net.id);
