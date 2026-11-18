@@ -1,6 +1,6 @@
 # Stillblade — handoff
 
-Last rewritten 2026-11-15; **status updated 2026-11-18: everything through wave 5 is on `main`, pushed and deployed (packages A to H, L, M parts 1 and 2, N; protocol 15). Two later commits are merged into the local `main` and NOT pushed: the real pistol recordings (package N follow-up, audio only) and package O (realistic soldiers, first-person arms, the downloaded AR Scope; no protocol change, 460 tests, typecheck clean; see "Package O" at the end). Pushing them needs no server restart (protocol unchanged).** The live site rebuilds from `main` on every push; the game server runs on the owner's PC behind a Cloudflare Tunnel and must run a `main` with the same protocol as the site. **Nothing from waves 3 to 6 has been played with a mouse, seen on a real GPU or listened to**: animations and models were judged from Blender renders and headless Chrome (software GL) screenshots, sounds from measured levels. Older sections below describe each package as it was when built, so some numbers in them (test counts, protocol versions, "not on `main`") are historical; **"What to do next" near the end is the current summary, read it first.** The owner's live server holds port 8080 on his PC, so `npm run dev` needs that server stopped first.
+Last rewritten 2026-11-15; **status updated 2026-11-18: everything through wave 5 is on `main`, pushed and deployed (packages A to H, L, M parts 1 and 2, N; protocol 15). Two later commits are merged into the local `main` and NOT pushed: the real pistol recordings (package N follow-up, audio only) and package O (realistic soldiers, first-person arms, the downloaded AR Scope; no protocol change, 460 tests, typecheck clean; see "Package O" at the end). Pushing them needs no server restart (protocol unchanged). A follow-up after the owner's play test (first-person arms rebuilt, guns closer, the field of view setting fixed) is on `claude/realistic-soldiers-bcc8fb`, not reviewed or merged: "Package O follow-up" at the end.** The live site rebuilds from `main` on every push; the game server runs on the owner's PC behind a Cloudflare Tunnel and must run a `main` with the same protocol as the site. **Nothing from waves 3 to 6 has been played with a mouse, seen on a real GPU or listened to**: animations and models were judged from Blender renders and headless Chrome (software GL) screenshots, sounds from measured levels. Older sections below describe each package as it was when built, so some numbers in them (test counts, protocol versions, "not on `main`") are historical; **"What to do next" near the end is the current summary, read it first.** The owner's live server holds port 8080 on his PC, so `npm run dev` needs that server stopped first.
 
 **If you are a new session:** this file tells you what exists, what has and has not been verified, the rules that must not be broken, and how the owner wants work done. `ROADMAP.md` tells you what to build next and what is already decided. Read both before changing anything. `DEPLOY.md` covers hosting. You need nothing else: no memory files or earlier conversations are assumed.
 
@@ -881,3 +881,57 @@ distance and in Warehouse's dark corners; the tier switch rebuilding characters 
 remote characters during real fights (all third-person poses in the screenshots are staged on practice targets); the
 first-person arms at real screen sizes with sway, kick and draw (in the software-GL stills the hands still look a little angular when the pistol brings them close); whether the left hand clips the AK's magazine during
 the reload; the aimed 2x view on other screen shapes; `review.py`.
+
+### Package O follow-up: first-person arms rebuilt (2026-11-18)
+
+The owner's play test: "the hand looks awful while holding gun, the left arm seems broken; the gun needs to come a
+little closer and to the left; same for the ghost's knife". Built on the same branch after the merge (no protocol
+change, `git diff main -- shared server` empty, 461 tests, typecheck clean). Before and after screenshots at the
+default and the widest field of view: `docs/review/viewmodel/` (software GL stills only).
+
+- **Why the arm looked broken:** the left shoulder sat in front of the camera, so the arm crossed the view sideways
+  with the rolled sleeve big at the bottom; and the forearm had no twist bones, so every bit of wrist roll twisted the
+  whole forearm (`twist_forearm` 0.8) and wrung the skin at the elbow.
+- **Arms** (`viewmodel.py`): each arm is now placed by its forearm direction and upper-arm direction at the idle hold
+  (`ARMS`, camera space); the shoulder and elbow pole follow from them, off screen. Each forearm comes in from a bottom
+  corner as one straight line to the hand. Two forearm twist bones per arm (`ForeTwist1/2`, from the soldier's
+  `lowerarm_twist_02/01`, first person only, `soldier.FP_TWIST`) take 50% and 85% of the hand's roll, the forearm 10%
+  (`TWIST_SHARE`). The build log prints each clip's largest wrist bend and roll.
+- **Grips:** rifle support hand cradling the handguard from below (`support_frame`: palm up leaning 20 degrees toward
+  the left, fingers over the far side, thumb along the near side, turned halfway toward the forearm's line); index
+  finger on the trigger; pistol thumbs forward with the support hand cupping from below (`PISTOL_SUPPORT`); the knife's
+  handle lies diagonally in the palm (`KNIFE_DIAGONAL` 45 degrees), blade forward and slightly up, and the shoulder
+  reaches into the slash. Hands get 80% of the arms' triangles (the sleeves now barely show); the budget is unchanged
+  (5,000 defender, 4,500 ghost).
+- **Framing** (matched to a reference screenshot the owner sent from another tactical shooter): the gun is big and
+  close, filling the right half of the screen; the optic sits just right of and below the crosshair; the muzzle points
+  in toward the centre; the stock runs off the bottom-right. The left forearm comes nearly straight up from the bottom
+  edge to the handguard (no elbow or long arm on screen) and the right hand sits low on the grip. Rifle hip 0.21 m in
+  front of the eye (was 0.40), turned 15 degrees in; pistol 0.18 m (was 0.33), turned 12 degrees in, 2 degrees down,
+  both forearms from the bottom edge; knife closer and further left. During the rifle reload the gun is lifted and
+  tipped up (and the shoulders follow) so the magazine change happens in view. `viewmodel.py HIP` and
+  `presenter.ts VM_LOOKS.hip` match.
+- **Aimed arms:** new one-frame clips `<rig>_aim_<sight>` hold the same grip with the arms solved from shoulders that
+  keep their place relative to the eye (leaning toward a hand only when it would be out of reach, `AIM_REACH`);
+  `presenter.ts` lays them over the idle pose by the aim progress (`VmRig.blend`). The gun's aimed position is computed
+  exactly as before (the aim point on the eye), so the sight picture is unchanged.
+- **Field of view:** the settings' field of view did nothing (`main.ts` reset the camera to 74 every frame); it now sets
+  the base and aiming zooms from it. The weapon is drawn as if at 74 degrees whatever the setting (`presenter.ts
+  VM_FOV`): its root is scaled across the view by tan(fov/2) / tan(37 degrees), which projects exactly like a 74-degree
+  camera, keeps the screen centre (aimed sights) and keeps the muzzle where tracers start; no second camera, so the
+  High tier's post-processing is untouched. The arms' skinned normals use the matrix's cofactor so the scale does not
+  bend the lighting (`weapons.ts fovLockNormals`, an override of the engine's `normalCoreVS` chunk for the three weapon
+  materials; it warns and falls back if a future engine words that line differently).
+- **2x scope:** when aimed the housing gets only 35% of the scope's zoom (`VM_SCOPE_ZOOM_SHARE`), so it covers about
+  two thirds of what it did; the lens and reticle stay centred.
+- **Third person:** looked at in the existing stills (`docs/review/soldiers/60-62`); the left hand reaches the AK's
+  handguard and nothing reads as broken at play distance, so it was not changed.
+- **Previews:** `viewmodel.py -- --rig <name> --preview <dir>` renders each rig's poses in Blender from the eye at 74
+  degrees, a close-up of the hands and a view from the left (about 10 s a rig), for tuning without the game.
+
+**Not verified:** anything on a real GPU, in motion or with a mouse; sway, kick and draw with the new framing; whether
+the aimed-arms blend looks smooth while aiming in and out (only the end states were captured); the reload clips at the
+new framing beyond the three frozen frames per gun; the hands are still a little angular close up (the pistol shows it
+most; more triangles would need a bigger budget); the knife swing's slash frame in the game (the capture froze after
+it); other screen shapes than 1366 x 768; the lighting on the arms at the widest field of view on a real GPU (the
+normal fix is in the shader, seen only in SwiftShader).

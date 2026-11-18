@@ -37,6 +37,8 @@ client moves the whole rig for aiming, drawing, firing kick and sway, and the cl
 For the knife the rig's origin is the camera itself; the clips carry the whole swing.
 
 Clips (30 fps, every bone keyed on every frame, linear):
+  aimed  : <rig>_aim_<sight> (one frame): the idle hold seen from the aim point, the arms solved again from
+           shoulders that keep their place relative to the eye (presenter.ts blends idle -> aim by the aim progress)
   rifle  : idle; reload (2.2 s = the rule's reload; magazine out at 0.3 s, new one seated at 1.4 s, bolt pulled at
            1.9 s and released at 2.07 s: the times of synthReload in client/src/audio.ts)
   pistol : idle; reload (1.4 s; magazine drops at 0.15 s, new one seated at 0.7 s, slide pulled at 1.0 s and released
@@ -70,31 +72,49 @@ GRIP_ALONG_HAND = 0.6
 HAND_SCALE = 1.0          # real hands (package O); the cartoon SWAT hands were drawn at 0.8
 
 FINGERS = ('Index', 'Middle', 'Ring', 'Pinky')
-ARM_BONES = ['UpperArm', 'LowerArm', 'Wrist'] + [f'{f}{k}' for f in FINGERS for k in (2, 3, 4)] + \
-    [f'Thumb{k}' for k in (1, 2, 3)]
+HAND = ['Wrist'] + [f'{f}{k}' for f in FINGERS for k in (2, 3, 4)] + [f'Thumb{k}' for k in (1, 2, 3)]
+TWIST = ['ForeTwist1', 'ForeTwist2']
+ARM_BONES = ['UpperArm', 'LowerArm'] + HAND + TWIST
+# Share of the hand's roll (about the forearm) taken by the forearm itself and by its two twist bones (soldier.py
+# FP_TWIST: mid forearm, near the wrist), so neither the elbow nor the wrist wrings.
+TWIST_SHARE = {'LowerArm': 0.1, 'ForeTwist1': 0.5, 'ForeTwist2': 0.85}
 
 # Hip poses of the guns in PlayCanvas camera space (position, Euler degrees): presenter.ts VM_LOOKS[..].hip.
 HIP = {
-    'rifle': ((0.15, -0.165, -0.40), (0, 3, -3)),
-    'pistol': ((0.11, -0.15, -0.33), (0, 3, -2)),
+    'rifle': ((0.155, -0.155, -0.21), (2, 15, -6)),
+    'pistol': ((0.085, -0.105, -0.18), (-2, 12, -3)),
 }
 
-# Shoulders and elbow pole directions in camera space (Blender axes: X right, Y forward, Z up).
-SHOULDERS = {
-    'rifle': {'R': (0.17, 0.0, -0.25), 'L': (-0.08, 0.22, -0.27)},
-    'pistol': {'R': (0.17, -0.02, -0.25), 'L': (-0.15, 0.0, -0.26)},
-    'knife': {'R': (0.17, -0.02, -0.25), 'L': (-0.17, -0.02, -0.25)},
+# The arms, per rig and side, in camera space (Blender axes: X right, Y forward, Z up): the forearm's direction from
+# elbow to wrist and the upper arm's from elbow to shoulder, at the rig's first pose (idle). The shoulder is placed from
+# them (off screen, below the view) and kept for every clip; the elbow bends the same way (its pole). This is how
+# shooters frame their arms: each forearm comes in from a bottom corner as one straight line to the hand, the elbow
+# low and a little out, the upper arm out of view.
+ARMS = {
+    'rifle': {'R': {'fore': (-0.15, 0.45, 0.88), 'upper': (0.30, -0.85, -0.40)},
+              'L': {'fore': (0.08, 0.30, 0.95), 'upper': (-0.35, -0.85, -0.40)}},
+    'pistol': {'R': {'fore': (-0.12, 0.50, 0.86), 'upper': (0.30, -0.85, -0.40)},
+               'L': {'fore': (0.22, 0.50, 0.84), 'upper': (-0.35, -0.85, -0.40)}},
+    'knife': {'R': {'fore': (-0.30, 0.55, 0.78), 'upper': (0.45, -0.85, -0.25)},
+              'L': {'fore': (0.30, 0.60, 0.74), 'upper': (-0.60, -0.70, -0.20)}},
 }
-POLES = {'R': (0.8, -0.3, -1.0), 'L': (-0.8, -0.3, -1.0)}
 
 # Finger curls (degrees for bones 2, 3, 4 of each finger; thumb: opposition about the fingers' direction, then
 # curl of Thumb2 and Thumb3), per hold.
 GRIP_CURL = {f: (78, 85, 50) for f in FINGERS}
-TRIGGER_CURL = dict(GRIP_CURL, Index=(28, 38, 20))
+TRIGGER_CURL = dict(GRIP_CURL, Index=(45, 55, 30))
 WRAP_CURL = {f: (70, 75, 45) for f in FINGERS}
 PINCH_CURL = {'Index': (45, 55, 30), 'Middle': (40, 50, 30), 'Ring': (35, 45, 25), 'Pinky': (30, 40, 20)}
 RELAX_CURL = {f: (25, 30, 15) for f in FINGERS}
 THUMB_GRIP = (55, 25, 20)
+# Pistol, thumbs forward: the firing hand's thumb lies along the frame's left side over the support hand's, which points
+# forward under the slide.
+THUMB_FWD_R = (20, 10, 5)
+THUMB_FWD_L = (0, 5, 0)
+# Pistol support hand: cupping the firing hand from below and the left (offset from the grip, gun frame, metres), and
+# its pitch (degrees, negative: fingers down round the front of the firing hand's fingers).
+PISTOL_SUPPORT = (-0.034, 0.016, -0.03)
+PISTOL_SUPPORT_PITCH = -14
 THUMB_RELAX = (20, 10, 5)
 
 
@@ -261,8 +281,10 @@ def join(objs):
 # Posing
 
 class Rig:
-    def __init__(self, name, arm, marks, cam_to_rig):
+    def __init__(self, name, arm, marks, cam_to_rig, aims=None):
         self.name = name
+        # Per sight: the aim point (the eye when aimed with it) in the gun's frame.
+        self.aims = aims or {}
         self.arm = arm
         self.data = arm.data
         self.marks = marks
@@ -272,11 +294,33 @@ class Rig:
         self.palm0 = {}
         for side in 'RL':
             self.grip0[side], self.palm0[side] = rk.hand_grip_frame(self.data, side, GRIP_PALM_OFFSET, GRIP_ALONG_HAND)
-        self.shoulder = {sd: cam_to_rig @ Vector(p) for sd, p in SHOULDERS[name].items()}
-        self.pole = {sd: (cam_to_rig.to_3x3() @ Vector(p)).normalized() for sd, p in POLES.items()}
+        self.shoulder = {}
+        self.pole = {}
+        lo = self.rest['LowerArm.R'].translation
+        self.len_upper = (lo - self.rest['UpperArm.R'].translation).length
+        self.len_fore = (self.rest['Wrist.R'].translation - lo).length
         self.max_reach = {'R': 0.0, 'L': 0.0}
+        self.max_bend = {'R': 0.0, 'L': 0.0}
+        self.max_roll = {'R': 0.0, 'L': 0.0}
         self.max_at = {'R': 0.0, 'L': 0.0}
         self.t = 0.0
+
+    def wrist_target(self, side, grip):
+        """The wrist's matrix for a hand holding `grip` (rig space)."""
+        return grip @ Matrix.Scale(HAND_SCALE, 4) @ self.grip0[side].inverted() @ self.rest[f'Wrist.{side}']
+
+    def place_arms(self, grips):
+        """Shoulders and elbow poles from ARMS for the first pose's hand targets `grips` {side: grip frame}."""
+        rot = self.cam_to_rig.to_3x3()
+        cam = self.cam_to_rig.inverted()
+        for side in 'RL':
+            spec = ARMS[self.name][side]
+            w = self.wrist_target(side, grips[side]).translation
+            elbow = w - (rot @ Vector(spec['fore']).normalized()) * self.len_fore
+            self.shoulder[side] = elbow + (rot @ Vector(spec['upper']).normalized()) * self.len_upper
+            self.pole[side] = (elbow - self.shoulder[side]).normalized()
+            log(self.name, side, 'shoulder (camera)', tuple(round(x, 3) for x in cam @ self.shoulder[side]),
+                'elbow', tuple(round(x, 3) for x in cam @ elbow), 'wrist', tuple(round(x, 3) for x in cam @ w))
 
     def cam(self, m):
         """A camera-space frame (Blender axes) in rig space."""
@@ -298,6 +342,7 @@ class Rig:
     def pose_arm(self, mats, side, grip, curl, thumb, shift=None):
         data = self.data
         names = [f'{a}.{side}' for a in ARM_BONES]
+        hand = [f'{a}.{side}' for a in HAND[1:]]
         # `shift`: the shoulder reaching forward (camera space), for a hand going further than the arm allows.
         sh = self.shoulder[side] + (self.cam_to_rig.to_3x3() @ Vector(shift) if shift else Vector())
         delta = Matrix.Translation(sh - self.rest[f'UpperArm.{side}'].translation)
@@ -305,13 +350,13 @@ class Rig:
             mats[n] = delta @ self.rest[n]
         w0 = self.rest[f'Wrist.{side}']
         # The hand is scaled about the wrist; the grip point moves in with it, so aim the wrist at the scaled grip.
-        wt = grip @ Matrix.Scale(HAND_SCALE, 4) @ self.grip0[side].inverted() @ w0
+        wt = self.wrist_target(side, grip)
         reach = rk.solve_arm(data, mats, side, wt.translation, self.pole[side])
         if reach > self.max_reach[side]:
             self.max_reach[side], self.max_at[side] = reach, self.t
         mats[f'Wrist.{side}'] = wt
-        rk.twist_forearm(data, mats, side, self.palm0[side], 0.8)
-        for n in names[3:]:
+        self.twist(mats, side)
+        for n in hand:
             mats[n] = wt @ w0.inverted() @ self.rest[n]
         # Fingers curl toward the palm about the hand's pinky-to-index axis.
         r, f, u = (grip.col[i].to_3d().normalized() for i in range(3))
@@ -328,6 +373,35 @@ class Rig:
         rk.rotate_about(mats, tchain[2:], mats[tchain[2]].to_translation(), axis, math.radians(c3))
 
 
+    def twist(self, mats, side):
+        """Spreads the hand's roll about the forearm over LowerArm and the twist bones (TWIST_SHARE), and records the
+        largest roll and the largest bend of the wrist off the forearm's line (for the log)."""
+        lo, wr = f'LowerArm.{side}', f'Wrist.{side}'
+        K = mats[lo].to_translation()
+        T = mats[wr].to_translation()
+        axis = (T - K).normalized()
+        to_lo = mats[lo].to_3x3() @ self.rest[lo].to_3x3().inverted()
+        to_wr = mats[wr].to_3x3() @ self.rest[wr].to_3x3().inverted()
+        hand_dir = (to_wr @ self.grip0[side].col[1].to_3d()).normalized()
+        self.max_bend[side] = max(self.max_bend[side], math.degrees(axis.angle(hand_dir)))
+        fa = to_lo @ self.palm0[side]
+        ha = to_wr @ self.palm0[side]
+        fa = fa - axis * fa.dot(axis)
+        ha = ha - axis * ha.dot(axis)
+        ang = 0.0
+        if fa.length > 1e-6 and ha.length > 1e-6:
+            fa.normalize()
+            ha.normalize()
+            ang = math.atan2(fa.cross(ha).dot(axis), fa.dot(ha))
+        self.max_roll[side] = max(self.max_roll[side], abs(math.degrees(ang)))
+        base = mats[lo].copy()
+        for n, share in TWIST_SHARE.items():
+            b = f'{n}.{side}'
+            m = base if n == 'LowerArm' else base @ self.rest[lo].inverted() @ self.rest[b]
+            h = m.to_translation()
+            mats[b] = Matrix.Translation(h) @ Matrix.Rotation(ang * share, 4, axis) @ Matrix.Translation(-h) @ m
+
+
 def at(frame, m):
     return frame @ m
 
@@ -335,12 +409,16 @@ def at(frame, m):
 def clip(rig, name, seconds, fn):
     """Samples fn(t) -> pose at FPS over `seconds` and writes the action `name`."""
     n = max(1, int(round(seconds * FPS)))
+    rig.max_bend = {'R': 0.0, 'L': 0.0}
+    rig.max_roll = {'R': 0.0, 'L': 0.0}
     frames = []
     for i in range(n + 1):
         rig.t = min(seconds, i / FPS)
         frames.append((i, fn(rig.t)))
     act = rk.write_action(rig.arm, name, frames)
-    log(rig.name, 'clip', name, 'frames', n + 1, 'seconds', round(n / FPS, 3))
+    log(rig.name, 'clip', name, 'frames', n + 1, 'seconds', round(n / FPS, 3), 'largest wrist bend R/L',
+        round(rig.max_bend['R']), round(rig.max_bend['L']), 'roll about the forearm R/L', round(rig.max_roll['R']),
+        round(rig.max_roll['L']))
     return act
 
 
@@ -349,11 +427,32 @@ def scaled(m, s):
 
 
 HIDDEN = 0.001
-# Rifle support hand: roll of the hand under the handguard (degrees; negative turns the palm toward the gun's right)
-# and how far inside the handguard's half height the grip point sits. Bolt carrier travel when the handle is pulled.
-SUPPORT_ROLL = -35
-SUPPORT_INSET = 0.016
+# Rifle support hand, cradling the handguard from below: the palm faces up, leaning this far (degrees) toward the
+# gun's left (the side the forearm comes from); the fingers curl over the far side, the thumb lies along the near
+# side. SUPPORT_ALONG: how far the hand turns from straight across the handguard toward the forearm's line (0..1),
+# so the wrist is not bent sideways. SUPPORT_INSET: the grip point inside the handguard's surface (m).
+SUPPORT_TILT = 20
+SUPPORT_ALONG = 0.5
+SUPPORT_INSET = 0.02
+# Right hand on the pistol grip: turned about the grip's axis (degrees, positive: knuckles toward the gun's left) so
+# the hand lines up with a forearm coming from the lower right.
+GRIP_R_YAW = 0
 BOLT_TRAVEL = 0.07
+# Aimed arms: the largest reach (fraction of the arm's length) before a shoulder leans toward its hand.
+AIM_REACH = 0.985
+
+
+def support_frame(hg, half, fore):
+    """The rifle's support grip frame (gun frame): the handguard's centre `hg`, its half size `half`, the forearm's
+    direction `fore` (gun frame)."""
+    a = math.radians(SUPPORT_TILT)
+    n = Vector((-math.sin(a), 0.0, math.cos(a)))
+    across = Vector((0.0, 1.0, 0.0)).cross(n)
+    f = fore - n * fore.dot(n)
+    fwd = (across * (1 - SUPPORT_ALONG) + f.normalized() * SUPPORT_ALONG).normalized()
+    up = n.cross(fwd)
+    r = abs(n.x) * half.x + abs(n.z) * half.z
+    return rk.frame_from(n, fwd, up, hg - n * (r - SUPPORT_INSET))
 
 
 def build_gun_clips(rig):
@@ -362,7 +461,7 @@ def build_gun_clips(rig):
     gax = mk['grip_axis']
     # Right hand on the pistol grip, raked like the grip; trigger finger along the guard.
     # A little low on the grip so the web of the hand sits under the slide or receiver.
-    grip_r = Matrix.Translation(gax * -0.014) @ tilt_to(gax)
+    grip_r = Matrix.Translation(gax * -0.014) @ tilt_to(gax) @ Matrix.Rotation(math.radians(GRIP_R_YAW), 4, 'Z')
     max_ = mk['mag_axis']
     mag_rest = Matrix.Translation(mk['mag_centre'])
     rest_parts = {'mag': mag_rest.copy(), 'sup': Matrix.Translation(rig.rest['sup'].translation)}
@@ -376,11 +475,8 @@ def build_gun_clips(rig):
     if rifle:
         # Left hand under the handguard: index finger forward along it, palm up and turned toward the gun's right,
         # fingers wrapping round its right side.
-        hg, half = mk['handguard'], mk['handguard_half']
-        a = math.radians(SUPPORT_ROLL)
-        fwd, up = Vector((math.cos(a), 0.0, math.sin(a))), Vector((0.0, 1.0, 0.0))
-        palm = fwd.cross(up)
-        support = rk.frame_from(palm, fwd, up, hg - palm * max(0.0, half.z - SUPPORT_INSET))
+        fore_l = rig.cam_to_rig.to_3x3() @ Vector(ARMS['rifle']['L']['fore']).normalized()
+        support = support_frame(mk['handguard'], mk['handguard_half'], fore_l)
         # Holding the magazine: palm on its left side, fingers round its front.
         mag_grip = Matrix.Translation(mk['mag_centre'] + Vector((-0.004, 0.0, -0.005))) @ tilt_to(max_)
         # Pulling the charging handle (right side): the left hand comes under the gun, palm toward the receiver,
@@ -391,31 +487,53 @@ def build_gun_clips(rig):
         support_curl, support_thumb = WRAP_CURL, THUMB_GRIP
     else:
         # Support hand wrapped over the right hand's fingers on the grip's left side.
-        support = Matrix.Translation(Vector((-0.03, 0.012, -0.022))) @ tilt_to(gax) @ Matrix.Rotation(math.radians(-12), 4, 'Y')
+        support = Matrix.Translation(Vector(PISTOL_SUPPORT)) @ tilt_to(gax) @ \
+            Matrix.Rotation(math.radians(PISTOL_SUPPORT_PITCH), 4, 'X') @ Matrix.Rotation(math.radians(-12), 4, 'Y')
         # Holding the new magazine by its base, palm up.
         mag_grip = Matrix.Translation(mk['mag_bottom'] + Vector((0, 0, -0.03))) @ rk.frame_from(
             Vector((0, 0, 1)), Vector((0, 1, 0)), Vector((-1, 0, 0)), Vector())
         rear = mk['slide_rear']
         bolt_grip = Matrix.Translation(rear + Vector((0.0, 0.0, 0.035))) @ rk.frame_from(
             Vector((0, 0, -1)), Vector((1, 0, 0)), Vector((0, -1, 0)), Vector())
-        support_curl, support_thumb = WRAP_CURL, THUMB_GRIP
+        support_curl, support_thumb = WRAP_CURL, THUMB_FWD_L
+    thumb_r = THUMB_GRIP if rifle else THUMB_FWD_R
     hand_to_mag = mag_grip.inverted() @ mag_rest
+    rig.place_arms({'R': grip_r, 'L': support})
 
     def gun_at(t, keys):
         return rk.offset_frame(*rk.keyed(keys, t))
 
     def idle(t):
         return rig.pose(Matrix(), rest_parts, {'R': grip_r, 'L': support},
-                        {'R': TRIGGER_CURL, 'L': support_curl}, {'R': THUMB_GRIP, 'L': support_thumb})
+                        {'R': TRIGGER_CURL, 'L': support_curl}, {'R': thumb_r, 'L': support_thumb})
 
     clip(rig, f'{rig.name}_idle', 1 / FPS, idle)
+    # Aimed with each sight: the gun stays where the client puts it (the aim point on the eye), and the arms are
+    # solved again from shoulders that stay put relative to the eye, so the arms do not slide into view with the gun.
+    # The client blends from idle to these by the aim progress.
+    hip_cam = rig.cam_to_rig.inverted()
+    hip_shoulder, hip_pole = dict(rig.shoulder), dict(rig.pole)
+    for sight, ap in sorted(rig.aims.items()):
+        to_rig = Matrix.Translation(ap)
+        rig.shoulder = {sd: to_rig @ hip_cam @ p for sd, p in hip_shoulder.items()}
+        rig.pole = {sd: (hip_cam.to_3x3() @ v).normalized() for sd, v in hip_pole.items()}
+        # The aimed gun is further out than at the hip (the eye sits behind the sight): where a hand would be out of
+        # reach, its shoulder leans toward it along the arm's line (as the body leans into the stock).
+        for sd, g in (('R', grip_r), ('L', support)):
+            w = rig.wrist_target(sd, g).translation
+            d = w - rig.shoulder[sd]
+            reach = AIM_REACH * (rig.len_upper + rig.len_fore)
+            if d.length > reach:
+                rig.shoulder[sd] = rig.shoulder[sd] + d.normalized() * (d.length - reach)
+        clip(rig, f'{rig.name}_aim_{sight}', 1 / FPS, idle)
+    rig.shoulder, rig.pole = hip_shoulder, hip_pole
 
     if rifle:
         # Brought in toward the middle of the view, muzzle up, canted so the magazine well faces the left hand.
-        G1 = (-0.09, -0.03, -0.02, -2, 8, 32)
-        G1b = (-0.09, -0.03, -0.012, 1, 8, 32)             # magazine seated: a small jolt up
-        G2 = (-0.06, -0.02, -0.02, -2, 4, -14)             # rolled the other way: the charging handle faces the hand
-        G2c = (-0.065, -0.035, -0.02, -4, 6, -17)           # bolt pulled: the gun rocks back
+        G1 = (-0.10, 0.02, 0.07, 12, 10, 32)
+        G1b = (-0.10, 0.02, 0.078, 15, 10, 32)             # magazine seated: a small jolt up
+        G2 = (-0.06, 0.0, 0.04, 6, 4, -14)             # rolled the other way: the charging handle faces the hand
+        G2c = (-0.065, -0.015, 0.04, 4, 6, -17)           # bolt pulled: the gun rocks back
         gun_keys = [(0.0, (0, 0, 0, 0, 0, 0)), (0.25, G1), (1.36, G1), (1.42, G1b), (1.55, G1), (1.8, G2), (1.9, G2),
                     (1.97, G2c), (2.07, G2c), (2.1, G2), (2.2, (0, 0, 0, 0, 0, 0))]
         belt = rig.cam(Matrix.Translation(Vector((-0.02, 0.4, -0.66))) @ Matrix.Rotation(math.radians(-30), 4, 'X'))
@@ -455,7 +573,9 @@ def build_gun_clips(rig):
                 parts['mag'] = left @ hand_to_mag
             # The left shoulder reaches forward and across for the charging handle.
             sw = rk.keyed([(0.0, (0.0,)), (1.55, (0.0,)), (1.8, (1.0,)), (2.07, (1.0,)), (2.2, (0.0,))], t)[0]
-            shift = {'L': (0.08 * sw, 0.06 * sw, 0.02 * sw)}
+            # Both shoulders follow the gun up while it is raised for the reload.
+            rw = rk.keyed([(0.0, (0.0,)), (0.25, (1.0,)), (2.05, (1.0,)), (2.2, (0.0,))], t)[0]
+            shift = {'L': (0.08 * sw, 0.06 * sw + 0.05 * rw, 0.02 * sw + 0.07 * rw), 'R': (0.0, 0.05 * rw, 0.07 * rw)}
             holding = 0.28 <= t < 1.45
             lc = WRAP_CURL if holding else (PINCH_CURL if 1.75 <= t < 2.12 else (RELAX_CURL if 0.2 <= t < 0.28 else support_curl))
             return rig.pose(gun, parts, {'R': gun @ grip_r, 'L': left}, {'R': TRIGGER_CURL, 'L': lc},
@@ -508,11 +628,15 @@ def build_gun_clips(rig):
             else:
                 parts['mag'] = left @ hand_to_mag
             sw = rk.keyed([(0.0, (0.0,)), (0.78, (0.0,)), (0.95, (1.0,)), (1.2, (1.0,)), (1.4, (0.0,))], t)[0]
-            shift = {'L': (0.0, 0.07 * sw, 0.03 * sw)}
+            # Both shoulders reach forward while the gun is pushed out to rack the slide.
+            rw = rk.keyed([(0.0, (0.0,)), (0.12, (1.0,)), (1.25, (1.0,)), (1.4, (0.0,))], t)[0]
+            shift = {'L': (0.03 * sw, 0.12 * sw, 0.05 * sw),
+                     'R': (-0.04 * sw, 0.09 * sw + 0.04 * rw, 0.03 * sw + 0.02 * rw)}
             lc = support_curl if (t < 0.08 or t >= 1.3) else (PINCH_CURL if 0.9 <= t < 1.22 else
                                                                (WRAP_CURL if 0.4 <= t < 0.76 else RELAX_CURL))
             return rig.pose(gun, parts, {'R': gun @ grip_r, 'L': left}, {'R': TRIGGER_CURL, 'L': lc},
-                            {'R': THUMB_GRIP, 'L': THUMB_GRIP if 0.4 <= t < 1.22 or t >= 1.3 else THUMB_RELAX}, shift)
+                            {'R': thumb_r, 'L': support_thumb if t < 0.08 or t >= 1.3 else
+                             (THUMB_GRIP if 0.4 <= t < 1.22 else THUMB_RELAX)}, shift)
 
         clip(rig, f'{rig.name}_reload', 1.4, reload)
 
@@ -530,13 +654,19 @@ def knife_grip(k):
     blade out of the index side, the spine toward the wrist."""
     x, y, z = (k.col[i].to_3d() for i in range(3))
     up, fwd = y, -z
-    return rk.frame_from(fwd.cross(up), fwd, up, k.translation)
+    g = rk.frame_from(fwd.cross(up), fwd, up, k.translation)
+    # The handle lies diagonally across the palm, as a real hand holds it (the wrist then stays nearly straight).
+    return g @ Matrix.Rotation(math.radians(KNIFE_DIAGONAL), 4, 'X')
+
+
+# Degrees the knife's handle turns in the palm (about the palm's normal) from square across it.
+KNIFE_DIAGONAL = float(os.environ.get('SB_KNIFE_DIAGONAL', '45'))
 
 
 def build_knife_clips(rig):
-    REST = knife_frame((0.17, 0.36, -0.16), (-0.18, 0.8, 0.55), (0.0, -0.55, 0.8))
-    BACK = knife_frame((0.27, 0.38, -0.09), (-0.25, -0.1, 1.0), (0.4, -0.9, 0.0))
-    SLASH = knife_frame((0.0, 0.36, -0.24), (-1.0, 0.45, -0.15), (-0.1, 0.2, 1.0))
+    REST = knife_frame((0.12, 0.26, -0.14), (-0.2, 0.92, 0.33), (0.05, -0.35, 0.94))
+    BACK = knife_frame((0.23, 0.32, -0.08), (-0.25, -0.1, 1.0), (0.4, -0.9, 0.0))
+    SLASH = knife_frame((-0.04, 0.32, -0.23), (-1.0, 0.45, -0.15), (-0.1, 0.2, 1.0))
     guard = rig.cam(Matrix.Translation(Vector((-0.24, 0.28, -0.46))) @ Matrix.Rotation(math.radians(-60), 4, 'X'))
     keys = [(0.0, lambda t: REST), (0.2, lambda t: BACK), (0.32, lambda t: SLASH), (0.52, lambda t: REST)]
     # Windup eases out (slows into the top), the slash eases in (fast at the end), the recovery is smooth.
@@ -550,12 +680,16 @@ def build_knife_clips(rig):
                 return rk.lerp_frame(a(t), b(t), eases[i](min(1.0, max(0.0, (t - t0) / (t1 - t0)))))
         return REST
 
-    def pose_at(k):
+    rig.place_arms({'R': knife_grip(REST), 'L': guard})
+
+    def pose_at(k, t=0.0):
+        # The shoulder reaches forward and across into the slash.
+        sw = rk.keyed([(0.0, (0.0,)), (0.2, (0.6,)), (0.32, (1.0,)), (0.52, (0.0,))], t)[0]
         return rig.pose(k, {}, {'R': knife_grip(k), 'L': guard}, {'R': GRIP_CURL, 'L': RELAX_CURL},
-                        {'R': THUMB_GRIP, 'L': THUMB_RELAX})
+                        {'R': THUMB_GRIP, 'L': THUMB_RELAX}, {'R': (-0.08 * sw, 0.12 * sw, 0.04 * sw)})
 
     clip(rig, 'knife_idle', 1 / FPS, lambda t: pose_at(REST))
-    clip(rig, 'knife_swing', 0.52, lambda t: pose_at(frame_at(t)))
+    clip(rig, 'knife_swing', 0.52, lambda t: pose_at(frame_at(t), t))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -664,7 +798,9 @@ def build(rig_name):
     else:
         pos, eul = HIP[rig_name]
         cam_to_rig = rk.pc_pose(pos, eul).inverted()
-    rig = Rig(rig_name, arm, marks, cam_to_rig)
+    bpy.context.view_layer.update()
+    aims = {e.name[len('aim_'):]: e.matrix_world.translation.copy() for e in empties if e.name.startswith('aim_')}
+    rig = Rig(rig_name, arm, marks, cam_to_rig, aims)
     if rig_name == 'knife':
         build_knife_clips(rig)
     else:
@@ -674,6 +810,8 @@ def build(rig_name):
     if rig.max_reach['R'] > 0.995 or rig.max_reach['L'] > 0.995:
         log('WARNING a hand target is out of reach: the arm is straight and the hand floats')
 
+    if PREVIEW_DIR:
+        preview(rig, PREVIEW_DIR, PREVIEW_SHOTS[rig_name])
     rk.set_action(arm, next(a for a in bpy.data.actions if a.name.endswith('_idle')))
     scene.frame_set(0)
     for o in bpy.data.objects:
@@ -691,12 +829,75 @@ def build(rig_name):
     rl.quantize(out)
 
 
+def preview(rig, out_dir, shots):
+    """Camera-view renders (Workbench) of `shots` = [(action name, seconds, file stem)]: the camera at the origin
+    looking along +Y, vertical field of view 74 degrees (the game's default), 1366 x 768; the rig at its hip pose."""
+    scene = bpy.context.scene
+    arm = rig.arm
+    arm.matrix_world = rig.cam_to_rig.inverted()
+    cam_data = bpy.data.cameras.new('preview')
+    cam_data.sensor_fit = 'VERTICAL'
+    cam_data.angle_y = math.radians(74)
+    cam_data.clip_start = 0.01
+    cam = bpy.data.objects.new('preview', cam_data)
+    scene.collection.objects.link(cam)
+    cam.matrix_world = Matrix.Rotation(math.radians(90), 4, 'X')
+    scene.camera = cam
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=0.003, location=(0, 1, 0))
+    dot = bpy.context.active_object
+    scene.render.engine = 'BLENDER_WORKBENCH'
+    scene.display.shading.light = 'STUDIO'
+    scene.display.shading.color_type = 'VERTEX'
+    scene.display.shading.show_cavity = True
+    scene.display.shading.show_object_outline = True
+    scene.render.resolution_x, scene.render.resolution_y = 1366, 768
+    scene.render.resolution_percentage = 60
+    scene.render.image_settings.file_format = 'JPEG'
+    os.makedirs(out_dir, exist_ok=True)
+    for action, t, stem in shots:
+        rk.set_action(arm, bpy.data.actions[action])
+        scene.frame_set(int(round(t * FPS)))
+        scene.render.filepath = os.path.join(out_dir, f'{stem}.jpg')
+        bpy.ops.render.render(write_still=True)
+        # A close-up of the hands: the middle-right of the view at full size.
+        scene.render.resolution_percentage = 100
+        scene.render.use_border = scene.render.use_crop_to_border = True
+        scene.render.border_min_x, scene.render.border_max_x = 0.42, 0.92
+        scene.render.border_min_y, scene.render.border_max_y = 0.0, 0.6
+        scene.render.filepath = os.path.join(out_dir, f'{stem}-close.jpg')
+        bpy.ops.render.render(write_still=True)
+        scene.render.resolution_percentage = 60
+        scene.render.use_border = False
+        # From the left and a little in front of the weapon, to judge the grips.
+        target = rig.cam_to_rig.inverted() @ Vector((0, 0.06, 0)) if rig.name != 'knife' else Vector((0.15, 0.36, -0.16))
+        eye = target + Vector((-0.33, 0.12, 0.06))
+        cam.matrix_world = Matrix.Translation(eye) @ (target - eye).to_track_quat('-Z', 'Y').to_matrix().to_4x4()
+        scene.render.filepath = os.path.join(out_dir, f'{stem}-side.jpg')
+        bpy.ops.render.render(write_still=True)
+        cam.matrix_world = Matrix.Rotation(math.radians(90), 4, 'X')
+    bpy.data.objects.remove(cam)
+    bpy.data.objects.remove(dot)
+    arm.matrix_world = Matrix()
+
+
+PREVIEW_DIR = ''
+PREVIEW_SHOTS = {
+    'rifle': [('rifle_idle', 0, 'rifle-idle'), ('rifle_reload', 0.6, 'rifle-reload-a'), ('rifle_reload', 1.1, 'rifle-reload-b'),
+              ('rifle_reload', 1.95, 'rifle-reload-c')],
+    'pistol': [('pistol_idle', 0, 'pistol-idle'), ('pistol_reload', 0.42, 'pistol-reload-a'), ('pistol_reload', 1.06, 'pistol-reload-c')],
+    'knife': [('knife_idle', 0, 'knife-idle'), ('knife_swing', 0.2, 'knife-windup'), ('knife_swing', 0.3, 'knife-slash')],
+}
+
+
 def main():
     only = None
     if '--' in sys.argv:
         rest = sys.argv[sys.argv.index('--') + 1:]
         if '--rig' in rest:
             only = rest[rest.index('--rig') + 1]
+        if '--preview' in rest:
+            global PREVIEW_DIR
+            PREVIEW_DIR = rest[rest.index('--preview') + 1]
     for name in ('rifle', 'pistol', 'knife'):
         if only and name != only:
             continue
