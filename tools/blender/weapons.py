@@ -79,7 +79,7 @@ SCOPE_DL_REGIONS = {'scope_Material.001': (0.75, 0.375, 1.0, 0.5), 'scope_Materi
 # post; at 0.44, past the stock's end, the gun was seen end-on as a thin strip); the red dot this far behind its glass;
 # the 2x scope this far behind its eyepiece, so the eyepiece fills the view like a real combat scope.
 EYE_BEHIND_GRIP = {'rifle': 0.20, 'pistol': 0.30}
-REDDOT_EYE_RELIEF = 0.26
+REDDOT_EYE_RELIEF = 0.175
 SCOPE_EYE_RELIEF = 0.045
 
 # Atlas layouts: realistic.LAYOUTS (shared with viewmodel.py, whose arms use the swatches).

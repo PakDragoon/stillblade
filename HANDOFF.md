@@ -958,6 +958,44 @@ change, `shared/` and `server/` untouched, 461 tests, typecheck clean. Screensho
 defender's swing in the game frame by frame (the in-game capture freezes one frame; the Blender previews cover the
 swing); the hands are still a little angular close up.
 
+### Package O third follow-up: framing matched to the owner's reference stills (2026-11-18)
+
+After `main` 96834ae (package P). Branch `claude/realistic-soldiers-bcc8fb`, **not merged or pushed**; no protocol
+change, `shared/` and `server/` untouched, 481 tests, typecheck clean. The owner sent seven stills from another
+shooter's gameplay video (`docs/review/viewmodel/reference/`, kept **out of the repository** by a `.gitignore`, as are
+the side-by-side images in `compare3/`). **Legal line:** only where things sit on screen, how big they are, their
+angles and roughly how they move were matched; those are common shooter conventions. Nothing of that game's models,
+skins, sights, animations or HUD was copied: our AK, hands, red dot and HUD are our own.
+
+Pictures (`tools/soldier-shots.mjs --only ref`, headless Chrome, software GL, scratch ports 8099 and 5199, still frames):
+`docs/review/viewmodel/before3/` (main at 96834ae, FOV 74) and `after3/` (FOV 60, 74, 90, 110); side by side with
+the references (reference | before | after, FOV 74) in `compare3/` (local only).
+
+| Reference | Measured there (fraction of width / height from top-left) | Ours after |
+|---|---|---|
+| Hip (`hip-still`, `hip-moving`) | muzzle 0.52 / 0.55; optic x 0.61-0.76, y 0.40-0.65; left sleeve bottom centre x 0.48-0.59; receiver off the bottom-right | muzzle 0.53 / 0.56; red dot x 0.64-0.77, y 0.48-0.61; left forearm x 0.55-0.62; receiver off the bottom-right; the same at FOV 60-110 |
+| Aimed (`ads`) | window x 0.42-0.58, y 0.38-0.60, dot on the centre, housing to the bottom edge | window x 0.43-0.57, y 0.40-0.60, dot on the centre, the receiver's top rail to the bottom edge |
+| Reload (`reload-1-hand-in`, `reload-2-mag`) | gun raised at the right edge, muzzle up, rolled clockwise; left hand up from the bottom centre, open | the same shape: gun upright at x 0.73-0.95, magazine well toward the left hand, hand up from the bottom centre and the magazine taken away down and to the left |
+| Knife (`knife-inspect`) | fist low right, blade up, fingers wrapped, thumb over | fist low right, fingers and thumb closed round the handle (unchanged; our blade leans further left, the owner's earlier 45-degree choice) |
+| Lowered (`lowered-run`) | gun at the bottom centre canted about 30 degrees counter-clockwise | not adopted: our draw already rises from below canted counter-clockwise (`VM_LOOKS.draw`); it cannot be frozen in the capture tool |
+
+What changed:
+- **Hip** (`viewmodel.py HIP['rifle']` = `presenter.ts VM_LOOKS.rifle.hip`): (0.155, -0.168, -0.155) at (2, 11, -1),
+  was (0.155, -0.155, -0.21) at (2, 15, -1): about 35% closer, so the gun is bigger and its barrel steeper on screen,
+  the muzzle still just right of and below the crosshair.
+- **Aimed red dot** (`weapons.py REDDOT_EYE_RELIEF` 0.175, was 0.26): the window is taller and wider; the sight
+  picture is still exact (aim point on the optical axis). Iron and 2x unchanged; only `weapons.glb` changed.
+- **Reload** (`viewmodel.py RELOAD_MAG`, `RELOAD_BOLT`, `RELOAD_BELT`): the gun now rises, its muzzle tips up and to
+  the right and it rolls clockwise (was lowered and canted the other way); the left hand leaves the handguard as the gun
+  rises, comes up open under the magazine well, carries the old magazine away down-left and brings the new one back
+  up. Key times unchanged (magazine out 0.3 s, seated 1.4 s, bolt 1.97-2.07 s), so the sound jolts still line up.
+  `VM_LOOKS.rifle.reload` (only without the arms rig) follows the same shape. The bought animation pack, if the owner
+  buys it, replaces this.
+
+**Not verified:** anything on a real GPU, in motion or with a mouse; the reload played through in the game (frozen
+frames and Blender previews only); the draw against the lowered still (see the table); the pistol and knife framing
+against the references (none were sent for the pistol; the knife only for its grip).
+
 ## Package P (armor) in detail
 
 Built 2026-11-18 on `claude/armor-d76a28` (from `main` at `d2d5098`), **protocol 16**, 481 tests (20 new), typecheck
