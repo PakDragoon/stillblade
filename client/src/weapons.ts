@@ -1,4 +1,6 @@
 import * as pc from 'playcanvas';
+import { defaultLight, LIGHT_FLOATS, useProbeLighting } from './lighting';
+import { readStream } from './meshdata';
 import { SIGHTS, SIGHT_COUNT, SIGHT_IRON, type WeaponId } from '@shared/weapons';
 import type { Tier } from './graphics';
 
@@ -75,23 +77,6 @@ export interface WeaponInstance {
     setSuppressed(on: boolean): void;
     /** Guns only: the sight mounted (index into SIGHTS); a gun that takes none ignores it. No-op for the knife. */
     setSight(sight: number): void;
-}
-
-/** Reads one vertex attribute of `mesh` as floats (normalised integer formats mapped to 0..1). */
-function readStream(mesh: pc.Mesh, semantic: string): { data: number[]; components: number } | null {
-    const vb = mesh.vertexBuffer;
-    const el = vb?.getFormat().elements.find(e => e.name === semantic);
-    if (!el) return null;
-    const data: number[] = [];
-    mesh.getVertexStream(semantic, data);
-    if (el.normalize) {
-        // Normalised integers (tools/quantize-glb.mjs): unsigned map to 0..1, signed to -1..1.
-        const t = el.dataType;
-        const max = t === pc.TYPE_UINT8 ? 255 : t === pc.TYPE_UINT16 ? 65535 : t === pc.TYPE_INT8 ? 127 : t === pc.TYPE_INT16 ? 32767 : 1;
-        const signed = t === pc.TYPE_INT8 || t === pc.TYPE_INT16;
-        for (let i = 0; i < data.length; i++) data[i] = signed ? Math.max(-1, data[i] / max) : data[i] / max;
-    }
-    return { data, components: el.numComponents };
 }
 
 /** A mesh and its transform relative to the gun (null: already in the gun's frame). */
@@ -249,8 +234,8 @@ export function instantiateWeapon(model: WeaponModel, name: WeaponName, material
 /** Emission colour of the red dot's reticle (vertex alpha 1 on its few triangles, 0 everywhere else). */
 const RETICLE_GLOW = new pc.Color(1, 0.1, 0.05);
 const RETICLE_GLOW_INTENSITY = 4;
-/** Strength of the studio reflection on metal (`sphereMap`). */
-const REFLECTIVITY = 0.55;
+/** Strength of the reflection on metal (the map's environment, scaled by the local light: lighting.ts). */
+const REFLECTIVITY = 0.75;
 /** Atlas size per graphics tier: at most 1024 on Low, 2048 on High. */
 export const ATLAS_SIZE: Record<Tier, number> = { low: 1024, high: 2048 };
 
@@ -320,11 +305,19 @@ export function fovLockNormals(device: pc.GraphicsDevice, materials: pc.Standard
  */
 export class WeaponMaterials {
     readonly byAtlas: Record<AtlasName, pc.StandardMaterial>;
+    /**
+     * The light uniforms every weapon material uses unless a mesh instance has its own (package Q, lighting.ts): the
+     * presenter keeps it at the first-person weapon's light every frame; characters and their guns set their own.
+     */
+    readonly light: Float32Array = defaultLight(new Float32Array(LIGHT_FLOATS));
     private tier: Tier | null = null;
+    private readonly studio: pc.Texture;
+    private env: { atlas: pc.Texture; sphere: pc.Texture } | null = null;
     private readonly loaded = new Map<string, Promise<pc.Texture>>();
 
     constructor(private readonly app: pc.Application, private readonly baseUrl: string) {
         const env = makeStudioSphere(app.graphicsDevice);
+        this.studio = env;
         const make = (): pc.StandardMaterial => {
             const m = new pc.StandardMaterial();
             m.diffuse = new pc.Color(0.1, 0.1, 0.11);
@@ -344,6 +337,7 @@ export class WeaponMaterials {
         };
         this.byAtlas = { rifle: make(), pistol: make(), knife: make(), character: make() };
         fovLockNormals(app.graphicsDevice, [this.byAtlas.rifle, this.byAtlas.pistol, this.byAtlas.knife]);
+        for (const m of Object.values(this.byAtlas)) useProbeLighting(app.graphicsDevice, m, this.light);
         // Characters: no glowing reticle; a mid grey until the atlas arrives.
         const ch = this.byAtlas.character;
         ch.emissive = new pc.Color(0, 0, 0);
@@ -362,10 +356,29 @@ export class WeaponMaterials {
         return this.byAtlas[ATLAS_OF[name]];
     }
 
+    /**
+     * The map's environment for metal to reflect (lighting.ts), or null (the generated studio picture): the prefiltered
+     * atlas on High, the sphere map on Low (one texture read).
+     */
+    setEnvironment(env: { atlas: pc.Texture; sphere: pc.Texture } | null): void {
+        this.env = env;
+        this.applyEnvironment();
+    }
+
+    private applyEnvironment(): void {
+        const high = this.tier === 'high' && this.env;
+        for (const m of Object.values(this.byAtlas)) {
+            m.envAtlas = high ? this.env!.atlas : null;
+            m.sphereMap = high ? null : this.env?.sphere ?? this.studio;
+            m.update();
+        }
+    }
+
     /** Loads (once per size) and applies the atlases for this tier. */
     setTier(tier: Tier): void {
         if (tier === this.tier) return;
         this.tier = tier;
+        this.applyEnvironment();
         const size = ATLAS_SIZE[tier];
         for (const atlas of Object.keys(this.byAtlas) as AtlasName[]) {
             const m = this.byAtlas[atlas];

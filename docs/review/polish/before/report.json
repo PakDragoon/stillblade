@@ -1,0 +1,75 @@
+{
+ "note": "SwiftShader (software GL): frame times are the CPU renderer's, not a GPU's. Draw calls are real.",
+ "views": {
+  "low-lit-hip": {
+   "draws": 20,
+   "meanMs": 360,
+   "medianMs": 361.8,
+   "light": null
+  },
+  "low-lit-aimed": {
+   "draws": 20
+  },
+  "low-lit-running": {
+   "draws": 20,
+   "speed": 5.2
+  },
+  "low-lit-firing": {
+   "draws": 23
+  },
+  "low-dark-hip": {
+   "draws": 11,
+   "meanMs": 274.1,
+   "medianMs": 269.6,
+   "light": null
+  },
+  "low-dark-aimed": {
+   "draws": 11
+  },
+  "low-lit-third-person": {
+   "draws": 13,
+   "meanMs": 288.2,
+   "medianMs": 288.4
+  },
+  "low-dark-third-person": {
+   "draws": 13,
+   "meanMs": 213.9,
+   "medianMs": 217.3
+  },
+  "high-lit-hip": {
+   "draws": 42,
+   "meanMs": 509.1,
+   "medianMs": 510.1,
+   "light": null
+  },
+  "high-lit-aimed": {
+   "draws": 42
+  },
+  "high-lit-running": {
+   "draws": 42,
+   "speed": 5.2
+  },
+  "high-lit-firing": {
+   "draws": 43
+  },
+  "high-dark-hip": {
+   "draws": 33,
+   "meanMs": 404.8,
+   "medianMs": 419.2,
+   "light": null
+  },
+  "high-dark-aimed": {
+   "draws": 33
+  },
+  "high-lit-third-person": {
+   "draws": 39,
+   "meanMs": 495.9,
+   "medianMs": 504
+  },
+  "high-dark-third-person": {
+   "draws": 39,
+   "meanMs": 366.6,
+   "medianMs": 373.4
+  }
+ }
+}
