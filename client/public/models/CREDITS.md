@@ -8,7 +8,19 @@
 | `textures/character_{albedo,normal}_{1024,2048}.webp` | The Quantum character's texture maps, cropped and resampled into one atlas, the shirt dyed orange | Fab Standard License |
 | `weapons.glb` (302 KB) | Third-person weapons: "AK-105" by SpatialNeglect, "Makarov Pistol (PM)" by TaigaForest, "Tactical Knife" and "Red Dot Sight" by Gerardo Justel, "AR Scope (Game-Ready)" by Scape (all five below) and generated suppressors, processed by `tools/blender/weapons.py` | CC-BY (the five models; see below) |
 | `textures/{rifle,pistol,knife}_{albedo,normal}_{1024,2048}.webp` | The same five models' texture maps, resampled into one atlas per gun by `tools/blender/realistic.py`, plus the first-person arms' skin and sleeve (and on the knife the ghost's suit) from the Quantum character | CC-BY (weapons); Fab Standard License (arms) |
-| `viewmodel_rifle.glb` (936 KB), `viewmodel_pistol.glb` (575 KB), `viewmodel_knife.glb` (498 KB) | The first-person arms (from the Quantum character: forearms, hands and rolled sleeves; the ghost's suit arms) holding the full-detail weapons above, processed by `tools/blender/viewmodel.py` | Fab Standard License (arms) and CC-BY (weapons) |
+| `viewmodel_rifle.glb` (1.29 MB), `viewmodel_pistol.glb` (575 KB), `viewmodel_knife.glb` (498 KB) | The first-person arms (from the Quantum character: forearms, hands and rolled sleeves; the ghost's suit arms) holding the full-detail weapons above, processed by `tools/blender/viewmodel.py`. Since package R the rifle's reload, empty reload, draw, fire and holster clips are motion retargeted from "M4 - FPS Weapon Animations Pack FREE (v.1)" (below) | Fab Standard License (arms, rifle motion) and CC-BY (weapons) |
+
+### The rifle's first-person motion (Fab Standard License, package R)
+
+**"M4 - FPS Weapon Animations Pack FREE (v.1)"** on Fab (downloaded by the owner, 2026-11-18, as
+`m4_animations_gltf.zip`; free under the Fab Standard License, Personal and Professional use; the seller's name is not
+inside the download: **the owner should add it here from the Fab listing**). Only its **motion** is used: the rifle's,
+the magazine's and the hands' movement in its Reload, Reload_Empty, Fire, Holster and Draw clips is measured relative
+to its rifle by `tools/blender/fpanims.py` and put onto our AK-105 and our arms by `tools/blender/viewmodel.py`
+(time-scaled to the game's rules; the M4's bolt-catch slap replaced by an AK charging-handle pull; the magazine path
+rocked like an AK's). **None of its meshes or textures ship**: not the M4, the magazines, the bullets or its gloved
+hands. The downloaded zip stays in the git-ignored `tools/blender/source-art/realistic/fp-anims/` and must not be
+committed or redistributed.
 
 ### The soldier (Fab Standard License)
 
@@ -87,6 +99,7 @@ in `realistic/`):
 | `realistic/scope2x/ar_scope_game_ready_gltf.zip` (glTF, 5 materials, 4K maps) | 56,855,445 bytes | Scape | The 2x sight |
 | `realistic/soldier/fbx_all_assets.zip` (FBX parts) | 34,856,279 bytes | Quantum Assets | The soldier, the ghost and the first-person arms |
 | `realistic/soldier/pbr_textures.zip` (121 4K PNGs) | 1,210,534,656 bytes | Quantum Assets | Their textures (BaseColor, OcclusionRoughnessMetallic, Unity_Normal; the Arms normal map is DirectX-style and is flipped) |
+| `realistic/fp-anims/m4_animations_gltf.zip` (one glTF scene: M4, hands, 5 clips on one 10 s timeline) | 7,987,134 bytes | see "The rifle's first-person motion" | The rifle's first-person motion only (package R) |
 
 Earlier downloads (packages A and F), with a generic HTTP client and no account, licence as shown on poly.pizza:
 

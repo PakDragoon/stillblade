@@ -1,0 +1,176 @@
+[
+ {
+  "name": "01-hip",
+  "gun": {
+   "mag": 30,
+   "reserve": 90,
+   "reload": 0,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 255,
+   "shots": 0
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "02-reload-1-hand-on-mag",
+  "gun": {
+   "mag": 21,
+   "reserve": 90,
+   "reload": 97,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 157,
+   "shots": 9
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "02-reload-2-mag-out",
+  "gun": {
+   "mag": 21,
+   "reserve": 90,
+   "reload": 79,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 175,
+   "shots": 9
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "02-reload-3-mag-low",
+  "gun": {
+   "mag": 21,
+   "reserve": 90,
+   "reload": 66,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 188,
+   "shots": 9
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "02-reload-4-mag-in",
+  "gun": {
+   "mag": 21,
+   "reserve": 90,
+   "reload": 43,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 211,
+   "shots": 9
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "03-empty-1-mag-out",
+  "gun": {
+   "mag": 0,
+   "reserve": 90,
+   "reload": 111,
+   "cooldown": 0,
+   "burst": 4,
+   "sinceShot": 57,
+   "shots": 39
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "03-empty-2-mag-in",
+  "gun": {
+   "mag": 0,
+   "reserve": 90,
+   "reload": 69,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 99,
+   "shots": 39
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "03-empty-3-handle-reach",
+  "gun": {
+   "mag": 0,
+   "reserve": 90,
+   "reload": 45,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 123,
+   "shots": 39
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "03-empty-4-handle-pulled",
+  "gun": {
+   "mag": 0,
+   "reserve": 90,
+   "reload": 33,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 135,
+   "shots": 39
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "04-draw-1",
+  "gun": {
+   "mag": 30,
+   "reserve": 90,
+   "reload": 0,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 255,
+   "shots": 39
+  },
+  "draw": 7,
+  "slot": 0
+ },
+ {
+  "name": "04-draw-2",
+  "gun": {
+   "mag": 30,
+   "reserve": 90,
+   "reload": 0,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 255,
+   "shots": 39
+  },
+  "draw": 0,
+  "slot": 0
+ },
+ {
+  "name": "05-knife-defender",
+  "gun": null,
+  "draw": 0,
+  "slot": 2
+ },
+ {
+  "name": "06-knife-ghost",
+  "gun": {
+   "mag": 30,
+   "reserve": 90,
+   "reload": 0,
+   "cooldown": 0,
+   "burst": 0,
+   "sinceShot": 255,
+   "shots": 0
+  },
+  "draw": 0,
+  "slot": 0
+ }
+]
