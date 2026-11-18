@@ -45,6 +45,8 @@ export interface LocalView {
     id: number;
     team: Team;
     health: number;
+    /** The local player's own armor, 0..MAX_ARMOR (shared/armor.ts): shown next to health, dimmed at 0, flashing when it drops. */
+    armor: number;
     alive: boolean;
     /** Seconds until respawn; 0 while alive. */
     respawnIn: number;

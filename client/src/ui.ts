@@ -513,10 +513,13 @@ export class Ui {
      * Practice range: one of our hits on a target (damage, where, whether it killed), shown in the strip at the
      * top with the four before it.
      */
-    practiceHit(damage: number, kind: string, zone: string | null, kill: boolean): void {
+    /** A practice hit: `damage` in all, `armor` of it on the target's armor (the rest on its health; shared/armor.ts). */
+    practiceHit(damage: number, armor: number, kind: string, zone: string | null, kill: boolean): void {
         const zones: Record<string, string> = { head: 'head', torso: 'body', arms: 'arm', legs: 'leg' };
         const where = zone ? zones[zone] ?? zone : kind === 'backstab' ? 'knife, from behind' : 'knife';
-        this.practiceHits.unshift(`${damage} ${where}${kill ? ' (down)' : ''}`);
+        // "34 body (17 armor, 17 health)"; a headshot or back-stab says it went past the armor.
+        const split = armor > 0 ? ` (${armor} armor / ${damage - armor} health)` : ' (all health)';
+        this.practiceHits.unshift(`${damage} ${where}${split}${kill ? ' (down)' : ''}`);
         if (this.practiceHits.length > 5) this.practiceHits.length = 5;
         this.refreshStrip();
     }
@@ -578,7 +581,7 @@ export class Ui {
             this.strip.append('Practice range.  ');
             h('b', '', hintText(bindings().value, 'switchTeam'), this.strip);
             this.strip.append(me?.team === 'ghosts' ? ' practise as a defender' : ' practise as a ghost');
-            this.strip.append(this.practiceHits.length ? `   Hits: ${this.practiceHits.join(', ')}` : '   Hit a target to see the damage and where it landed.');
+            this.strip.append(this.practiceHits.length ? `   Hits: ${this.practiceHits.join(' · ')}` : '   Hit a target to see the damage, where it landed and how much its armor took.');
             return;
         }
         const people = this.roster.filter(p => !p.bot);

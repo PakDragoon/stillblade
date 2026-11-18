@@ -73,7 +73,7 @@ describe('the carry state on the wire', () => {
                     type: 'snap', time: 1, ack: 2, players: [],
                     me: {
                         team: 'ghosts', actionTicks: 65535, carry: { carrier, wait }, vis: 0, pos: [0, 0, 0], vel: [0, 0, 0],
-                        onGround: true, crouched: false, health: 100, alive: true, respawnAt: 0, loadout: createLoadout(), knife: createKnifeState()
+                        onGround: true, crouched: false, health: 100, armor: 100, alive: true, respawnAt: 0, loadout: createLoadout(), knife: createKnifeState()
                     }
                 }));
                 if (back.type !== 'snap') throw new Error('wrong type');

@@ -7,7 +7,7 @@ import type { InputCmd, Vec3 } from './types';
 import { GUN_COUNT, SIGHT_COUNT } from './weapons';
 import type { HitZone } from './zones';
 
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 16;
 export const DEFAULT_PORT = 8080;
 /** Snapshots per second sent to each client. */
 export const SNAPSHOT_RATE = 30;
@@ -72,6 +72,8 @@ export interface SelfSnap {
     onGround: boolean;
     crouched: boolean;
     health: number;
+    /** This player's own armor (shared/armor.ts), 0..MAX_ARMOR. Only ever sent to its owner, never to anyone else. */
+    armor: number;
     alive: boolean;
     /** Server time (ms) of the next respawn; meaningful only while dead. */
     respawnAt: number;
@@ -183,7 +185,7 @@ export interface MatchStats {
     assists: number;
     headshots: number;
     backstabs: number;
-    /** Health actually removed from enemies. */
+    /** Health and armor actually removed from enemies (package P: armor counts too). */
     damage: number;
     plants: number;
     defuses: number;
@@ -247,7 +249,10 @@ export interface ChatMsg {
 export interface DamageMsg {
     type: 'dmg';
     dir: number;
+    /** Health the hit removed (capped at the health there was). */
     amount: number;
+    /** Armor the hit removed (shared/armor.ts), absent when none: the victim's own armor, told only to the victim. */
+    armor?: number;
     kind: DamageKind;
     killed?: boolean;
     by?: number;
@@ -266,8 +271,13 @@ export interface HitConfirmMsg {
     zone?: HitZone;
     /** The hit killed. */
     kill: boolean;
-    /** Health the hit took (its full amount, before any cap at the victim's remaining health). */
+    /** The hit's full amount (before armor and before any cap at the victim's remaining health). */
     damage: number;
+    /**
+     * Practice range only: how much of `damage` went to the target's armor (the rest went to its health).
+     * Never sent in a match, so an attacker learns nothing about an enemy's armor.
+     */
+    armor?: number;
 }
 
 /**
@@ -422,7 +432,7 @@ const CMD_BYTES = 26;
  * Self state up to the loadout, then 6 loadout bytes (slot, previous, draw, aim, trigger, sight), 7 per gun, 2 for the defender knife, 2 for the
  * ghost knife, 1 for the bomb repick wait (the carrier flag is a bit of the flags byte), 1 player count.
  */
-const SNAP_LOADOUT = 75;
+const SNAP_LOADOUT = 76;
 const SNAP_GUNS = SNAP_LOADOUT + 6;
 const SNAP_MELEE = SNAP_GUNS + 7 * GUN_COUNT;
 const SNAP_KNIFE = SNAP_MELEE + 2;
@@ -480,13 +490,14 @@ function encodeSnap(m: Extract<ServerMsg, { type: 'snap' }>): Uint8Array<ArrayBu
     v.setUint8(13, (me.team === 'ghosts' ? 1 : 0) | (me.onGround ? 2 : 0) | (me.crouched ? 4 : 0) | (me.alive ? 8 : 0) |
         (me.carry.carrier ? 16 : 0));
     v.setUint8(14, me.health);
-    v.setUint16(15, Math.min(65535, me.actionTicks), true);
-    v.setUint16(17, Math.round(unit(me.vis) * 65535), true);
+    v.setUint8(15, me.armor);
+    v.setUint16(16, Math.min(65535, me.actionTicks), true);
+    v.setUint16(18, Math.round(unit(me.vis) * 65535), true);
     for (let k = 0; k < 3; k++) {
-        v.setFloat64(19 + k * 8, me.pos[k], true);
-        v.setFloat64(43 + k * 8, me.vel[k], true);
+        v.setFloat64(20 + k * 8, me.pos[k], true);
+        v.setFloat64(44 + k * 8, me.vel[k], true);
     }
-    v.setFloat64(67, me.respawnAt, true);
+    v.setFloat64(68, me.respawnAt, true);
     const l = me.loadout;
     v.setUint8(SNAP_LOADOUT, l.slot);
     v.setUint8(SNAP_LOADOUT + 1, l.prev);
@@ -576,11 +587,12 @@ function decodeSnap(v: DataView): ServerMsg {
             crouched: (flags & 4) !== 0,
             alive: (flags & 8) !== 0,
             health: v.getUint8(14),
-            actionTicks: v.getUint16(15, true),
-            vis: v.getUint16(17, true) / 65535,
-            pos: [v.getFloat64(19, true), v.getFloat64(27, true), v.getFloat64(35, true)],
-            vel: [v.getFloat64(43, true), v.getFloat64(51, true), v.getFloat64(59, true)],
-            respawnAt: v.getFloat64(67, true),
+            armor: v.getUint8(15),
+            actionTicks: v.getUint16(16, true),
+            vis: v.getUint16(18, true) / 65535,
+            pos: [v.getFloat64(20, true), v.getFloat64(28, true), v.getFloat64(36, true)],
+            vel: [v.getFloat64(44, true), v.getFloat64(52, true), v.getFloat64(60, true)],
+            respawnAt: v.getFloat64(68, true),
             loadout: decodeLoadout(v),
             knife: { cooldown: v.getUint8(SNAP_KNIFE), windup: v.getUint8(SNAP_KNIFE + 1) },
             carry: { carrier: (flags & 16) !== 0, wait: v.getUint8(SNAP_CARRY) }

@@ -1,6 +1,6 @@
 import * as pc from 'playcanvas';
 import {
-    EYE_HEIGHT, EYE_HEIGHT_CROUCHED, KNIFE_WINDUP_TICKS, MAX_HEALTH,
+    EYE_HEIGHT, EYE_HEIGHT_CROUCHED, KNIFE_WINDUP_TICKS, MAX_ARMOR, MAX_HEALTH,
     SHOT_RANGE, STEP_DISTANCE, STEP_LOUD_CROUCH, STEP_LOUD_RUN, STEP_LOUD_WALK, TICK_DT
 } from '@shared/constants';
 import {
@@ -489,6 +489,8 @@ async function start(): Promise<void> {
     const bombView: BombView = { pos: [0, 0, 0], timeLeft: 0 };
     let alive = false;
     let health = MAX_HEALTH;
+    /** Own armor from the self snapshot (never predicted; nobody else's armor is ever sent). */
+    let armor = MAX_ARMOR;
     let respawnAt = 0;
 
     const eyePos: Vec3 = [0, 0, 0];
@@ -570,6 +572,7 @@ async function start(): Promise<void> {
     net.start({
         snapshot(me: SelfSnap, ack: number): void {
             health = me.health;
+            armor = me.armor;
             alive = me.alive;
             respawnAt = me.respawnAt;
             vis = me.vis;
@@ -630,6 +633,7 @@ async function start(): Promise<void> {
             input.clearToggles(); // a new life starts standing and not aiming
             alive = true;
             health = MAX_HEALTH;
+            armor = MAX_ARMOR;
             resetKnife(knife);
             resetLoadout(loadout, sight); // the server mounted the sight it names here; the snapshot carries it too
             // The server resets the carry at every spawn and hands the bomb out just after (snapshot and `bomb`).
@@ -715,6 +719,11 @@ async function start(): Promise<void> {
         damage(msg): void {
             presenter.damaged(msg.amount, msg.dir);
             audio.hurt();
+            if (msg.armor) {
+                // The hit took armor: the armor layer plays at once; the HUD number follows with the next snapshot.
+                audio.armorHit();
+                armor = Math.max(0, armor - msg.armor);
+            }
             if (msg.killed) {
                 presenter.died(rosterNames.get(msg.by ?? -1) ?? 'Someone', msg.kind, msg.zone ?? null, msg.dist ?? 0,
                     msg.weapon !== undefined ? WEAPONS[msg.weapon]?.label : msg.kind === 'shot' ? undefined : DEFENDER_KNIFE.label);
@@ -722,7 +731,7 @@ async function start(): Promise<void> {
         },
         hitConfirm(msg): void {
             presenter.hitConfirm(msg.zone ?? null, msg.kill);
-            if (practice) ui.practiceHit(msg.damage, msg.kind, msg.zone ?? null, msg.kill);
+            if (practice) ui.practiceHit(msg.damage, msg.armor ?? 0, msg.kind, msg.zone ?? null, msg.kill);
             audio.hitMarker(msg.kill ? 'kill' : msg.zone === 'head' ? 'head' : 'body');
         },
         bomb(msg: BombMsg): void {
@@ -765,7 +774,7 @@ async function start(): Promise<void> {
     loadoutChoice().watch(sendSight);
 
     const local: LocalView = {
-        id: 0, team: 'ghosts', health: MAX_HEALTH, alive: false, respawnIn: 0, connected: false, ping: 0, firing: false, vis: 0,
+        id: 0, team: 'ghosts', health: MAX_HEALTH, armor: MAX_ARMOR, alive: false, respawnIn: 0, connected: false, ping: 0, firing: false, vis: 0,
         canAct: false, carrier: false, siteNoBomb: false, action: 0, showScores: false, weapon: 0, weapons: [] as WeaponSlotView[],
         mag: WEAPONS[0].magSize, magSize: WEAPONS[0].magSize, reserve: 0, reload: 0, spread: 0, draw: 0, aim: 0, sight: 0,
         yaw: 0, spectating: null, spectateId: -1, overview: false
@@ -981,6 +990,7 @@ async function start(): Promise<void> {
         local.id = net.id;
         local.team = net.team;
         local.health = health;
+        local.armor = armor;
         local.alive = alive;
         local.respawnIn = alive || match.phase !== 'warmup' ? 0 : Math.max(0, (respawnAt - net.serverTime()) / 1000);
         const ghostHere = net.team === 'ghosts';
@@ -1085,7 +1095,7 @@ async function start(): Promise<void> {
             get graphics() { return { tier, choice: tierChoice, forced: forcedTier, measured: measuredTier, gpu: gpuName, gpuTier, cameraFrame }; },
             loadout, knife,
             stats: () => ({
-                fps, resScale, alive, health, vis, pending: pending.length, error: Math.hypot(...errorOffset),
+                fps, resScale, alive, health, armor, vis, pending: pending.length, error: Math.hypot(...errorOffset),
                 loadout: structuredClone(loadout), gun: heldGun(loadout) ? { ...heldGun(loadout)! } : null,
                 held: slotLabel(loadout.slot), knifeSlot: SLOT_KNIFE, gunMismatches,
                 knife: { ...knife }, knifeMismatches,

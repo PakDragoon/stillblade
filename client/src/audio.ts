@@ -1639,6 +1639,11 @@ export const createAudio: CreateAudio = (boxes: readonly Box[], opts?: AudioOpti
             oneShot(null, STEP_CFG, 0.9, synthHurt, 0, false);
         },
 
+        armorHit(): void {
+            // The recorded metal impact (package H's samples), as if struck on the plate the player wears.
+            oneShot(null, CUE_CFG, 0.6, sampledImpact, 0, false, 1, 'metal');
+        },
+
         bomb(kind: 'drop' | 'pickup', pos: Vec3, isLocal: boolean): void {
             oneShot(isLocal ? null : pos, BOMB_HANDLE_CFG, isLocal ? 0.5 : 1, kind === 'drop' ? sampledDrop : sampledPickup, 0, false);
         },

@@ -15,7 +15,7 @@ const TICK_MS = 1000 / TICK_RATE;
 const ticks = (ms: number): number => Math.ceil(ms / TICK_MS);
 /** The defender, 20 m from the ghost, kills it in this many commands (see matchflow.test.ts). */
 const KILL = { fire: true, pitch: -0.03 };
-const KILL_TICKS = 13;
+const KILL_TICKS = 31; // six torso shots with full armor
 
 function makeMap(name: string, ghostZ = 10, defenderZ = -10): MapData {
     return {

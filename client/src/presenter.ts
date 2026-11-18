@@ -405,8 +405,15 @@ const HUD_CSS = `
 #sb-vignette { inset: 0; opacity: 0;
     background: radial-gradient(ellipse at center, rgba(200,0,0,0) 45%, rgba(200,0,0,.85) 100%); }
 #sb-stats { left: 18px; bottom: 14px; }
+#sb-vitals { display: flex; align-items: flex-end; gap: 22px; }
 #sb-health { font: 700 52px/1 system-ui, sans-serif; letter-spacing: .02em; }
 #sb-health.low { color: #ff3b3b; }
+#sb-armor { display: flex; align-items: center; gap: 7px; font: 700 52px/1 system-ui, sans-serif; letter-spacing: .02em;
+    color: #b9d4ff; transition: color .3s, text-shadow .3s, opacity .3s; }
+#sb-armor svg { width: 28px; height: 32px; filter: drop-shadow(0 1px 2px #000); }
+#sb-armor svg path { fill: currentColor; }
+#sb-armor.hit { color: #fff; text-shadow: 0 0 14px #7fb2ff, 0 1px 2px #000; transition: none; }
+#sb-armor.empty { opacity: .28; }
 #sb-info { opacity: .8; margin-top: 4px; }
 #sb-info .ghosts { color: #9d8cff; } #sb-info .defenders { color: #ff9a3c; }
 #sb-vis { margin: 0 0 6px; width: 150px; display: none; font: 600 11px/1 system-ui, sans-serif;
@@ -1411,7 +1418,16 @@ export const createPresenter: CreatePresenter = (app, camera) => {
     div('', visRow, '').textContent = 'VISIBILITY';
     const visStateEl = div('', visRow, 'state');
     const visFill = div('', div('', visEl, 'bar'), 'fill');
-    const healthEl = div('sb-health', stats, '');
+    // Health, then armor beside it in the same type with a small shield (package P).
+    const vitalsEl = div('sb-vitals', stats, '');
+    const healthEl = div('sb-health', vitalsEl, '');
+    const armorEl = div('sb-armor', vitalsEl, '');
+    armorEl.title = 'Armor';
+    armorEl.innerHTML = '<svg viewBox="0 0 24 28" aria-hidden="true"><path d="M12 1 2 5v8c0 6.6 4.3 11.9 10 14 5.7-2.1 10-7.4 10-14V5L12 1z"/></svg>';
+    const armorNum = armorEl.appendChild(document.createElement('span'));
+    let shownArmor = -1;
+    /** Seconds left of the armor's flash after it dropped. */
+    let armorFlashT = 0;
     const infoEl = div('sb-info', stats, '');
     const teamEl = infoEl.appendChild(document.createElement('span'));
     const idEl = infoEl.appendChild(document.createElement('span'));
@@ -1594,6 +1610,21 @@ export const createPresenter: CreatePresenter = (app, camera) => {
             shownHealth = hp;
             healthEl.textContent = String(hp);
             healthEl.classList.toggle('low', hp < 35);
+        }
+        const ap = Math.max(0, Math.round(local.armor));
+        if (ap !== shownArmor) {
+            // A drop flashes it briefly; a refill at the spawn does not.
+            if (shownArmor >= 0 && ap < shownArmor && local.alive) {
+                armorFlashT = 0.18;
+                armorEl.classList.add('hit');
+            }
+            shownArmor = ap;
+            armorNum.textContent = String(ap);
+            armorEl.classList.toggle('empty', ap === 0); // dimmed when the armor is gone
+        }
+        if (armorFlashT > 0) {
+            armorFlashT -= dt;
+            if (armorFlashT <= 0) armorEl.classList.remove('hit'); // fades back over the 0.3 s transition
         }
         const lowHp = local.alive && hp < 35;
         if (document.body.classList.contains('sb-lowhp') !== lowHp) document.body.classList.toggle('sb-lowhp', lowHp);

@@ -1,7 +1,7 @@
 import {
     BREATH_RANGE, EYE_HEIGHT, EYE_HEIGHT_CROUCHED, GUNSHOT_RANGE, GUNSHOT_RANGE_SUPPRESSED,
     HULL_HALF_WIDTH, HULL_HEIGHT, HULL_HEIGHT_CROUCHED, KNIFE_BACKSTAB_DAMAGE, KNIFE_CONE_COS,
-    KNIFE_DAMAGE, KNIFE_RANGE, KNIFE_SOUND_RANGE, MAX_HEALTH,
+    KNIFE_DAMAGE, KNIFE_RANGE, KNIFE_SOUND_RANGE, MAX_ARMOR, MAX_HEALTH,
     MAX_REWIND_MS, RELOAD_SOUND_RANGE, RESPAWN_MS, SHOT_RANGE, STEP_DISTANCE, STEP_LOUD_CROUCH, STEP_LOUD_RUN, STEP_LOUD_WALK,
     STEP_RANGE, TICK_DT, TICK_RATE, VIS_HURT_SPIKE, VIS_SWING_SPIKE
 } from '../../shared/constants';
@@ -24,6 +24,7 @@ import {
     BOMB_MS, DEFUSE_TICKS, FREEZE_MS, GRACE_MS, IDLE_ROUNDS, MATCH_OVER_MS, OVER_MS, PLANT_TICKS, ROUND_MS,
     canAct, movementLocked, type Phase, type RoundReason
 } from '../../shared/rules';
+import { applyDamage, type DamageSplit } from '../../shared/armor';
 import { cleanChat } from '../../shared/chat';
 import { ASSIST_MS, emptyStats, pickMvp } from '../../shared/stats';
 import { rayBox, rayWorld, viewDir } from '../../shared/raycast';
@@ -69,6 +70,8 @@ export class Player {
     yaw = 0;
     pitch = 0;
     health = MAX_HEALTH;
+    /** Armor (shared/armor.ts): reset to MAX_ARMOR at every spawn; only this player is ever told it. */
+    armor = MAX_ARMOR;
     alive = false;
     respawnAt = 0;
     lastSeq = -1;
@@ -251,6 +254,8 @@ export class Game implements BotWorld {
     private readonly hmin: Vec3 = [0, 0, 0];
     private readonly hmax: Vec3 = [0, 0, 0];
     private readonly target: Vec3 = [0, 0, 0];
+    /** What the hit being resolved removed (shared/armor.ts), reused. */
+    private readonly split: DamageSplit = { health: 0, armor: 0 };
 
     /** The room's options (shared/room-options.ts): the creator's, changed only in warmup by `changeOptions`. Sent in `welcome`. */
     options: Readonly<RoomOptions>;
@@ -697,10 +702,13 @@ export class Game implements BotWorld {
         return Math.atan2(-(to[0] - from[0]), -(to[2] - from[2]));
     }
 
-    /** Stats for one landed hit, and the hit messages to both sides. `zone` only for shots. */
-    private recordHit(victim: Player, attacker: Player, amount: number, dealt: number, kind: DamageKind, weapon?: number, zone?: HitZone): void {
+    /**
+     * Stats for one landed hit, and the hit messages to both sides. `zone` only for shots. `split` is what
+     * the hit removed (health, armor); the damage statistic counts both.
+     */
+    private recordHit(victim: Player, attacker: Player, amount: number, split: DamageSplit, kind: DamageKind, weapon?: number, zone?: HitZone): void {
         if (!this.held) { // warmup play while a match is held must not change its statistics
-            attacker.stats.damage += dealt;
+            attacker.stats.damage += split.health + split.armor;
             if (zone === 'head') attacker.stats.headshots++;
             else if (kind === 'backstab') attacker.stats.backstabs++;
         }
@@ -708,7 +716,9 @@ export class Game implements BotWorld {
         const killed = victim.health <= 0;
         // The victim learns the direction of the hit and how much it hurt: nothing else. A kill adds
         // who and how far (a knife kill is within reach, so already inside breathing range).
-        const dmg: ServerMsg = { type: 'dmg', dir: this.bearing(victim.state.pos, attacker.state.pos), amount: dealt, kind };
+        const dmg: ServerMsg = { type: 'dmg', dir: this.bearing(victim.state.pos, attacker.state.pos), amount: split.health, kind };
+        // The victim's own armor: only the victim is told how much of the hit it took.
+        if (split.armor > 0) dmg.armor = split.armor;
         if (weapon !== undefined) dmg.weapon = weapon;
         if (zone !== undefined) dmg.zone = zone;
         if (killed) {
@@ -719,6 +729,9 @@ export class Game implements BotWorld {
         victim.conn.send(dmg);
         const confirm: ServerMsg = { type: 'hitconfirm', kind, kill: killed, damage: amount };
         if (zone !== undefined) confirm.zone = zone;
+        // Only the practice range's targets say how a hit split between armor and health: in a match the
+        // attacker is told nothing about an enemy's armor.
+        if (this.practice) confirm.armor = split.armor;
         attacker.conn.send(confirm);
     }
 
@@ -742,6 +755,7 @@ export class Game implements BotWorld {
         p.yaw = (spawn.yaw * Math.PI) / 180;
         p.pitch = 0;
         p.health = MAX_HEALTH;
+        p.armor = MAX_ARMOR;
         p.alive = true;
         resetKnife(p.knife);
         // The chosen sight becomes active here and only here; others see it through the roster.
@@ -949,10 +963,10 @@ export class Game implements BotWorld {
     }
 
     private damage(victim: Player, amount: number, attacker: Player, kind: DamageKind, weapon?: number, zone?: HitZone): boolean {
-        const dealt = Math.min(amount, victim.health);
-        victim.health = Math.max(0, victim.health - amount);
+        // The one armor rule (shared/armor.ts): bots and practice targets are players and take it too.
+        const split = applyDamage(victim, amount, kind, zone, this.split);
         if (victim.team === 'ghosts') victim.vis = Math.max(victim.vis, VIS_HURT_SPIKE);
-        this.recordHit(victim, attacker, amount, dealt, kind, weapon, zone);
+        this.recordHit(victim, attacker, amount, split, kind, weapon, zone);
         if (victim.health > 0) return false;
         victim.alive = false;
         // Only warmup has respawns; in a round the dead wait for the next one.
@@ -1350,7 +1364,7 @@ export class Game implements BotWorld {
                     team: p.team,
                     actionTicks: p.actionTicks,
                     pos: p.state.pos, vel: p.state.vel, onGround: p.state.onGround, crouched: p.state.crouched,
-                    health: p.health, alive: p.alive, respawnAt: p.respawnAt, vis: p.vis, loadout: p.loadout, knife: p.knife,
+                    health: p.health, armor: p.armor, alive: p.alive, respawnAt: p.respawnAt, vis: p.vis, loadout: p.loadout, knife: p.knife,
                     carry: p.carry
                 },
                 players

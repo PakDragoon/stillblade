@@ -229,7 +229,7 @@ describe('bot matches are deterministic', () => {
             game.code = 'same';
             for (let i = 0; i < 3; i++) { game.addBot('ghosts'); game.addBot('defenders'); }
             run(game, 50 * TICK_RATE);
-            return JSON.stringify([...game.players.values()].map(p => [p.state.pos, p.health, p.stats])) + game.score.join();
+            return JSON.stringify([...game.players.values()].map(p => [p.state.pos, p.health, p.armor, p.stats])) + game.score.join();
         };
         expect(result()).toBe(result());
     });

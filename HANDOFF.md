@@ -1,6 +1,6 @@
 # Stillblade — handoff
 
-Last rewritten 2026-11-15; **status updated 2026-11-18: everything through wave 5 is on `main`, pushed and deployed (packages A to H, L, M parts 1 and 2, N; protocol 15). Since then also merged, pushed and deployed 2026-11-18: the real pistol recordings (package N follow-up, audio only), package O (realistic soldiers, first-person arms, the downloaded AR Scope) and its follow-up after the owner's play test (first-person framing like other shooters, the field of view setting fixed); no protocol change, 461 tests, typecheck clean; see "Package O" and "Package O follow-up" at the end.** The live site rebuilds from `main` on every push; the game server runs on the owner's PC behind a Cloudflare Tunnel and must run a `main` with the same protocol as the site. **Nothing from waves 3 to 6 has been played with a mouse, seen on a real GPU or listened to**: animations and models were judged from Blender renders and headless Chrome (software GL) screenshots, sounds from measured levels. Older sections below describe each package as it was when built, so some numbers in them (test counts, protocol versions, "not on `main`") are historical; **"What to do next" near the end is the current summary, read it first.** The owner's live server holds port 8080 on his PC, so `npm run dev` needs that server stopped first.
+Last rewritten 2026-11-15; **status updated 2026-11-18: everything is on `main`, pushed and deployed, protocol 16 (packages A to H, L, M parts 1 and 2, N, O with two follow-ups, P), 481 tests, typecheck clean. Landed 2026-11-18: the real pistol recordings (package N follow-up, audio only), package O (realistic soldiers, first-person arms, the downloaded AR Scope) and its follow-up after the owner's play test (first-person framing like other shooters, the field of view setting fixed); the second follow-up (upright guns, a solid iron-sight view, natural finger curls); package P (armor, protocol 16, the game server restarted on it). See "Package O", its follow-ups and "Package P" at the end. Open: the owner is to buy a first-person AK animation pack to replace the generated reload; armor balance is untested in real matches.** The live site rebuilds from `main` on every push; the game server runs on the owner's PC behind a Cloudflare Tunnel and must run a `main` with the same protocol as the site. **Nothing from waves 3 to 6 has been played with a mouse, seen on a real GPU or listened to**: animations and models were judged from Blender renders and headless Chrome (software GL) screenshots, sounds from measured levels. Older sections below describe each package as it was when built, so some numbers in them (test counts, protocol versions, "not on `main`") are historical; **"What to do next" near the end is the current summary, read it first.** The owner's live server holds port 8080 on his PC, so `npm run dev` needs that server stopped first.
 
 **If you are a new session:** this file tells you what exists, what has and has not been verified, the rules that must not be broken, and how the owner wants work done. `ROADMAP.md` tells you what to build next and what is already decided. Read both before changing anything. `DEPLOY.md` covers hosting. You need nothing else: no memory files or earlier conversations are assumed.
 
@@ -59,7 +59,7 @@ The game is playable end to end and, since 2026-11-15, **live for testing** at `
 - Held matches: when a team empties mid-match (a disconnect in a 1 v 1) the room falls back to warmup but **keeps score, round count, sides and statistics for `GRACE_MS` = 60 s** (`Game.held`). If both teams have a player again within it the next round starts by itself with no ready-up (the interrupted round is replayed under the same number); after it the match is reset and the room is a fresh lobby. Kills made in that warmup do not count. A player who leaves mid-match is remembered by cleaned name for the same 60 s: rejoining under that name gives back their statistics and side, unless two leavers shared the name or a player with that name is already connected (then nothing is restored). A held match that is not resumed is wiped; finishing a match never holds.
 - Creator = longest-connected player (`Game.creatorId`, derived from `joinedAt`, so it passes on by itself when they leave).
 - Teams: a new player joins the smaller team (ghosts on a tie). In warmup `{type:'team'}` switches, refused if the teams would then differ by more than one (`MAX_TEAM_GAP`) and refused outside warmup.
-- Statistics (`MatchStats` in `shared/protocol.ts`, carried on every `RosterEntry`): kills, deaths, assists (damage within `ASSIST_MS` = 4 s before someone else's kill), headshots (headshot hits), backstabs, damage (health actually removed), plants, defuses. Reset when a match starts. The roster is re-sent on every kill, round start and round end.
+- Statistics (`MatchStats` in `shared/protocol.ts`, carried on every `RosterEntry`): kills, deaths, assists (damage within `ASSIST_MS` = 4 s before someone else's kill), headshots (headshot hits), backstabs, damage (health actually removed, plus armor removed since package P), plants, defuses. Reset when a match starts. The roster is re-sent on every kill, round start and round end.
 - Match end: the round that reaches 6 sends `summary` (winner, score, every player's stats, `mvp`, `nextAt`) once, holds the result `MATCH_OVER_MS` = 20 s, then starts a fresh match: same room, same map, score and stats zeroed, **players keep their group** (the side they started on, so the roles reset to the first-half roles, not to what they played last). Players joining during the result screen get the stored `summary`, are not spawned, and join the new match. MVP score is documented in `shared/stats.ts` (`mvpScore`).
 - Chat (`{type:'chat', team, text}`): `cleanChat` (`shared/chat.ts`) strips control characters, collapses whitespace and caps at 120 characters; 4 lines burst, one more per 1.5 s, extra lines dropped with a `notice`. While a round is on (freeze, live, planted) a dead player's line (a mid-round joiner counts as dead) reaches **only dead players**; team chat reaches only the sender's team; between rounds and in warmup everyone hears everyone.
 - Idle: nobody is ever removed mid-round (a ghost standing perfectly still is playing correctly). A player who took part in a round (`inRound`, spawned for it) and produced no input change at all from its freeze to its end (`changedThisRound`; movement, view angles, buttons, weapon slot, swap, aim; not `seq` or `viewTime`) for `IDLE_ROUNDS` = 2 rounds in a row is marked `idle` when the second round ends, told by `notice`, and is not spawned at the next round start (idle players do not hold a team up, so a team that is all idle falls back to warmup and is held). Any input change clears the flag, and they spawn at the following round start. Players who joined mid-round do not count that round.
@@ -271,7 +271,7 @@ This starts the game server (ws://localhost:8080) and the web client (http://loc
   Reload starts on R with a partial magazine and some reserve, or by firing on empty; firing is blocked meanwhile; switching weapon, death and round reset cancel it (a cancelled reload gives nothing), movement does not. Nothing fires or reloads during a draw. Aiming needs the weapon drawn and not reloading, does not change movement speed, and slows mouse look by the zoom. Empty with no reserve: a dry click at most every 15 commands. Reload sound carries 10 m and says which weapon. Ghost knife: 0.2 s windup, 2 m reach, 55 front, 100 from behind. No aim with the defender knife; switching away from it mid-windup cancels the swing.
 - Footsteps carry 18 m running, about 5 m walking, about 3 m crouched. Breathing 8 m.
 - Round: 4 s freeze, 120 s live, 35 s bomb, 3 s to plant, 5 s to defuse, first to 6, sides swap after round 5.
-- Health 100, no armour. Hit box: 0.6 m wide, 1.8 m tall (1.2 m crouched), one box for movement and the ray test. Zones (`shared/zones.ts`; multipliers decided by the owner on 2026-11-16, "2x on head, 1x on body and 0.5x on arms/legs", untuned): head = the top 0.28 m (`HEAD_ZONE`, x2.0); legs = the bottom 45% of the current height (x0.5); arms = in the band between, more than 0.2 m from the vertical centre line measured across the shot (x0.5; measured across the shot because the hit point on a box face is always at least 0.3 m from the centre); torso = the rest (x1.0). All four multipliers are in one table (`ZONE_MULTIPLIER`) applied to the gun's `bodyDamage` and rounded; guns have no separate head damage any more. **No gun kills with one shot**: a full-health player takes two rifle headshots, or a headshot and a body shot. Knife hits ignore zones. Standing: legs below 0.81 m, head from 1.52 m; crouched: legs below 0.54 m, head from 0.92 m. No damage falloff with distance, no bullet penetration.
+- Health 100 and armor 100 (package P, `shared/armor.ts`; reset at every spawn, no pickups): a torso, arm or leg shot or a front knife hit puts `floor(amount x 0.5)` (`ARMOR_ABSORB`) on the armor while it lasts and the rest on health; headshots and back-stabs go straight to health. Hit box: 0.6 m wide, 1.8 m tall (1.2 m crouched), one box for movement and the ray test. Zones (`shared/zones.ts`; multipliers decided by the owner on 2026-11-16, "2x on head, 1x on body and 0.5x on arms/legs", untuned): head = the top 0.28 m (`HEAD_ZONE`, x2.0); legs = the bottom 45% of the current height (x0.5); arms = in the band between, more than 0.2 m from the vertical centre line measured across the shot (x0.5; measured across the shot because the hit point on a box face is always at least 0.3 m from the centre); torso = the rest (x1.0). All four multipliers are in one table (`ZONE_MULTIPLIER`) applied to the gun's `bodyDamage` and rounded; guns have no separate head damage any more. **No gun kills with one shot**: a full-health player takes two rifle headshots, or a headshot and a body shot. Knife hits ignore zones. Standing: legs below 0.81 m, head from 1.52 m; crouched: legs below 0.54 m, head from 0.92 m. No damage falloff with distance, no bullet penetration.
 - Gunshots (`GUNSHOT_RANGE`, `GUNSHOT_RANGE_SUPPRESSED` in `shared/constants.ts`, untuned): heard to 60 m, or 20 m in a suppressed room; beyond that seen (flash and tracer, no sound) by players with a line of sight to the shooter. The client's gunshot sounds fade to silence exactly at those ranges.
 - Ghost breathing (`BREATH_RANGE`): inside 8 m a defender hears it and is sent the ghost's position, through walls and even if the ghost is motionless.
 - Match flow: result card held 20 s, disconnect hold 60 s, idle after 2 silent rounds, assists within 4 s, chat 120 characters with 4 lines burst and one more per 1.5 s.
@@ -938,7 +938,7 @@ normal fix is in the shader, seen only in SwiftShader).
 
 ### Package O second follow-up: roll, the thin aimed gun, knife fingers (2026-11-18)
 
-After the owner played `main` d2d5098. Branch `claude/realistic-soldiers-bcc8fb`, not merged or pushed; no protocol
+After the owner played `main` d2d5098. Branch `claude/realistic-soldiers-bcc8fb`, merged into `main` and pushed 2026-11-18; no protocol
 change, `shared/` and `server/` untouched, 461 tests, typecheck clean. Screenshots before and after at fields of view
 60, 74, 90 and 110: `docs/review/viewmodel/before2/` and `after2/` (README there).
 
@@ -958,3 +958,94 @@ change, `shared/` and `server/` untouched, 461 tests, typecheck clean. Screensho
 defender's swing in the game frame by frame (the in-game capture freezes one frame; the Blender previews cover the
 swing); the hands are still a little angular close up.
 
+## Package P (armor) in detail
+
+Built 2026-11-18 on `claude/armor-d76a28` (from `main` at `d2d5098`), **protocol 16**, 481 tests (20 new), typecheck
+clean; `server/src/prediction.test.ts` passes unchanged. Reviewed (protocol, server and rule diffs read line by line), merged into `main` and pushed 2026-11-18 with the game server restarted on protocol 16. Rule approved by the owner 2026-11-18.
+
+**The rule** (`shared/armor.ts`, the only place it lives; `MAX_ARMOR` 100 and `ARMOR_ABSORB` 0.5 in `shared/constants.ts`).
+Every player (defenders, ghosts, bots and practice targets alike) spawns with 100 health and 100 armor: round starts,
+warmup respawns and practice respawns all go through `Game.spawn`, which resets both. A torso, arm or leg shot, or a
+knife hit from the front: `absorbed = min(armor, floor(amount x 0.5))`, armor loses `absorbed`, health loses the
+rest. A headshot or a knife back-stab ignores armor (health takes it all, armor unchanged). Death is still health 0,
+whatever armor is left. `applyDamage(vitals, amount, kind, zone, out)` changes a `{ health, armor }` in place and
+writes what it removed; `Game.damage` calls it for every hit (shots and both knives), so bots and targets follow it
+too. Nothing on the client predicts damage, so the client never runs the rule; it only shows what the server sends.
+
+**Bomb explosion:** the explosion deals no damage today (the round simply ends with `exploded`), so there was nothing
+to apply armor to. Decided for when explosion damage is added: treat it as a body hit (armor takes half), through the
+same `applyDamage`.
+
+**What travels where (information rule).**
+- Self snapshot: the player's own armor is one byte at offset 15, right after health; everything after it moved one
+  byte (`SNAP_LOADOUT` 75 to 76). Other players' entries (`PlayerSnap`) carry no armor, so nobody is ever sent an
+  enemy's or a teammate's armor (allies' armor was not needed).
+- `dmg` (sent only to the victim): `amount` is now the health the hit removed, and a new `armor` field (absent when
+  0) is what it took from the victim's own armor.
+- `hitconfirm` (to the attacker): `damage` stays the hit's full amount. In a match nothing about armor is added. In
+  the practice range only, `armor` says how much of it went to the target's armor; the top strip reads
+  `34 body (17 armor / 17 health)` or `68 head (all health)`.
+- Shot and slash events still carry the full `damage`, as before; they say nothing about armor.
+- `stats.damage` counts health plus armor removed (health capped at what the victim had), so it is about twice what
+  it was for body hits, and `mvpScore` (`damage / 100`) weighs damage a little more than before.
+
+**Client.** Interfaces first: `LocalView.armor` (`presenter-api.ts`) and `AudioEngine.armorHit()` (`audio-api.ts`).
+HUD (`presenter.ts`): a shield and the armor number beside health in the same 52 px type, light blue; on a drop it
+flashes white for 0.18 s and fades back over 0.3 s; at 0 the shield and number dim to 28 %. The spectator view shows no
+teammate health today, so it shows no armor either. Sound (`audio.ts`): when a `dmg` carries armor, the victim hears
+the recorded metal bullet impact (package H's sample set; the synthesised impact until it loads), non-positional, on
+top of the usual hurt sound; the attacker hears nothing new. The sound test page (`?soundtest=1`) has "Hurt with
+armor hit". `main.ts` takes armor from the self snapshot and lowers it at once when a `dmg` says so (the next
+snapshot confirms it).
+
+**Hits to kill from a fresh spawn** (checked by `shared/armor.test.ts`; "after" is while the armor lasts, which is the
+whole fight for a single attacker):
+
+| Weapon, zone | Damage (armor + health) | Before | After |
+|---|---|---|---|
+| Rifle head | 68 (0 + 68) | 2 | 2 |
+| Rifle torso | 34 (17 + 17) | 3 | 6 |
+| Rifle arms or legs | 17 (8 + 9) | 6 | 12 |
+| Pistol head | 52 (0 + 52) | 2 | 2 |
+| Pistol torso | 26 (13 + 13) | 4 | 8 |
+| Pistol arms or legs | 13 (6 + 7) | 8 | 15 |
+| Defender knife, front | 35 (17 + 18) | 3 | 6 |
+| Defender knife, behind | 70 (0 + 70) | 2 | 2 |
+| Ghost knife, front | 55 (27 + 28) | 2 | 4 |
+| Ghost knife, behind | 100 (0 + 100) | 1 | 1 |
+
+Mixed: a rifle headshot followed by body shots needed 1 body shot before and needs 2 now (68 + 17 + 17).
+
+**Balance, flagged for the owner (nothing retuned):**
+- **Time to kill doubles for body shots.** Rifle torso goes from 3 shots (0.2 s at 10 per second) to 6 (0.5 s). Long
+  sprays climb with recoil, so in practice more shots miss; headshots matter much more than before because they skip
+  the armor.
+- **A pistol cannot kill with arm or leg shots from one magazine** (15 hits needed, 12 in the magazine).
+- **The ghosts' front stab nearly stops working:** 4 swings 0.7 s apart (about 2.3 s within 2 m of an armed
+  defender) instead of 2. Ghosts now depend almost entirely on the back-stab, which is unchanged (one hit). Ghosts
+  also gain armor against guns, so they survive being found for longer; which effect wins is unknown until it is
+  played. Ghost bots already lose almost every round against defender bots (package E); no bot match was measured
+  after this change.
+- **The defender knife** needs 6 front hits (about 3.7 s) and is now nearly useless from the front.
+- `stats.damage` and the MVP score rise for body damage (armor counts), so result cards before and after are not
+  comparable.
+
+**Tests** (20 new): `shared/armor.test.ts` (every zone for both guns, both knives front and back, armor running out
+mid-hit, odd amounts rounding toward health, a 1-damage hit, the cap at the health there was, hits to kill);
+`shared/protocol.test.ts` (armor 0 to 100 round-trips next to health, every self field survives the shift, protocol
+16); `server/src/armor.test.ts` (full armor at spawn and in the own snapshot; reset at a round start for a hurt ghost;
+a 2-a-side fight in which every message each player receives is checked as it is sent: the self snapshot carries
+only the recipient's own armor, no other player's entry has one, `dmg` armor only to the player hit, no `hitconfirm`
+armor in a match, and `stats.damage` equals all health and armor the victims lost; the practice range's split, and the
+target and the person respawning with full armor; a bot-versus-bot run where armor goes down, never below 0, and is
+full at every round start). Existing tests that assumed three rifle shots kill now fire six; the bot determinism
+check includes armor.
+
+**Screenshots:** `docs/review/armor/` (README there), by `tools/armor-shots.mjs` on scratch ports 8092 and 5192.
+Real: the HUD at full armor, four practice hits listed with their split. Staged: the HUD at 42 and at 0 armor.
+
+**Not verified:** anything with a mouse or on a real GPU; the armor flash (not caught on a still); the armor dropping
+from a real hit on the local player in a browser (the server and wire path are tested, the HUD was only fed staged
+values); the armor-hit sound by ear (nobody listened; its level 0.6 is a guess); a full match or a bot match measured
+for balance after the change; the practice strip at narrow window widths (five long entries). The warmup respawn edge
+(Known problems) is unchanged.

@@ -31,6 +31,10 @@ export const STEP_HEIGHT = 0.35;
 // Combat. Per-weapon numbers (damage, fire rate, magazine, reload, recoil, spread, aim) are in
 // the table in shared/weapons.ts; the rules that use them are in shared/gun.ts.
 export const MAX_HEALTH = 100;
+/** Armor every player spawns with (package P; no pickups, no buying). The rule is in shared/armor.ts. */
+export const MAX_ARMOR = 100;
+/** Share of a body, arm or leg hit that armor takes while it lasts (rounded down); the rest goes to health. */
+export const ARMOR_ABSORB = 0.5;
 /** Top slice of the hull that counts as the head. */
 export const HEAD_ZONE = 0.28;
 export const SHOT_RANGE = 120;
