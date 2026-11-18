@@ -22,3 +22,18 @@ setting had no effect (the frame loop reset the camera to 74 degrees every frame
 
 The knife "swing" pictures freeze when the swing's cooldown passes a fixed count, which can land after the slash; the
 slash itself is easier to judge in the Blender previews (`viewmodel.py --preview <dir>`).
+
+## Second follow-up (roll, the thin aimed gun, knife fingers)
+
+`before2/` is `main` at d2d5098; `after2/` is this fix. Every first-person picture at four fields of view: `-fov60`,
+`-fov74`, `-fov90`, `-fov110` (same file names as above). Same method: headless Chrome, software GL, scratch ports
+8099 and 5199, still frames only.
+
+- **Thin aimed gun (`11-rifle-iron-aimed-*`):** the iron sight's eye point was 0.44 m behind the grip, past the end of
+  the stock, so aimed the camera saw the AK exactly end-on, a 5 cm strip (the folding stock's butt edge-on). It was the
+  same at every field of view: the field of view lock (`presenter.ts VM_FOV`) projects exactly like a 74-degree camera
+  and was not the cause. The eye now sits 0.20 m behind the grip (a cheek weld; `weapons.py EYE_BEHIND_GRIP`): the stock
+  passes under the eye and the receiver's top leads to the front post. Red dot and 2x scope eye points are unchanged.
+- **Roll:** rifle and pistol hip poses rolled -1 degree instead of -6 and -3; the knife's spine is level.
+- **Fingers:** every finger now bends in its own plane, toward the palm, about the hand's own knuckle line (they used
+  the grip's axis, which for the knife's diagonal handle bent them sideways); the knife's thumb wraps over the handle.

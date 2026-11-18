@@ -81,8 +81,8 @@ TWIST_SHARE = {'LowerArm': 0.1, 'ForeTwist1': 0.5, 'ForeTwist2': 0.85}
 
 # Hip poses of the guns in PlayCanvas camera space (position, Euler degrees): presenter.ts VM_LOOKS[..].hip.
 HIP = {
-    'rifle': ((0.155, -0.155, -0.21), (2, 15, -6)),
-    'pistol': ((0.085, -0.105, -0.18), (-2, 12, -3)),
+    'rifle': ((0.155, -0.155, -0.21), (2, 15, -1)),
+    'pistol': ((0.085, -0.105, -0.18), (-2, 12, -1)),
 }
 
 # The arms, per rig and side, in camera space (Blender axes: X right, Y forward, Z up): the forearm's direction from
@@ -116,6 +116,8 @@ THUMB_FWD_L = (0, 5, 0)
 PISTOL_SUPPORT = (-0.034, 0.016, -0.03)
 PISTOL_SUPPORT_PITCH = -14
 THUMB_RELAX = (20, 10, 5)
+# Knife: the thumb wraps over the fingers round the handle.
+THUMB_KNIFE = (70, 45, 35)
 
 
 def log(*a):
@@ -358,13 +360,20 @@ class Rig:
         self.twist(mats, side)
         for n in hand:
             mats[n] = wt @ w0.inverted() @ self.rest[n]
-        # Fingers curl toward the palm about the hand's pinky-to-index axis.
-        r, f, u = (grip.col[i].to_3d().normalized() for i in range(3))
+        # The hand's own frame as posed (not the grip's: a grip may lie diagonally in the palm, as the knife's does).
+        hand = wt @ w0.inverted() @ self.grip0[side]
+        r, f, u = (hand.col[i].to_3d().normalized() for i in range(3))
         axis = u if side == 'R' else -u
+        palm = ((wt @ w0.inverted()).to_3x3() @ self.palm0[side]).normalized()
+        # Each finger bends in its own plane, every joint toward the palm: its hinge is the finger's direction crossed
+        # with the palm's normal (a finger pointing a little sideways still folds straight onto the palm).
         for finger in FINGERS:
             chain = [f'{finger}{k}.{side}' for k in (2, 3, 4)]
+            d = (mats[chain[1]].to_translation() - mats[chain[0]].to_translation()).normalized()
+            hinge = d.cross(palm)
+            hinge = hinge.normalized() if hinge.length > 1e-6 else axis
             for i, b in enumerate(chain):
-                rk.rotate_about(mats, chain[i:], mats[b].to_translation(), axis, math.radians(curl[finger][i]))
+                rk.rotate_about(mats, chain[i:], mats[b].to_translation(), hinge, math.radians(curl[finger][i]))
         tchain = [f'Thumb{k}.{side}' for k in (1, 2, 3)]
         opp, c2, c3 = thumb
         # Opposition: the thumb swings across the palm about the metacarpals' direction, then its joints curl.
@@ -664,7 +673,7 @@ KNIFE_DIAGONAL = float(os.environ.get('SB_KNIFE_DIAGONAL', '45'))
 
 
 def build_knife_clips(rig):
-    REST = knife_frame((0.12, 0.26, -0.14), (-0.2, 0.92, 0.33), (0.05, -0.35, 0.94))
+    REST = knife_frame((0.12, 0.26, -0.14), (-0.2, 0.92, 0.33), (0.0, -0.35, 0.94))
     BACK = knife_frame((0.23, 0.32, -0.08), (-0.25, -0.1, 1.0), (0.4, -0.9, 0.0))
     SLASH = knife_frame((-0.04, 0.32, -0.23), (-1.0, 0.45, -0.15), (-0.1, 0.2, 1.0))
     guard = rig.cam(Matrix.Translation(Vector((-0.24, 0.28, -0.46))) @ Matrix.Rotation(math.radians(-60), 4, 'X'))
@@ -686,7 +695,7 @@ def build_knife_clips(rig):
         # The shoulder reaches forward and across into the slash.
         sw = rk.keyed([(0.0, (0.0,)), (0.2, (0.6,)), (0.32, (1.0,)), (0.52, (0.0,))], t)[0]
         return rig.pose(k, {}, {'R': knife_grip(k), 'L': guard}, {'R': GRIP_CURL, 'L': RELAX_CURL},
-                        {'R': THUMB_GRIP, 'L': THUMB_RELAX}, {'R': (-0.08 * sw, 0.12 * sw, 0.04 * sw)})
+                        {'R': THUMB_KNIFE, 'L': THUMB_RELAX}, {'R': (-0.08 * sw, 0.12 * sw, 0.04 * sw)})
 
     clip(rig, 'knife_idle', 1 / FPS, lambda t: pose_at(REST))
     clip(rig, 'knife_swing', 0.52, lambda t: pose_at(frame_at(t), t))
@@ -885,7 +894,8 @@ PREVIEW_SHOTS = {
     'rifle': [('rifle_idle', 0, 'rifle-idle'), ('rifle_reload', 0.6, 'rifle-reload-a'), ('rifle_reload', 1.1, 'rifle-reload-b'),
               ('rifle_reload', 1.95, 'rifle-reload-c')],
     'pistol': [('pistol_idle', 0, 'pistol-idle'), ('pistol_reload', 0.42, 'pistol-reload-a'), ('pistol_reload', 1.06, 'pistol-reload-c')],
-    'knife': [('knife_idle', 0, 'knife-idle'), ('knife_swing', 0.2, 'knife-windup'), ('knife_swing', 0.3, 'knife-slash')],
+    'knife': [('knife_idle', 0, 'knife-idle')] + [('knife_swing', t, f'knife-swing-{int(t * 100):02d}') for t in
+                                                   (0.1, 0.2, 0.26, 0.3, 0.34, 0.42, 0.5)],
 }
 
 

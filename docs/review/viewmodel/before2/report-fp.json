@@ -1,0 +1,19 @@
+{
+ "drawCalls": {
+  "first person rifle iron": {
+   "hipWithoutOtherPlayers": 8,
+   "aimedWithoutOtherPlayers": 9
+  },
+  "first person rifle reddot": {
+   "hipWithoutOtherPlayers": 8,
+   "aimedWithoutOtherPlayers": 9
+  },
+  "first person rifle scope2x": {
+   "hipWithoutOtherPlayers": 8,
+   "aimedWithoutOtherPlayers": 9
+  },
+  "first person pistol": 9,
+  "first person knife": 8
+ },
+ "notes": []
+}
