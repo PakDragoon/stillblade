@@ -44,14 +44,21 @@ describe('first-person viewmodels', () => {
             expect(c.has(`${w.id}_idle`)).toBe(true);
             expect(c.get(`${w.id}_reload`)).toBeCloseTo(w.reloadTicks / TICK_RATE, 1);
             const names = nodeNames(g);
-            for (const n of ['weapon', 'mag', 'sup', 'muzzle', 'muzzle_bare', 'Wrist.R', 'Wrist.L']) expect(names.has(n)).toBe(true);
+            // The rifle (package T) carries the M4 pack's own arm joints; the pistol keeps the soldier's.
+            const wrists = w.id === 'rifle' ? ['RightHand', 'LeftHand'] : ['Wrist.R', 'Wrist.L'];
+            for (const n of ['weapon', 'mag', 'sup', 'muzzle', 'muzzle_bare', ...wrists]) expect(names.has(n), n).toBe(true);
             expect(g.meshes.length).toBe(1); // one skinned mesh: one draw call
         });
     }
 
-    it('rifle (package R): the pack clips at the rule lengths (empty reload, draw, one fire interval)', () => {
+    it('rifle (packages R and T): the pack clips at the rule lengths (empty reload, draw, one fire interval)', () => {
         const rifle = WEAPONS[0];
         const c = clips(readGlb('viewmodel_rifle.glb'));
+        // Package T: the bolt held back on the catch while the magazine is empty, and the shot that empties it.
+        expect(c.has('rifle_idle_empty')).toBe(true);
+        expect(c.get('rifle_fire_empty')).toBeCloseTo(rifle.fireInterval / TICK_RATE, 2);
+        // No holster clip: a switch has no holster time in the rules.
+        expect(c.has('rifle_holster')).toBe(false);
         // The client samples the reload clips by progress and the draw by draw progress, so their lengths must be the
         // rules' (an empty reload is longer than a tactical one).
         expect(c.get('rifle_reload_empty')).toBeCloseTo(rifle.reloadEmptyTicks / TICK_RATE, 2);
@@ -61,8 +68,17 @@ describe('first-person viewmodels', () => {
         expect(rifle.reloadEmptyTicks).toBeGreaterThan(rifle.reloadTicks);
     });
 
-    it('the guns have an aimed-arms clip for each sight they take, and the forearm twist bones', () => {
-        for (const w of WEAPONS) {
+    it('rifle (package T): the M4 pack arms, its moving parts, and its clips play the pack as authored', () => {
+        const g = readGlb('viewmodel_rifle.glb');
+        const names = nodeNames(g);
+        for (const n of ['round', 'bolt', 'catch', 'trigger', 'rearsight', 'RightForeArm', 'LeftForeArm', 'RightHandIndex1',
+            'LeftHandThumb1']) expect(names.has(n), n).toBe(true);
+        // As authored: no aimed-arms clips (the pack has none; aiming moves the whole rig onto the sight line).
+        expect(clips(g).has('rifle_aim_iron')).toBe(false);
+    });
+
+    it('the pistol has an aimed-arms clip and the forearm twist bones', () => {
+        for (const w of WEAPONS.filter(x => x.id !== 'rifle')) {
             const g = readGlb(`viewmodel_${w.id}.glb`);
             const c = clips(g);
             const sights = w.takesSights ? SIGHTS.map(s => s.id) : [SIGHTS[SIGHT_IRON].id];
@@ -126,7 +142,7 @@ describe('realistic weapons (package M part 2)', () => {
 
     it('every rig has its moving parts, aim points (guns), UVs and colours', () => {
         const parts: Record<string, string[]> = {
-            rifle: ['bolt', 'mag', 'sup', ...SIGHTS.map(s => `aim_${s.id}`)],
+            rifle: ['bolt', 'mag', 'round', 'catch', 'trigger', 'rearsight', 'sup', ...SIGHTS.map(s => `aim_${s.id}`)],
             pistol: ['slide', 'mag', 'sup', 'aim_iron'],
             knife: []
         };

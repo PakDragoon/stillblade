@@ -1,0 +1,491 @@
+{
+ "note": "SwiftShader (software GL): looks only. Draw calls are real.",
+ "shots": [
+  {
+   "name": "low-lit-hip",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 20
+  },
+  {
+   "name": "low-lit-aimed-reddot",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 20
+  },
+  {
+   "name": "low-dark-hip",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 9
+  },
+  {
+   "name": "low-dark-aimed-reddot",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 10
+  },
+  {
+   "name": "low-fire",
+   "gun": {
+    "mag": 29,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 1,
+    "burst": 1,
+    "sinceShot": 5,
+    "shots": 1
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 21
+  },
+  {
+   "name": "low-reload-2-mag-out",
+   "gun": {
+    "mag": 29,
+    "reserve": 90,
+    "reload": 79,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 245,
+    "shots": 1
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 21
+  },
+  {
+   "name": "low-reload-4-mag-in",
+   "gun": {
+    "mag": 29,
+    "reserve": 90,
+    "reload": 43,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 1
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 19
+  },
+  {
+   "name": "low-bolt-locked",
+   "gun": {
+    "mag": 0,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 155,
+    "shots": 31
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 21
+  },
+  {
+   "name": "low-empty-1-mag-out",
+   "gun": {
+    "mag": 0,
+    "reserve": 90,
+    "reload": 109,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 215,
+    "shots": 31
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 21
+  },
+  {
+   "name": "low-empty-3-bolt-catch",
+   "gun": {
+    "mag": 0,
+    "reserve": 90,
+    "reload": 37,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 31
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 21
+  },
+  {
+   "name": "low-draw-1",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 31
+   },
+   "draw": 13,
+   "slot": 0,
+   "draws": 21
+  },
+  {
+   "name": "low-draw-2",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 31
+   },
+   "draw": 1,
+   "slot": 0,
+   "draws": 21
+  },
+  {
+   "name": "low-pistol-hip",
+   "gun": {
+    "mag": 12,
+    "reserve": 36,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 1,
+   "draws": 20
+  },
+  {
+   "name": "low-pistol-reload",
+   "gun": {
+    "mag": 11,
+    "reserve": 36,
+    "reload": 49,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 167,
+    "shots": 1
+   },
+   "draw": 0,
+   "slot": 1,
+   "draws": 21
+  },
+  {
+   "name": "low-knife-defender",
+   "gun": null,
+   "draw": 0,
+   "slot": 2,
+   "draws": 21
+  },
+  {
+   "name": "low-lit-hip-iron",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 20
+  },
+  {
+   "name": "low-lit-aimed-iron",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 20
+  },
+  {
+   "name": "low-lit-aimed-scope2x",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 20
+  },
+  {
+   "name": "low-knife-ghost",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 10
+  },
+  {
+   "name": "low-third-person-front",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 11
+  },
+  {
+   "name": "low-third-person-side",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 14
+  },
+  {
+   "name": "low-third-person-left",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 14
+  },
+  {
+   "name": "high-lit-hip",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 42
+  },
+  {
+   "name": "high-lit-aimed-reddot",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 42
+  },
+  {
+   "name": "high-dark-hip",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 32
+  },
+  {
+   "name": "high-dark-aimed-reddot",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 32
+  },
+  {
+   "name": "high-lit-hip-iron",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 42
+  },
+  {
+   "name": "high-lit-aimed-iron",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 42
+  },
+  {
+   "name": "high-lit-aimed-scope2x",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 42
+  },
+  {
+   "name": "high-third-person-front",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 37
+  },
+  {
+   "name": "high-third-person-side",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 43
+  },
+  {
+   "name": "high-third-person-left",
+   "gun": {
+    "mag": 30,
+    "reserve": 90,
+    "reload": 0,
+    "cooldown": 0,
+    "burst": 0,
+    "sinceShot": 255,
+    "shots": 0
+   },
+   "draw": 0,
+   "slot": 0,
+   "draws": 41
+  }
+ ],
+ "draws": {
+  "low-lit-hip": 20,
+  "low-dark-hip": 10,
+  "low-third-person-front": 11,
+  "low-third-person-side": 15,
+  "low-third-person-left": 13,
+  "low-third-person-front-without-player": 12,
+  "high-lit-hip": 42,
+  "high-dark-hip": 32,
+  "high-third-person-front": 37,
+  "high-third-person-side": 43,
+  "high-third-person-left": 41,
+  "high-third-person-front-without-player": 37
+ }
+}

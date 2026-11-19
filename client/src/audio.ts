@@ -563,9 +563,9 @@ function scrape(v: Voice, t: number, dur: number, f0: number, f1: number, level:
 }
 
 /**
- * Rifle reload, all scheduled from `t` at the first-person clip's times (RELOAD_CUES, package R): magazine release
- * click and the magazine rocked out, the new one seated (clunk + latch click). flag = the empty reload (2.7 s): the
- * charging handle is then pulled back and let go (a scrape and the bolt slamming home). Quiet by design.
+ * Rifle reload, all scheduled from `t` at the first-person clip's times (RELOAD_CUES, package T): magazine release
+ * click and the magazine pulled, the magazine seated (clunk + latch click). flag = the empty reload (2.7 s): the palm
+ * then slaps the bolt catch (a click) and the locked-back bolt slams home. Quiet by design.
  */
 const synthReload: Synth = (v, t, _x, empty) => {
     const cue = empty ? RELOAD_CUES.rifle_empty : RELOAD_CUES.rifle;
@@ -579,8 +579,7 @@ const synthReload: Synth = (v, t, _x, empty) => {
     if (!empty) return;
     const bolt = t + RELOAD_CUES.rifle_empty.times[2];
     const home = bolt + RELOAD_BOLT_SLAM;
-    scrape(v, bolt, 0.07, 1600, 3200, 0.22);
-    metalClick(v, bolt + 0.07, 3800, 0.4);
+    metalClick(v, bolt, 3800, 0.4);
     metalClick(v, home, 3000, 0.6);
     clunk(v, home, 230, 0.45);
 };

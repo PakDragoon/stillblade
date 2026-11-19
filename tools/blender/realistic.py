@@ -42,11 +42,11 @@ BUILD = os.path.join(SRC, 'build')
 FP_GLB = os.path.join(BUILD, 'weapons_fp.glb')
 TEX_DIR = os.path.join(ROOT, 'client', 'public', 'models', 'textures')
 ATLAS_SIZES = (2048, 1024)
-# Atlas layout per gun (UV units, v up): [(source material, rect)], swatch rect. The rifle: AK-105 body, folding stock,
-# red dot, downloaded scope; the swatches (flat colours for generated parts and the first-person arms) in the corner.
+# Atlas layout per gun (UV units, v up): [(source material, rect)], swatch rect. The rifle (package T): the pack's M4,
+# the red dot, the downloaded scope, the M4's round; the swatches (flat colours for generated parts) in the corner.
 LAYOUTS = {
-    'rifle': ([('ak105', (0.0, 0.25, 0.75, 1.0)), ('folding_stock', (0.75, 0.75, 1.0, 1.0)),
-               ('sight', (0.75, 0.5, 1.0, 0.75)), ('scope', (0.75, 0.25, 1.0, 0.5))], (0.75, 0.0, 1.0, 0.25)),
+    'rifle': ([('M4_D', (0.0, 0.25, 0.75, 1.0)), ('sight', (0.75, 0.75, 1.0, 1.0)), ('scope', (0.75, 0.25, 1.0, 0.5)),
+               ('Bullet5_56x45mm_D', (0.75, 0.5, 0.875, 0.625))], (0.75, 0.0, 1.0, 0.25)),
     'pistol': ([('T_PM', (0.0, 0.25, 0.875, 1.0))], (0.875, 0.0, 1.0, 1.0)),
     'knife': ([('Material.001', (0.0, 0.5, 0.875, 1.0))], (0.875, 0.0, 1.0, 1.0)),
 }
@@ -60,8 +60,9 @@ ARM_LAYOUTS = {
 }
 # With the pack's gloved hands (packhands.py): the arms' skin region becomes the glove (its maps, recoloured coyote) and
 # the bare fingertips' skin; the sleeve and the ghost's suit keep their rectangles.
+# Package T: the rifle carries the pack's own arms (bare forearms, no sleeve): the whole skin map region it uses.
 ARM_LAYOUTS_PACK = {
-    'rifle': {'glove': (0.0, 0.0, 0.25, 0.25), 'handskin': (0.25, 0.0, 0.375, 0.25), 'sleeve': (0.375, 0.0, 0.75, 0.25)},
+    'rifle': {'glove': (0.0, 0.0, 0.25, 0.25), 'handskin': (0.25, 0.0, 0.75, 0.25)},
     'pistol': {'glove': (0.0, 0.0, 0.3125, 0.25), 'handskin': (0.3125, 0.0, 0.4375, 0.25),
                'sleeve': (0.4375, 0.0, 0.875, 0.25)},
     'knife': {'glove': (0.0, 0.25, 0.3125, 0.5), 'handskin': (0.3125, 0.25, 0.4375, 0.5),

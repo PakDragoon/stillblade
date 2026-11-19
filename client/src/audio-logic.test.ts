@@ -35,8 +35,8 @@ describe('sample manifest', () => {
     });
     it('keeps the reload cues at the animation times', () => {
         // Package R: the pack's clips at the rules' durations (viewmodel.py logs "pack cues").
-        expect(RELOAD_CUES.rifle.times).toEqual([0.71, 1.55]);
-        expect(RELOAD_CUES.rifle_empty.times).toEqual([0.74, 1.63, 1.94]);
+        expect(RELOAD_CUES.rifle.times).toEqual([0.63, 1.52]);
+        expect(RELOAD_CUES.rifle_empty.times).toEqual([0.69, 1.62, 2.04]);
         // Every cue falls inside its reload.
         expect(Math.max(...RELOAD_CUES.rifle.times)).toBeLessThan(WEAPONS[0].reloadTicks / 60);
         expect(Math.max(...RELOAD_CUES.rifle_empty.times)).toBeLessThan(WEAPONS[0].reloadEmptyTicks / 60);

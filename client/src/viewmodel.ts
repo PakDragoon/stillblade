@@ -7,11 +7,12 @@ import { SIGHTS, SIGHT_IRON } from '@shared/weapons';
  * First-person rigs: arms and hands holding one weapon, built by tools/blender/viewmodel.py into
  * client/public/models/viewmodel_{rifle,pistol,knife}.glb.
  *
- * Each rig is ONE skinned mesh (sleeves, gloves and the weapon with its moving parts), so it is one draw call, drawn
- * with its gun's textured material (weapons.ts `WeaponMaterials`; package M part 2: the AK-105, the Makarov, the
- * knife). Bones: the SWAT character's arm and finger chains, "weapon" (the weapon's own frame, origin at the grip) and
- * under it the moving parts: "mag", "bolt" (rifle: the bolt carrier and its charging handle) or "slide" (pistol), and
- * "sup" (the suppressor). Empties "muzzle" (suppressor front), "muzzle_bare" (bare muzzle front) and "aim_<sight>"
+ * Each rig is ONE skinned mesh (arms, gloves and the weapon with its moving parts), so it is one draw call, drawn
+ * with its gun's textured material (weapons.ts `WeaponMaterials`). The rifle (package T, tools/blender/fpm4.py) is the
+ * owner's M4 animation pack as authored: the pack's own arm and finger joints, "weapon" (the gun's frame, origin at the
+ * grip) and under it "mag", "round", "bolt", "catch", "trigger", "rearsight" (the folding rear sight, shrunk away
+ * whenever an optic is mounted), "sup" and the sights. The pistol and knife (tools/blender/viewmodel.py) keep the
+ * soldier's arm chains with the pack's gloved hands; their moving parts are "mag", "slide" and "sup". Empties "muzzle" (suppressor front), "muzzle_bare" (bare muzzle front) and "aim_<sight>"
  * hang from the weapon bone. The knife file has two meshes on the same armature ("rig_knife"): "vm_knife" (a
  * defender's sleeves) and "vm_ghost" (a ghost's), one shown at a time by node name.
  *
@@ -99,6 +100,8 @@ export class VmRig {
     private readonly sup: pc.GraphNode | null;
     /** Per sight (SIGHTS index): its bone, or null (iron sights, or a rig without that sight). */
     private readonly sightBones: (pc.GraphNode | null)[];
+    /** The rifle's folding rear sight (package T): folded away (shrunk) whenever an optic is mounted. */
+    private readonly rearSight: pc.GraphNode | null;
     private sight = SIGHT_IRON;
     private readonly variants = new Map<string, pc.Entity>();
     private suppressed = true;
@@ -124,6 +127,7 @@ export class VmRig {
         }
         this.sup = e.findByName('sup');
         this.sightBones = SIGHTS.map((d, i) => (i === SIGHT_IRON ? null : e.findByName(`sight_${d.id}`)));
+        this.rearSight = e.findByName('rearsight');
         this.muzzle = e.findByName('muzzle');
         this.muzzleBare = e.findByName('muzzle_bare');
         for (const a of res.animations) {
@@ -202,6 +206,7 @@ export class VmRig {
         if (this.sup && !this.suppressed) this.sup.setLocalScale(HIDDEN, HIDDEN, HIDDEN);
         const sb = this.sightBones;
         for (let i = 0; i < sb.length; i++) if (sb[i] && i !== this.sight) sb[i]!.setLocalScale(HIDDEN, HIDDEN, HIDDEN);
+        if (this.rearSight && this.sight !== SIGHT_IRON) this.rearSight.setLocalScale(HIDDEN, HIDDEN, HIDDEN);
     }
 }
 

@@ -1,6 +1,6 @@
 # Stillblade — handoff
 
-Last rewritten 2026-11-15; **status updated 2026-11-19: everything is on `main`, pushed and deployed, protocol 17 (packages A to H, L, M parts 1 and 2, N, O with three follow-ups, P, Q, R with the pack hands), 502 tests, typecheck clean, the game server restarted on protocol 17. Landed 2026-11-19: package Q (visual and feel polish: 4x anti-aliasing on both tiers, players and the gun lit by probes of each map's baked light, metal reflections, weapon bob, look inertia, jump and landing, crouch tilt, spring recoil, a vignette on High) and package R (the owner's downloaded M4 pack's motion on our AK, a 2.7 s empty reload with the AK's charging handle, protocol 17, and the pack's gloved hands on all three rigs). See "Package Q" and "Package R" at the end. Landed later 2026-11-19: package S (a loading screen with real progress, step list, stall note and Try again; 523 tests); the defender's first-person sleeve is now the third-person shirt's own sleeve with folds (still plain; a matched arms pack is the real fix). **Decided 2026-11-19, next to build: package T (ROADMAP): first and third person become separate models; the rifle becomes the M4 from the owner's pack in both views, first person using that pack's own arms, gun and animations as authored; pistol and knife on hold.** Paused: the character lab page (package U, `/v2_character`, branch `claude/character-lab`, groundwork only; see `docs/review/lab/STATUS.md` there) until the owner has new assets. Open: the pack seller's name is a placeholder in `client/public/models/CREDITS.md`; the cost of 4x anti-aliasing on integrated graphics is unmeasured (compare `?tier=low` with `?tier=low&aa=0`); armor balance and all new motion are untested in real matches.** The live site rebuilds from `main` on every push; the game server runs on the owner's PC behind a Cloudflare Tunnel and must run a `main` with the same protocol as the site. **Nothing from waves 3 to 6 has been played with a mouse, seen on a real GPU or listened to**: animations and models were judged from Blender renders and headless Chrome (software GL) screenshots, sounds from measured levels. Older sections below describe each package as it was when built, so some numbers in them (test counts, protocol versions, "not on `main`") are historical; **"What to do next" near the end is the current summary, read it first.** The owner's live server holds port 8080 on his PC, so `npm run dev` needs that server stopped first.
+Last rewritten 2026-11-15; **status updated 2026-11-19: everything is on `main`, pushed and deployed, protocol 17 (packages A to H, L, M parts 1 and 2, N, O with three follow-ups, P, Q, R with the pack hands), 502 tests, typecheck clean, the game server restarted on protocol 17. Landed 2026-11-19: package Q (visual and feel polish: 4x anti-aliasing on both tiers, players and the gun lit by probes of each map's baked light, metal reflections, weapon bob, look inertia, jump and landing, crouch tilt, spring recoil, a vignette on High) and package R (the owner's downloaded M4 pack's motion on our AK, a 2.7 s empty reload with the AK's charging handle, protocol 17, and the pack's gloved hands on all three rigs). See "Package Q" and "Package R" at the end. Landed later 2026-11-19: package S (a loading screen with real progress, step list, stall note and Try again; 523 tests); the defender's first-person sleeve is now the third-person shirt's own sleeve with folds (still plain; a matched arms pack is the real fix). **Package T (the M4 everywhere) built 2026-11-20 on branch `claude/m4-everywhere-465728`, NOT reviewed or merged: the rifle is the M4 from the owner's pack in both views, first person using that pack's own arms, gun and clips as authored, the bolt held open on an empty magazine, our sights on the M4's rail, the AK-105 retired; no protocol change (see "Package T" at the end). Pistol and knife on hold.** Paused: the character lab page (package U, `/v2_character`, branch `claude/character-lab`, groundwork only; see `docs/review/lab/STATUS.md` there) until the owner has new assets. Open: the pack seller's name is a placeholder in `client/public/models/CREDITS.md`; the cost of 4x anti-aliasing on integrated graphics is unmeasured (compare `?tier=low` with `?tier=low&aa=0`); armor balance and all new motion are untested in real matches.** The live site rebuilds from `main` on every push; the game server runs on the owner's PC behind a Cloudflare Tunnel and must run a `main` with the same protocol as the site. **Nothing from waves 3 to 6 has been played with a mouse, seen on a real GPU or listened to**: animations and models were judged from Blender renders and headless Chrome (software GL) screenshots, sounds from measured levels. Older sections below describe each package as it was when built, so some numbers in them (test counts, protocol versions, "not on `main`") are historical; **"What to do next" near the end is the current summary, read it first.** The owner's live server holds port 8080 on his PC, so `npm run dev` needs that server stopped first.
 
 **If you are a new session:** this file tells you what exists, what has and has not been verified, the rules that must not be broken, and how the owner wants work done. `ROADMAP.md` tells you what to build next and what is already decided. Read both before changing anything. `DEPLOY.md` covers hosting. You need nothing else: no memory files or earlier conversations are assumed.
 
@@ -289,7 +289,7 @@ Warehouse routes from the ghost spawn: to A through the yard stair and service c
 
 ## Assets and licences
 
-Maps: CC0 textures and sky from Poly Haven, listed in `client/public/maps/CREDITS.md`. Models (`client/public/models/CREDITS.md`): since package O the characters and first-person arms are the Fab "Quantum Modular Character Free Sample" by Quantum Assets (Fab Standard License: its source files must never be shipped or committed, only the processed models), animated with clips retargeted from the Quaternius "SWAT" character (CC0); since package M part 2 the weapons are CC-BY models from Fab (AK-105 by SpatialNeglect, Makarov PM by TaigaForest, Tactical Knife and Red Dot Sight by Gerardo Justel, and since package O the AR Scope by Scape), whose authors must stay credited. Since package R the first-person **gloved hands and their textures** come from the Fab "M4 - FPS Weapon Animations Pack FREE (v.1)" (Fab Standard License, seller name to be filled in by the owner in `CREDITS.md`): processed hands and resampled textures ship inside the game files, the downloaded zip never does. Raw downloads live in the git-ignored `tools/blender/source-art/`; the Blender scripts fall back to the shipped files if it is missing, but rebuilding characters or weapons from source needs those files present.
+Maps: CC0 textures and sky from Poly Haven, listed in `client/public/maps/CREDITS.md`. Models (`client/public/models/CREDITS.md`): since package O the characters and first-person arms are the Fab "Quantum Modular Character Free Sample" by Quantum Assets (Fab Standard License: its source files must never be shipped or committed, only the processed models), animated with clips retargeted from the Quaternius "SWAT" character (CC0); since package M part 2 the weapons are CC-BY models from Fab (Makarov PM by TaigaForest; the AK-105 by SpatialNeglect until package T, Tactical Knife and Red Dot Sight by Gerardo Justel, and since package O the AR Scope by Scape), whose authors must stay credited. Since package T the **rifle in both views is the M4** from the Fab "M4 - FPS Weapon Animations Pack FREE (v.1)", with that pack's own first-person arms and clips (the AK-105 no longer ships). Since package R the first-person **gloved hands and their textures** come from the same pack (Fab Standard License, seller name to be filled in by the owner in `CREDITS.md`): processed hands and resampled textures ship inside the game files, the downloaded zip never does. Raw downloads live in the git-ignored `tools/blender/source-art/`; the Blender scripts fall back to the shipped files if it is missing, but rebuilding characters or weapons from source needs those files present.
 
 ## Hosting
 
@@ -378,7 +378,8 @@ Warehouse's lightmap on the GPU grows from about 48 MB to 85 MB with mipmaps (th
 **State on 2026-11-19, when the owner moved to a new session (read this first; the bullets after it are older history):**
 
 - **Live:** everything is on `main` (`476e8a7` plus this docs commit), pushed and deployed: protocol 17, 523 tests, typecheck clean. Landed 2026-11-18/19: O with three follow-ups, P (armor), Q (visual and feel polish), R (the M4 pack's motion on the AK, the 2.7 s empty reload, the pack's gloved hands, the defender sleeve from the soldier's shirt), S (loading screen). The game server was found **stopped** on 2026-11-19 (tunnel up, 502 behind it) and was started again from `main` in a PowerShell window titled "Stillblade game server" (command under Hosting); if it keeps dying, find out why.
-- **Next: package T, the M4 everywhere** (ROADMAP "T"). The owner's reasoning, agreed with the main session: first person looked plain because its arms were cut from the third-person soldier, a model made to be seen small and far away, and because the M4's motion was fitted onto a different gun. Decided:
+- **Package T built 2026-11-20 on `claude/m4-everywhere-465728`, waiting for review** (see "Package T" at the end; pictures in `docs/review/m4/`). The plan it followed:
+- **Package T, the M4 everywhere** (ROADMAP "T"). The owner's reasoning, agreed with the main session: first person looked plain because its arms were cut from the third-person soldier, a model made to be seen small and far away, and because the M4's motion was fitted onto a different gun. Decided:
   1. Third person keeps our Quantum soldier.
   2. First person never takes arms from the soldier again: it uses dedicated arms. For the rifle that is the M4 pack's own arms, M4 and animations, used exactly as authored.
   3. The rifle becomes the M4 in both views (what you hold is what others see), replacing the AK-105; game rules unchanged; our red dot and 2x scope move onto the M4.
@@ -1374,3 +1375,104 @@ Built on branch `worktree-loading-screen` (2026-11-19); **reviewed, merged into 
 **Checked** with `node tools/loading-shots.mjs` (headless Chrome, SwiftShader, scratch ports 8098 and 5198, Chrome's network throttled to 4 Mbit/s and 60 ms): a cold first load through the menu and Quick play (98 files, 8.57 MB, every file requested once), a warm room join by link (98 requests, 0.01 MB over the wire: all answered by the cache), a map change to Test Map 1 (7 files, 1.24 MB, the textures it shares with Warehouse not fetched again), the lightmap blocked then Try again (the lightmap requested twice, by design), and the rifle hands held back 12 s at phone width (the note and Play now). `vite build` includes the manifest.
 
 **Not verified:** a real slow or flaky connection (only Chrome's throttling), Cloudflare's live headers (sizes come from the manifest, so they should not matter), a real GPU, the map change after a real match (the screenshot delivered the room's map message to the page's own handler from warmup), the graphics check step (screenshots force `?tier=low`, which skips it), HTTP/2 ordering on the live site (the local dev server is HTTP/1.1, so the map's files queue behind the models for a moment on a cold join), and a failure inside the map change ("Back to menu" there rejoins the room, as before).
+
+
+## Package T (the M4 everywhere) in detail
+
+Built 2026-11-20 on branch `claude/m4-everywhere-465728` (from `main` at `af09e9c`); **not reviewed or merged.** No
+rule, number or message change: `git diff main -- shared server` is empty, protocol stays 17, no server restart needed.
+524 tests (`models.test.ts` covers the new rig's parts and clips), typecheck clean. Pictures: `docs/review/m4/` (README there: before and after,
+Low and High, lit and dark, every sight, both reloads, the locked bolt, the draw, a shot, third person, pistol and
+knife). **Nothing was seen on a real GPU, in motion, with a mouse, or heard**: Blender Workbench stills and SwiftShader
+frozen frames only.
+
+**What the player gets.**
+- **First person, rifle:** the owner's M4 pack exactly as authored: its own bare forearms and fingerless gloves (glove
+  recoloured coyote like the pistol and knife hands), its own skeleton and bind pose, its own M4 and its own clips,
+  only resampled to the rules: reload 2.2 s (pack 0-2.95 s, 1.34x), empty reload 2.7 s (pack 0-3.45 s, 1.28x), draw
+  0.4 s (pack 0-0.70 s, 1.75x), one shot 0.1 s (pack 0-0.30 s, 3x: trigger pull, bolt cycle, kick). Package Q's bob,
+  sway, inertia, landing and spring recoil still move the whole rig. No retargeting, no AK.
+- **Bolt hold-open:** when the last round is fired the bolt stays back on the bolt catch (`rifle_fire_empty`, then
+  `rifle_idle_empty` while the magazine is empty); the empty reload starts from that pose and the left palm slaps the
+  catch at 2.04 s, the bolt home at 2.09 s. From the hip the open bolt is on the gun's far (right) side, as on a real
+  M4; the raised catch shows on the left (`blender/ours-bolt-locked-right.jpg` shows the open port).
+- **Magazine:** in the gun at all times except during the swap (the pack's own: it drops the magazine and seats it
+  again; its second magazine never moves and is not shipped). While empty, the magazine's top round is lowered as the
+  pack authored.
+- **Trigger:** moves on every shot (in the pack's Fire clip).
+- **Reload framing:** at the game's fixed 74-degree weapon view the pack's magazine change happened below the screen
+  edge (with the pack's own framing as well as ours), so during a reload the whole rig rises 7 cm and comes 3 cm
+  closer, blended in and out over the first and last 20 % of the reload (`VM_LOOKS.rifle.rigReload`, presenter.ts).
+  The clip itself is untouched.
+- **Sights on the M4:** the red dot on the upper receiver's rail ahead of the rear sight, the 2x scope's eyepiece over
+  the rail's rear end; the M4's folding rear sight (cut out of the pack's mesh into its own bone, `rearsight`) folds
+  away (is shrunk) in first person whenever an optic is mounted. Iron sights are the M4's own (rear aperture, front
+  post); the red dot co-witnesses the front post. Aim eye points (shipped gun frame, metres): iron (0, -0.12, 0.198),
+  red dot (0, -0.051, 0.185), 2x (0, -0.065, 0.207); `SIGHT_EYE_FALLBACK` re-measured (red dot -0.013, 2x +0.009).
+- **Third person:** the soldier holds the same M4 (3,200 triangles, magazine in, its rear sight up) instead of the
+  AK-105. Third-person clips unchanged; the hands land on the M4's grip and handguard as they did on the AK (front,
+  right and left views in the pictures); no fix was made.
+- **Sounds:** `RELOAD_CUES` re-timed to the pack's events at our speeds (tactical: out 0.63, in 1.52; empty: out
+  0.69, in 1.62, bolt catch 2.04, `RELOAD_BOLT_SLAM` 0.05 so the synthesised bolt lands at 2.09); the synthesised
+  empty reload plays a catch click instead of a charging-handle scrape. `VM_LOOKS.rifle.jolts` re-timed the same way
+  (used only without the rig).
+- **Pistol, knife, ghosts:** unchanged. Their meshes in `weapons.glb`, their rigs and their atlases are byte for byte
+  as before (checked); `after/low-pistol-*` and `low-knife-*` show them.
+- **The AK-105 is retired:** nothing of it ships; its credit is removed from `client/public/models/CREDITS.md` (its
+  zip is listed as no longer used). The M4 pack seller's name is still `[SELLER NAME]` for the owner.
+
+**Decisions taken on my own judgment.**
+- **Hip framing: ours kept** (the owner's approved hip pose, package O third follow-up). The pack's own placement
+  (`blender/pack-idle.jpg`: the gun dead centre, close, seen from behind) was rendered against ours (`ours-idle.jpg`:
+  the gun's left side, bigger, the muzzle just right of the crosshair, as in the owner's reference stills). Ours reads
+  better as a shooter's view and is what the owner approved. For the pack's placement set `VM_LOOKS.rifle.hip` to
+  `[0.0678, -0.2031, -0.154, 0, 0, 0]` (fpm4.py logs it).
+- **No aimed-arms clips:** the pack has no aim pose, so aiming moves the whole rig onto the sight line (the arms come
+  with it). This replaces package O's aimed-arms clips for the rifle only.
+- **Reload lift** (above): a framing offset of the whole rig, not a change to the animation.
+- **Holster not used:** a switch has no holster time in the rules (the new weapon starts drawing at once), so the
+  pack's 0.57 s Holster could only play by delaying the new weapon or by a rule change; the current switch is kept.
+- **Iron eye 12 cm behind the grip** (the AK used 20; on the M4 that made the gun small; 8 cm made the rear sight fill
+  the view). `blender/aim-iron.jpg` against `aim-iron-eye20.jpg`.
+- **The M4's colour lifted 2.4x:** the pack's M4 base colour is very dark (median 0.11 stored) and has no roughness or
+  metal maps; unlifted it was a black silhouette in a first capture, even in the sunlit yard. Its surface value is a
+  constant 0.5 (metal-like, so package Q's reflections read), the round's 0.6 (brass) (`weapons.py M4_LIFT`, `M4_S`,
+  `BRASS_S`).
+- **Glove coyote, forearm skin as the pack's:** the same glove colour as the pistol and knife hands, so switching
+  weapons does not change gloves.
+- **Optics' first-person triangles trimmed** (2x scope 3,000 -> 1,800, red dot body 1,300 -> 900) to keep the Low
+  download under `models.test.ts`' 4.5 MiB budget after the colour lift enlarged the rifle albedo.
+- **Grip origin** of the M4 (the point the hand holds, shared by first person, third person and the aim points): a
+  third of the way down its pistol grip, measured from the mesh like the AK's (`m4.py`).
+- **The bolt-catch sound** uses the recorded bolt sample (a heavy metal impact) at the catch slap, 50 ms before the
+  bolt is home.
+
+**Numbers.** First-person rifle: one skinned mesh, 17,916 triangles (the pack's arms 4,480, its M4 7,524 + rear sight
+582 + magazine, round, bolt, catch and trigger 1,176, the red dot, 2x scope and suppressor), 51 bones (the AK rig: 22,275 triangles, 46 bones), one draw call.
+Third-person M4: 3,200 triangles; its sight and suppressor are merged into it at load as before, so still at most 2
+draw calls per armed player. Draw calls in the captured views: Low 20 (lit) / 10 (dark), High 42 / 32 (before: see
+the review README). Sizes: Low model download 4,696,976 -> 4,662,534 bytes, High 7,273,572 -> 7,203,930;
+`viewmodel_rifle.glb` 1,264,716 -> 1,285,024; `weapons.glb` 302,944 -> 320,076; rifle atlases 1024: 290,256 ->
+218,374, 2048: 740,742 -> 633,660. No per-frame allocation added (two more prebuilt clip-name arrays; `local.mag` read).
+
+**Files.** `tools/blender/m4.py` (new: the pack's M4 read as data, its grip frame, parts, landmarks),
+`tools/blender/fpm4.py` (new: the rifle rig; `--preview <dir>` renders the Blender pictures, `--aim` the aimed views,
+`--no-export` leaves the file alone), `weapons.py` (the M4 instead of the AK; `-- --rifle-only` rebuilds without the
+soldier's 1.2 GB texture zip and leaves the pistol and knife atlases alone), `realistic.py` (rifle atlas layout: M4,
+red dot, scope, round, glove, the pack's arm skin), `viewmodel.py` (now builds only the pistol and knife; its AK rifle
+code is left in but no longer runs), `client/src/viewmodel.ts` (the `rearsight` bone), `presenter.ts`
+(empty-magazine clips, `rigReload`, fallbacks, jolts), `audio-logic.ts`, `audio.ts`, `audio-api.ts`, `soundtest.ts`
+(cue times), `weapons.ts` (comments), `models.test.ts`, `CREDITS.md`, `tools/m4-shots.mjs` (the review capture).
+Rebuild order: `weapons.py`, then `fpm4.py`; the rig rebuild is deterministic (checked byte for byte).
+
+**What the owner must check by playing** (none of it was seen): the reloads, draw and shots in motion (the 1.34x,
+1.28x and 1.75x speed-ups, the 3x shot under automatic fire, the reload lift easing in and out); whether the bare
+forearm's skin looks right on a real GPU (it reads smooth and pale in software GL); the M4's lifted colour in the yard
+and the basement; the aimed views with all three sights at his field of view; the bolt-catch and magazine sounds
+against the motion; the third-person M4 in a real match; Low frame rate (draw calls unchanged; the rifle rig has 17,916
+triangles where the AK rig had 22,275).
+
+**Not verified:** anything on a real GPU, in motion, with a mouse or by ear; the draw played with an empty magazine
+(the draw clip has the bolt forward, so the bolt jumps back when it ends; small, left as is); a remote player's empty
+reload in third person (unchanged: the 2.2 s third-person clip, then a hold); the right hand's fingers against the
+trigger frame by frame; the pack's normal map handedness (used as is, as in package R); the seller's name.

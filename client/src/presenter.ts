@@ -95,7 +95,7 @@ const XHAIR_AIM_OPACITY = 0.15;
  * placed so that point is the camera, so the sight's centre is the screen centre whatever the model. Until the model
  * has loaded, VM_LOOKS[..].aim stands in, lowered by these optical axis heights above the iron line (metres).
  */
-const SIGHT_EYE_FALLBACK: Record<SightId, number> = { iron: 0, reddot: 0.02, scope2x: 0.03 };
+const SIGHT_EYE_FALLBACK: Record<SightId, number> = { iron: 0, reddot: -0.013, scope2x: 0.009 };
 /** The red dot's DOM reticle (only while the gun has no reticle of its own) starts at this aim progress. */
 const SIGHT_OVERLAY_FROM = 0.55;
 /**
@@ -117,8 +117,14 @@ interface VmLook {
     aim: readonly number[];
     /** Offset at the start of a switch (draw = 1): below and rotated away, eased back to zero. */
     draw: readonly number[];
-    /** Reload pose offset (x, y, z, pitch, yaw, roll), blended in by reload progress. */
+    /** Reload pose offset (x, y, z, pitch, yaw, roll), blended in by reload progress (without the arms rig). */
     reload: readonly number[];
+    /**
+     * With the arms rig, whose clip moves the gun and hands: the whole rig is only moved by this much (blended in and
+     * out like `reload`), so the magazine change happens in view (package T: the M4 pack's reloads were framed for a
+     * narrower view than the game's 74-degree weapon view and the magazine well went below the screen).
+     */
+    rigReload: readonly number[];
     /** Fractions of the reload spent going into and coming out of the reload pose. */
     reloadIn: number;
     reloadOut: number;
@@ -142,16 +148,19 @@ interface VmLook {
 const VM_LOOKS: Record<WeaponId, VmLook> = {
     rifle: {
         hip: [0.155, -0.168, -0.155, 2, 11, -1],
-        aim: [-0.013, -0.226, -0.47, 0, 0, 0],
+        aim: [0, -0.198, -0.12, 0, 0, 0],
         draw: [0.03, -0.24, 0.06, -40, 12, 25],
         // Raised, the muzzle tipped up and to the right, rolled clockwise so the magazine well faces the support hand
-        // (only without the arms rig: its reload clip moves the gun, viewmodel.py RELOAD_MAG).
+        // (only without the arms rig: its reload clip moves the gun, tools/blender/fpm4.py).
         reload: [0.01, 0.05, -0.08, 40, -40, -30],
+        // With the M4 pack's arms: 7 cm up and 3 cm closer, nothing turned (the clip's own motion is untouched).
+        rigReload: [0, 0.07, 0.03, 0, 0, 0],
         reloadIn: 0.2, reloadOut: 0.2,
-        // Package R (the pack's clips, audio-logic.ts RELOAD_CUES): the magazine seats at 1.55 s (tactical, no bolt);
-        // in the empty reload at 1.63 s, and the charging handle lets the bolt slam home at about 2.07 s.
-        jolts: [[1550, 110, 1]],
-        joltsEmpty: [[1630, 110, 1], [2070, 88, 0.7]],
+        // Package T (the M4 pack's clips, fpm4.py "pack cues", audio-logic.ts RELOAD_CUES): the magazine seats at
+        // 1.52 s (tactical, no bolt); in the empty reload at 1.62 s, and the bolt catch lets the bolt home at 2.09 s.
+        // Only without the arms rig (its clip carries these moments).
+        jolts: [[1520, 110, 1]],
+        joltsEmpty: [[1620, 110, 1], [2090, 88, 0.7]],
         recoil: { back: 0.03, lift: 0.007, pitch: 3.2, side: 0.7, roll: 1.1, camRoll: 0.35, camPitch: 0.1 }, kickTime: 0.08,
         fx: 1
     },
@@ -161,6 +170,7 @@ const VM_LOOKS: Record<WeaponId, VmLook> = {
         draw: [0, -0.2, 0.05, -55, 0, 20],
         // Tilted onto its side and brought in, magazine well toward the support hand.
         reload: [-0.04, -0.04, 0.04, 16, 12, -38],
+        rigReload: [0, 0, 0, 0, 0, 0],
         reloadIn: 0.15, reloadOut: 0.13,
         // Magazine drops (0.18 s), new one slapped in (0.7 s), slide pulled (1.08 s) and released (1.17 s).
         jolts: [[180, 90, -0.7], [700, 80, 1], [1080, 60, -0.6], [1170, 60, 1.3]],
@@ -203,6 +213,14 @@ const RELOAD_CLIP: readonly string[] = WEAPONS.map(w => `${w.id}_reload`);
 const RELOAD_EMPTY_CLIP: readonly string[] = WEAPONS.map(w => `${w.id}_reload_empty`);
 const DRAW_CLIP: readonly string[] = WEAPONS.map(w => `${w.id}_draw`);
 const FIRE_CLIP: readonly string[] = WEAPONS.map(w => `${w.id}_fire`);
+/**
+ * Package T: the M4 rig's empty-magazine variants: the bolt held back on the bolt catch (`<gun>_idle_empty`, shown
+ * while the magazine is empty and no reload runs) and the shot that empties it (`<gun>_fire_empty`: the bolt stays
+ * back). The empty reload clip starts from that locked pose and the left hand releases the catch. A rig without them
+ * (the pistol) uses its idle and fire clips.
+ */
+const IDLE_EMPTY_CLIP: readonly string[] = WEAPONS.map(w => `${w.id}_idle_empty`);
+const FIRE_EMPTY_CLIP: readonly string[] = WEAPONS.map(w => `${w.id}_fire_empty`);
 
 /** Gun slot index clamped into the weapon table (the knife slot is handled before this is used). */
 function slotOf(weapon: number): number {
@@ -1235,8 +1253,8 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
                 const j = local.reloadEmpty ? look.joltsEmptyOf : look.joltsOf;
                 for (let i = 0; i < j.at.length; i++) jolt += j.size[i] * bump(p, j.at[i], j.w[i]);
             }
-            // With arms, the reload clip moves the gun and hands inside the rig: no procedural reload pose on top.
-            const rw = rig ? 0 : w;
+            // With arms, the reload clip moves the gun and hands inside the rig: only the rig's framing offset on top.
+            const rw = w;
             // Aim: blend from the hip pose to the sight line; the reload pose takes over from it.
             const a0 = local.aim > 0 ? Math.min(1, local.aim) : 0;
             const a = a0 * a0 * (3 - 2 * a0) * (1 - w);
@@ -1255,9 +1273,10 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
                 } else if (d0 > 0 && (clip = rig.clips.get(DRAW_CLIP[slot])) !== undefined) {
                     ct = (1 - d0) * clip.duration;
                     drawByClip = true;
-                } else if ((clip = rig.clips.get(FIRE_CLIP[slot])) !== undefined && vmFireT < clip.duration) {
+                } else if ((clip = (local.mag === 0 ? rig.clips.get(FIRE_EMPTY_CLIP[slot]) : undefined)
+                    ?? rig.clips.get(FIRE_CLIP[slot])) !== undefined && vmFireT < clip.duration) {
                     ct = vmFireT;
-                } else clip = rig.clips.get(IDLE_CLIP[slot]);
+                } else clip = (local.mag === 0 ? rig.clips.get(IDLE_EMPTY_CLIP[slot]) : undefined) ?? rig.clips.get(IDLE_CLIP[slot]);
                 rig.pose(clip, ct);
                 // The aimed arms (shoulders kept in place relative to the eye) over the hold, by the aim.
                 if (p <= 0 && a > 0) rig.blend(aimClips[slot][WEAPONS[slot].takesSights ? vmSight : SIGHT_IRON] ?? undefined, 0, a);
@@ -1266,7 +1285,7 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
             // The weapon's own magnification follows the aim (part of it for the 2x scope).
             const zoom = adsZoomOf(slot, vmSight);
             lockVmFov(1 + (zoom - 1) * a * (WEAPONS[slot].takesSights && sightDef(vmSight).id === 'scope2x' ? VM_SCOPE_ZOOM_SHARE : 1));
-            const hip = look.hip, rl = look.reload, dr = look.draw;
+            const hip = look.hip, rl = rig ? look.rigReload : look.reload, dr = look.draw;
             // Aimed: the sight's aim point (weapons.glb) on the camera; before the model loads, the old fixed pose.
             const sightIdx = WEAPONS[slot].takesSights ? vmSight : SIGHT_IRON;
             const ap = aimPoints[slot][sightIdx] ?? null;
