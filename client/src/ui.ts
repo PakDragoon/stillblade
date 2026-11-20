@@ -12,6 +12,7 @@ import {
 } from './bindings';
 import { optionControls, optionSummary, roomListView, segmented } from './community-ui';
 import { PageNav, canCallVoteKick, type PageId } from './menu-logic';
+import { PRIVACY_SECTIONS } from '@shared/privacy';
 import { button, h } from './dom';
 import { LoadingView, type LoadActions } from './loading-ui';
 import { reporter } from './report';
@@ -292,7 +293,7 @@ export class Ui {
     /** Esc on a menu page: cancels a rebinding in progress, else goes back one page. Null outside the menu. */
     private menuBack: (() => void) | null = null;
 
-    /** The name, then Quick play, Rooms, Practice range, Settings, How to play; each opens its own page. `defaults.room` comes from an invite link. */
+    /** The name, then Quick play, Rooms, Practice range, Settings, How to play, Privacy; each opens its own page. `defaults.room` comes from an invite link. */
     showMenu(maps: MapListEntry[], defaults: { name: string; room: string; map: string },
         loadRooms: () => Promise<RoomListEntry[]> = () => Promise.resolve([])): Promise<JoinChoice> {
         this.hideScreens();
@@ -345,6 +346,7 @@ export class Ui {
         showLoadoutHint();
         menuBtn('', 'Settings', 'Controls, video and audio', () => open('settings'));
         menuBtn('', 'How to play', 'A short guide to a match', () => open('howto'));
+        button('Privacy: what the game keeps, and for how long', 'linkbtn', home, () => open('privacy'));
         name.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); (invite ?? quick).click(); } });
 
         // ---- rooms
@@ -440,8 +442,19 @@ export class Ui {
             render();
         });
 
+        // ---- privacy (package W): the plain-words note, from shared/privacy.ts, which also holds the server's limits
+        const privacy = page('privacy', 'Privacy', true);
+        privacy.id = 'privacy';
+        for (const sec of PRIVACY_SECTIONS) {
+            h('h3', '', sec.title, privacy);
+            const list = h('ul', 'privacy', '', privacy);
+            for (const line of sec.lines) h('li', '', line, list);
+        }
+        const prfoot = footer(privacy);
+        button('Back', '', prfoot, () => back());
+
         // ---- navigation
-        const pages = [home, rooms, create, practice, loadoutPage, settings, how];
+        const pages = [home, rooms, create, practice, loadoutPage, settings, how, privacy];
         const render = (): void => {
             for (const p of pages) p.classList.toggle('active', p.dataset.page === nav.page);
             shell.classList.toggle('sub', nav.page !== 'home');

@@ -67,6 +67,9 @@
 #ui .menubtn small { font: 500 13px var(--face); letter-spacing: .02em; color: var(--dim); text-transform: none; }
 #ui .menubtn.primary small { color: #3a4350; }
 #ui .page .foot { margin-top: 4px; }
+#ui .linkbtn { justify-self: center; background: none; border: 0; box-shadow: none; padding: 4px 8px; color: var(--dim); font: 500 13px var(--face); letter-spacing: .02em; text-transform: none; text-decoration: underline; cursor: pointer; }
+#ui button.linkbtn:hover, #ui button.linkbtn:focus-visible { background: none; color: inherit; }
+#ui ul.privacy { margin: -6px 0 0; padding-left: 20px; display: grid; gap: 6px; line-height: 1.45; }
 #ui .page .err:empty { display: none; }
 #howto dl { margin: 0; display: grid; gap: 12px; }
 #howto dt { font-weight: 700; } #howto dt.g { color: var(--ghost); } #howto dt.d { color: var(--def); }

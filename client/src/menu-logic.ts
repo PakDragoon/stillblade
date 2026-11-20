@@ -2,11 +2,11 @@ import type { RosterEntry } from '@shared/protocol';
 import type { RoomOptions } from '@shared/room-options';
 
 /** The pages of the pre-game menu. Each opens from another and Back / Esc returns one step. */
-export type PageId = 'home' | 'rooms' | 'create' | 'practice' | 'loadout' | 'settings' | 'howto';
+export type PageId = 'home' | 'rooms' | 'create' | 'practice' | 'loadout' | 'settings' | 'howto' | 'privacy';
 
 /** Where Back goes when there is no history to return to (a page opened first, such as the first-visit how-to). */
 export const PAGE_PARENT: Record<PageId, PageId | null> = {
-    home: null, rooms: 'home', create: 'rooms', practice: 'home', loadout: 'home', settings: 'home', howto: 'home'
+    home: null, rooms: 'home', create: 'rooms', practice: 'home', loadout: 'home', settings: 'home', howto: 'home', privacy: 'home'
 };
 
 /** Which page is showing and the way back. Pure state: the menu draws whatever `page` says. */

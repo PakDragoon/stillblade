@@ -1,5 +1,7 @@
 // A whole bot-versus-bot match in-process, as fast as the machine runs it (no network, no real time):
-// `npx tsx tools/botmatch.ts <map id> [--level easy|normal|hard] [--per-team 5] [--rounds 6] [--quiet]`.
+// `npx tsx tools/botmatch.ts <map id> [--level easy|normal|hard] [--per-team 5] [--rounds 6] [--quiet] [--record <folder>]`.
+// `--record`: keep the match record and input recording in <folder> (a data folder: matches/, recordings/), as the
+// server would; bot-only matches are recorded only when asked.
 // Prints every round's result and the final statistics. Used once per map to check that bots finish a
 // match (package E); `tools/bench.ts --bots` measures what they cost.
 import { fileURLToPath } from 'node:url';
@@ -7,6 +9,8 @@ import { TICK_RATE } from '../shared/constants';
 import type { BotLevel } from '../shared/room-options';
 import { Game } from '../server/src/game';
 import { defaultMapId, loadMaps } from '../server/src/maps';
+import { DataStore, dataConfigFromEnv } from '../server/src/datastore';
+import { roomObserver } from '../server/src/roomdata';
 
 const args = process.argv.slice(2);
 const opt = (name: string, fallback: string): string => {
@@ -25,6 +29,9 @@ const TICK_MS = 1000 / TICK_RATE;
 
 const game = new Game(map, { options: { botLevel: level, roundsToWin } });
 game.code = `botmatch-${mapId}`;
+const recordDir = args.includes('--record') ? opt('record', 'data') : '';
+const store = recordDir ? new DataStore(dataConfigFromEnv({ SB_DATA_DIR: recordDir })) : null;
+if (store) { store.prepare(); game.observer = roomObserver(store, { record: true, commit: '' }); }
 for (let i = 0; i < perTeam; i++) { game.addBot('ghosts'); game.addBot('defenders'); }
 
 let t = 0;
@@ -58,6 +65,7 @@ while (t < limit) {
                 console.log('round endings:', JSON.stringify(reasons));
                 const rows = [...game.players.values()].map(p => ({ name: p.name, side: p.group, ...p.stats }));
                 console.table(rows);
+                if (store) { await store.flush(); console.log(`recorded in ${store.cfg.dir}`); }
                 break;
             }
         }

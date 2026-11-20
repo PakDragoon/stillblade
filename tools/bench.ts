@@ -1,12 +1,18 @@
 // Measures what one full room costs the server: `npx tsx tools/bench.ts [map id] [--bots]`.
-// `--bots`: ten server bots (five a side) play real rounds for two simulated minutes instead.
+// `--bots`: ten server bots (five a side) play real rounds for two simulated minutes instead; add `--record` to attach
+// the package W match records and input recording (written to a temporary folder) and measure their cost too.
 // Ten players all running, strafing and attacking for a simulated minute, snapshots encoded as
 // they would be on the wire. The map defaults to the server's default map.
 import { fileURLToPath } from 'node:url';
 import { TICK_RATE } from '../shared/constants';
 import { encodeServer, type NetCmd } from '../shared/protocol';
 import { Game } from '../server/src/game';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { defaultMapId, loadMaps } from '../server/src/maps';
+import { DataStore, dataConfigFromEnv } from '../server/src/datastore';
+import { roomObserver } from '../server/src/roomdata';
 
 const PLAYERS = 10;
 const SECONDS = 60;
@@ -20,6 +26,8 @@ if (!map) throw new Error(`unknown map ${mapId} (have: ${[...maps.keys()].join('
 if (args.includes('--bots')) {
     const botGame = new Game(map, {});
     botGame.code = 'bench';
+    const store = args.includes('--record') ? new DataStore(dataConfigFromEnv({ SB_DATA_DIR: mkdtempSync(join(tmpdir(), 'sb-bench-')) })) : null;
+    if (store) { store.prepare(); botGame.observer = roomObserver(store, { record: true, commit: '' }); }
     for (let i = 0; i < PLAYERS / 2; i++) { botGame.addBot('ghosts'); botGame.addBot('defenders'); }
     const ticks = 2 * SECONDS * TICK_RATE;
     const times = new Float64Array(ticks);
@@ -37,6 +45,11 @@ if (args.includes('--bots')) {
     for (let i = 0; i < ticks; i++) { if (i < TICK_RATE) firstSecond = Math.max(firstSecond, times[i]); else later = Math.max(later, times[i]); }
     console.log(`average ${(total / ticks).toFixed(3)} ms per tick, median ${pct(0.5).toFixed(3)}, 99th percentile ${pct(0.99).toFixed(3)}; ` +
         `worst ${later.toFixed(2)} ms (first second, while the graph is built and the code warms up: ${firstSecond.toFixed(2)} ms)`);
+    if (store) {
+        botGame.observer?.matchAbandoned?.(botGame, 'server stopped');
+        await store.flush();
+        console.log(`recording on: written to ${store.cfg.dir}`);
+    }
     process.exit(0);
 }
 

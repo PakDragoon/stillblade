@@ -432,7 +432,8 @@ export const REPORT_MAX_BYTES = 4096;
 
 const CMD_TAG = 1;
 const SNAP_TAG = 2;
-const CMD_BYTES = 26;
+/** Size of one binary command, its tag byte included. */
+export const CMD_BYTES = 26;
 /**
  * Self state up to the loadout, then 6 loadout bytes (slot, previous, draw, aim, trigger, sight), 7 per gun, 2 for the defender knife, 2 for the
  * ghost knife, 1 for the bomb repick wait (the carrier flag is a bit of the flags byte), 1 player count.
@@ -453,35 +454,43 @@ const unit = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 function encodeCmd(c: NetCmd): Uint8Array<ArrayBuffer> {
     const out = new Uint8Array(CMD_BYTES);
-    const v = new DataView(out.buffer);
-    v.setUint8(0, CMD_TAG);
-    v.setUint32(1, c.seq, true);
-    v.setInt8(5, Math.round(c.forward * 127));
-    v.setInt8(6, Math.round(c.right * 127));
-    v.setFloat32(7, c.yaw, true);
-    v.setFloat32(11, c.pitch, true);
-    v.setUint8(15, (c.jump ? 1 : 0) | (c.walk ? 2 : 0) | (c.crouch ? 4 : 0) | (c.fire ? 8 : 0) | (c.use ? 16 : 0) |
-        (c.reload ? 32 : 0) | (c.swap ? 64 : 0) | (c.aim ? 128 : 0));
-    v.setFloat64(16, c.viewTime, true);
-    v.setUint8(24, c.slot);
-    v.setUint8(25, c.drop ? 1 : 0);
+    writeCmd(new DataView(out.buffer), 0, c);
     return out;
 }
 
-function decodeCmd(v: DataView): NetCmd {
-    const flags = v.getUint8(15);
+/**
+ * Writes one command in the wire format (CMD_BYTES bytes, tag included) at `offset`. The same bytes the
+ * client sends; also how the server's input recordings store a command (server/src/recording.ts).
+ */
+export function writeCmd(v: DataView, offset: number, c: NetCmd): void {
+    v.setUint8(offset, CMD_TAG);
+    v.setUint32(offset + 1, c.seq, true);
+    v.setInt8(offset + 5, Math.round(c.forward * 127));
+    v.setInt8(offset + 6, Math.round(c.right * 127));
+    v.setFloat32(offset + 7, c.yaw, true);
+    v.setFloat32(offset + 11, c.pitch, true);
+    v.setUint8(offset + 15, (c.jump ? 1 : 0) | (c.walk ? 2 : 0) | (c.crouch ? 4 : 0) | (c.fire ? 8 : 0) | (c.use ? 16 : 0) |
+        (c.reload ? 32 : 0) | (c.swap ? 64 : 0) | (c.aim ? 128 : 0));
+    v.setFloat64(offset + 16, c.viewTime, true);
+    v.setUint8(offset + 24, c.slot);
+    v.setUint8(offset + 25, c.drop ? 1 : 0);
+}
+
+/** Reads one command written by `writeCmd` (or sent by a client) at `offset`. */
+export function readCmd(v: DataView, offset = 0): NetCmd {
+    const flags = v.getUint8(offset + 15);
     return {
-        seq: v.getUint32(1, true),
-        forward: v.getInt8(5) / 127,
-        right: v.getInt8(6) / 127,
-        yaw: v.getFloat32(7, true),
-        pitch: v.getFloat32(11, true),
+        seq: v.getUint32(offset + 1, true),
+        forward: v.getInt8(offset + 5) / 127,
+        right: v.getInt8(offset + 6) / 127,
+        yaw: v.getFloat32(offset + 7, true),
+        pitch: v.getFloat32(offset + 11, true),
         jump: (flags & 1) !== 0, walk: (flags & 2) !== 0, crouch: (flags & 4) !== 0,
         fire: (flags & 8) !== 0, use: (flags & 16) !== 0, reload: (flags & 32) !== 0,
         swap: (flags & 64) !== 0, aim: (flags & 128) !== 0,
-        viewTime: v.getFloat64(16, true),
-        slot: v.getUint8(24),
-        drop: (v.getUint8(25) & 1) !== 0
+        viewTime: v.getFloat64(offset + 16, true),
+        slot: v.getUint8(offset + 24),
+        drop: (v.getUint8(offset + 25) & 1) !== 0
     };
 }
 
@@ -666,5 +675,5 @@ export function decodeClient(data: ArrayBuffer | Uint8Array | string): ClientMsg
     }
     const v = view(data);
     if (v.byteLength !== CMD_BYTES || v.getUint8(0) !== CMD_TAG) throw new Error('unknown client message');
-    return { type: 'cmd', cmd: decodeCmd(v) };
+    return { type: 'cmd', cmd: readCmd(v) };
 }
