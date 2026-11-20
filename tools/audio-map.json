@@ -86,10 +86,10 @@
         "maxDur": 0.3
     },
     "knife_slash": {
-        "n": 2,
-        "match": ["^knifeSlice2?$", "^drawKnife[1-3]$"
-        ],
-        "maxDur": 0.3
+        "n": 4,
+        "match": ["^SW_Swing_[0-3]$"],
+        "maxDur": 0.45,
+        "gain": 3
     },
     "knife_hit": {
         "n": 2,

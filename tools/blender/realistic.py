@@ -48,15 +48,16 @@ LAYOUTS = {
     'rifle': ([('M4_D', (0.0, 0.25, 0.75, 1.0)), ('sight', (0.75, 0.75, 1.0, 1.0)), ('scope', (0.75, 0.25, 1.0, 0.5)),
                ('Bullet5_56x45mm_D', (0.75, 0.5, 0.875, 0.625))], (0.75, 0.0, 1.0, 0.25)),
     'pistol': ([('T_PM', (0.0, 0.25, 0.875, 1.0))], (0.875, 0.0, 1.0, 1.0)),
-    'knife': ([('Material.001', (0.0, 0.5, 0.875, 1.0))], (0.875, 0.0, 1.0, 1.0)),
+    # Package V: the karambit from the owner's knife pack and that pack's hands (in grey: knifekit.hands_post; the
+    # rig's vertex colours give the defender's and the ghost's colours), shared by the first-person rig (fpknife.py)
+    # and the third-person karambit (weapons.py).
+    'knife': ([('karambit', (0.625, 0.625, 1.0, 1.0)), ('hands', (0.0, 0.0, 0.625, 0.625))], (0.875, 0.0, 1.0, 0.375)),
 }
 # The first-person arms (package O; soldier.py fills them from the soldier's textures): forearm and hand skin, the
-# rolled sleeve, and on the knife the ghost's suit arms.
+# rolled sleeve (the knife's hands, package V, are the knife pack's own: realistic.LAYOUTS['knife']).
 ARM_LAYOUTS = {
     'rifle': {'arms': (0.0, 0.0, 0.375, 0.25), 'sleeve': (0.375, 0.0, 0.75, 0.25)},
     'pistol': {'arms': (0.0, 0.0, 0.4375, 0.25), 'sleeve': (0.4375, 0.0, 0.875, 0.25)},
-    'knife': {'arms': (0.0, 0.25, 0.4375, 0.5), 'sleeve': (0.4375, 0.25, 0.875, 0.5),
-              'ghostarms': (0.0, 0.0, 0.875, 0.25)},
 }
 # With the pack's gloved hands (packhands.py): the arms' skin region becomes the glove (its maps, recoloured coyote) and
 # the bare fingertips' skin; the sleeve and the ghost's suit keep their rectangles.
@@ -65,8 +66,6 @@ ARM_LAYOUTS_PACK = {
     'rifle': {'glove': (0.0, 0.0, 0.25, 0.25), 'handskin': (0.25, 0.0, 0.75, 0.25)},
     'pistol': {'glove': (0.0, 0.0, 0.3125, 0.25), 'handskin': (0.3125, 0.0, 0.4375, 0.25),
                'sleeve': (0.4375, 0.0, 0.875, 0.25)},
-    'knife': {'glove': (0.0, 0.25, 0.3125, 0.5), 'handskin': (0.3125, 0.25, 0.4375, 0.5),
-              'sleeve': (0.4375, 0.25, 0.875, 0.5), 'ghostarms': (0.0, 0.0, 0.875, 0.25)},
 }
 WEBP_QUALITY = {'albedo': 82, 'normal': 85}
 

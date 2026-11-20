@@ -1,0 +1,951 @@
+{
+ "note": "SwiftShader (software GL): looks only. Draw calls are real.",
+ "shots": [
+  {
+   "name": "low-rifle-hip",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 20
+  },
+  {
+   "name": "low-pistol-hip",
+   "slot": 1,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 20
+  },
+  {
+   "name": "low-defender-draw-1",
+   "slot": 2,
+   "draw": 7,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 20
+  },
+  {
+   "name": "low-defender-draw-2",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 20
+  },
+  {
+   "name": "low-defender-idle",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 20
+  },
+  {
+   "name": "low-defender-swing0-windup",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 20
+  },
+  {
+   "name": "low-defender-swing0-strike",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 20
+  },
+  {
+   "name": "low-defender-swing1-windup",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 20
+  },
+  {
+   "name": "low-defender-swing1-strike",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 20
+  },
+  {
+   "name": "low-defender-swing2-windup",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 20
+  },
+  {
+   "name": "low-defender-swing2-strike",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 20
+  },
+  {
+   "name": "low-defender-swing1-again-windup",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 20
+  },
+  {
+   "name": "low-defender-swing1-again-strike",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 20
+  },
+  {
+   "name": "low-defender-swing3-windup",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 20
+  },
+  {
+   "name": "low-defender-swing3-strike",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 20
+  },
+  {
+   "name": "low-defender-idle-dark",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 10
+  },
+  {
+   "name": "low-third-person-ghost-front",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 9
+  },
+  {
+   "name": "low-third-person-ghost-side",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 10
+  },
+  {
+   "name": "low-third-person-ghost-close",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 9
+  },
+  {
+   "name": "low-ghost-idle",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 14
+  },
+  {
+   "name": "low-ghost-swing0-windup",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "draws": 12
+  },
+  {
+   "name": "low-ghost-swing0-strike",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "draws": 12
+  },
+  {
+   "name": "low-ghost-swing1-windup",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "draws": 12
+  },
+  {
+   "name": "low-ghost-swing1-strike",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "draws": 13
+  },
+  {
+   "name": "low-ghost-swing2-windup",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "draws": 12
+  },
+  {
+   "name": "low-ghost-swing2-strike",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "draws": 12
+  },
+  {
+   "name": "low-ghost-swing1-again-windup",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "draws": 14
+  },
+  {
+   "name": "low-ghost-swing1-again-strike",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "draws": 13
+  },
+  {
+   "name": "low-ghost-swing3-windup",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "draws": 13
+  },
+  {
+   "name": "low-ghost-swing3-strike",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "draws": 13
+  },
+  {
+   "name": "low-third-person-defender-front",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 12
+  },
+  {
+   "name": "low-third-person-defender-side",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 15
+  },
+  {
+   "name": "low-third-person-defender-close",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 14
+  },
+  {
+   "name": "high-rifle-hip",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 42
+  },
+  {
+   "name": "high-pistol-hip",
+   "slot": 1,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 42
+  },
+  {
+   "name": "high-defender-draw-1",
+   "slot": 2,
+   "draw": 7,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 42
+  },
+  {
+   "name": "high-defender-draw-2",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 42
+  },
+  {
+   "name": "high-defender-idle",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 42
+  },
+  {
+   "name": "high-defender-swing0-windup",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 42
+  },
+  {
+   "name": "high-defender-swing0-strike",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 42
+  },
+  {
+   "name": "high-defender-swing1-windup",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 42
+  },
+  {
+   "name": "high-defender-swing1-strike",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 42
+  },
+  {
+   "name": "high-defender-swing2-windup",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 42
+  },
+  {
+   "name": "high-defender-swing2-strike",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 42
+  },
+  {
+   "name": "high-defender-swing1-again-windup",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 42
+  },
+  {
+   "name": "high-defender-swing1-again-strike",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 42
+  },
+  {
+   "name": "high-defender-swing3-windup",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 42
+  },
+  {
+   "name": "high-defender-swing3-strike",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 42
+  },
+  {
+   "name": "high-defender-idle-dark",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 32
+  },
+  {
+   "name": "high-third-person-ghost-front",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 31
+  },
+  {
+   "name": "high-third-person-ghost-side",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 33
+  },
+  {
+   "name": "high-third-person-ghost-close",
+   "slot": 2,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 31
+  },
+  {
+   "name": "high-ghost-idle",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 36
+  },
+  {
+   "name": "high-ghost-swing0-windup",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "draws": 36
+  },
+  {
+   "name": "high-ghost-swing0-strike",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "draws": 36
+  },
+  {
+   "name": "high-ghost-swing1-windup",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "draws": 36
+  },
+  {
+   "name": "high-ghost-swing1-strike",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "draws": 36
+  },
+  {
+   "name": "high-ghost-swing2-windup",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "draws": 36
+  },
+  {
+   "name": "high-ghost-swing2-strike",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "draws": 36
+  },
+  {
+   "name": "high-ghost-swing1-again-windup",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "draws": 36
+  },
+  {
+   "name": "high-ghost-swing1-again-strike",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "draws": 36
+  },
+  {
+   "name": "high-ghost-swing3-windup",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 37,
+    "windup": 7
+   },
+   "draws": 36
+  },
+  {
+   "name": "high-ghost-swing3-strike",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 30,
+    "windup": 0
+   },
+   "draws": 38
+  },
+  {
+   "name": "high-third-person-defender-front",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 37
+  },
+  {
+   "name": "high-third-person-defender-side",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 43
+  },
+  {
+   "name": "high-third-person-defender-close",
+   "slot": 0,
+   "draw": 0,
+   "knife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "ghostKnife": {
+    "cooldown": 0,
+    "windup": 0
+   },
+   "draws": 41
+  }
+ ],
+ "draws": {
+  "low-rifle": 19,
+  "low-knife": 20,
+  "low-third-person-ghost-front": 9,
+  "low-third-person-ghost-side": 10,
+  "low-third-person-ghost-close": 10,
+  "low-third-person-ghost-without-player": 8,
+  "low-third-person-defender-front": 12,
+  "low-third-person-defender-side": 15,
+  "low-third-person-defender-close": 14,
+  "low-third-person-defender-without-player": 12,
+  "high-rifle": 42,
+  "high-knife": 42,
+  "high-third-person-ghost-front": 31,
+  "high-third-person-ghost-side": 33,
+  "high-third-person-ghost-close": 31,
+  "high-third-person-ghost-without-player": 29,
+  "high-third-person-defender-front": 37,
+  "high-third-person-defender-side": 43,
+  "high-third-person-defender-close": 41,
+  "high-third-person-defender-without-player": 37
+ }
+}

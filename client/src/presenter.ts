@@ -275,6 +275,12 @@ function bump(x: number, c: number, w: number): number {
     return u * u * (3 - 2 * u);
 }
 
+/** Smoothstep of x clamped to 0..1. */
+function smooth01(x: number): number {
+    const u = x <= 0 ? 0 : x >= 1 ? 1 : x;
+    return u * u * (3 - 2 * u);
+}
+
 /** A remote shot's eye position must be this close to a defender's (m) to count as theirs. */
 const SHOOTER_MATCH = 1.6;
 const REMOTE_FLASH_COUNT = 4;
@@ -693,10 +699,34 @@ const KNIFE_BACK = [0.2, -0.1, -0.32, 65, -12, -35];
 const KNIFE_SLASH = [-0.08, -0.25, -0.48, -15, 45, 35];
 /** Defender drawing the knife (draw = 1): offset from rest, eased to zero like the guns' draw. */
 const KNIFE_DRAW = [0.02, -0.22, 0.06, -50, 10, 20];
-/** The knife rig (camera-space arms) drawing: the whole rig dips and tips down (m, degrees) at draw = 1. */
-const KNIFE_RIG_DRAW = [0, -0.2, 0.05, -25];
-/** Seconds of windup at the start of the rigs' knife swing clip (viewmodel.py); the rest plays in real time. */
+/**
+ * The knife rig (package V, tools/blender/fpknife.py): the owner's knife pack as authored, seen from the pack's own eye.
+ * It is drawn with the pack's own vertical field of view (34.5 degrees) through the viewmodel zoom: lockVmFov(zoom)
+ * draws the weapon as if by a VM_FOV / zoom camera.
+ */
+const KNIFE_PACK_FOV = 34.46576;
+const KNIFE_VM_ZOOM = VM_TAN / Math.tan((KNIFE_PACK_FOV / 2) * Math.PI / 180);
+/** Seconds of windup at the start of each knife swing clip (fpknife.py: the blade crosses the view's middle there). */
 const RIG_KNIFE_WINDUP = 0.2;
+/**
+ * The swing clips. While the attack is held they chain as the pack's animator does: 0 from the idle, then 1 after 0, 2
+ * or 3, and after 1 the next of 2 and 3 in turn (a per-rig counter; no randomness).
+ */
+const KNIFE_SWING_CLIPS = ['knife_swing_0', 'knife_swing_1', 'knife_swing_2', 'knife_swing_3'] as const;
+/** Crossfade into a new swing from whatever pose is showing (s). */
+const KNIFE_SWING_FADE = 0.06;
+/**
+ * Recovery after the last swing (the pack's Quick_draw at its own speed, which is knife_draw: the pack's 0.5 s rise in
+ * 0.3 s): its length, the crossfade out of the swing's end pose, and knife_draw seconds per real second.
+ */
+const KNIFE_RECOVER = 0.5;
+const KNIFE_RECOVER_FADE = 0.2;
+const KNIFE_RECOVER_RATE = 0.3 / 0.5;
+/**
+ * Without a new swing this long after one started (the 0.7 s cooldown and some slack), the knife recovers even with
+ * the attack held (a swing the rules did not start, e.g. while planting).
+ */
+const KNIFE_HOLD_MAX = 0.8;
 /** Viewmodel rig file per gun (tools/blender/viewmodel.py). */
 const RIG_FILE: Record<WeaponId, string> = { rifle: 'viewmodel_rifle.glb', pistol: 'viewmodel_pistol.glb' };
 
@@ -1117,10 +1147,24 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
     vmRoot.addChild(knifeRigRoot);
     knifeRigRoot.enabled = false;
     let knifeRig: VmRig | null = null;
+    let kIdle: VmClip | null = null;
+    let kDraw: VmClip | null = null;
+    const kSwings: VmClip[] = [];
+    /**
+     * The knife rig's swing state (presentation only, driven by the predicted swing events): the swing clip showing
+     * (-1: none), seconds into it, seconds into the recovery (-1: not recovering), seconds into the crossfade from the
+     * pose that was showing when it started (`kFrom*`: 0 the idle, 1 a swing held at kFromT, 2 a swing recovering at
+     * kFromRec), and the counter that alternates swings 2 and 3.
+     */
+    let kSwing = -1, kT = 0, kRec = -1, kFade = 1, kAlt = 0;
+    let kFromKind = 0, kFromSwing = 0, kFromT = 0, kFromRec = 0;
     loadViewmodel(app, `${import.meta.env.BASE_URL}models/viewmodel_knife.glb`, 'viewmodel_knife.glb', VM, weaponMats.of('knife'),
-        ['knife_idle', 'knife_swing'], track('hands', `${import.meta.env.BASE_URL}models/viewmodel_knife.glb`, 'knife'))
+        ['knife_idle', 'knife_draw', ...KNIFE_SWING_CLIPS], track('hands', `${import.meta.env.BASE_URL}models/viewmodel_knife.glb`, 'knife'))
         .then(rig => {
             knifeRig = rig;
+            kIdle = rig.clips.get('knife_idle')!;
+            kDraw = rig.clips.get('knife_draw')!;
+            for (let i = 0; i < KNIFE_SWING_CLIPS.length; i++) kSwings[i] = rig.clips.get(KNIFE_SWING_CLIPS[i])!;
             knifeRigRoot.addChild(rig.root);
             knife.enabled = false;
         })
@@ -1185,12 +1229,14 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
         if (team !== vmTeam || firstPerson !== feelAlive) {
             feel.reset(); // a respawn or a team change: no carried-over swing or kick
             feelAlive = firstPerson;
+            kSwing = -1;
         }
         if (team !== vmTeam) {
             vmTeam = team;
             recoilT = 0;
             flashT = 0;
             swingT = -1;
+            kSwing = -1;
             reloadW = 0;
         }
         vmAim = local.aim > 0 ? Math.min(1, local.aim) : 0;
@@ -1211,6 +1257,7 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
         if (knifeHeld !== vmKnifeHeld) {
             vmKnifeHeld = knifeHeld;
             swingT = -1; // a switch cancels a swing in progress (the rule cancels its windup too)
+            kSwing = -1;
         }
         if (defender && local.sight !== vmSight) { vmSight = local.sight; applyVmSight(); }
         gun.enabled = localAlive && defender && !knifeHeld;
@@ -1314,31 +1361,54 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
             knifeRigRoot.enabled = false;
             return;
         }
-        lockVmFov(1);
         // A defender drawing the knife: it rises from below, like the guns.
         const kd0 = knifeHeld && local.draw > 0 ? Math.min(1, local.draw) : 0;
         knifeDraw = kd0 * kd0;
-        if (knifeRig) {
-            // Arms rig: the clip carries the swing; its windup is stretched to the rule's, the rest plays in real time.
+        if (knifeRig && kIdle && kDraw) {
+            // The pack's rig: idle, draw, swings and the recovery are its own clips, sampled (fpknife.py).
             knife.enabled = false;
             knifeRigRoot.enabled = localAlive && (!defender || knifeHeld);
             knifeRig.setVariant(defender ? 'vm_knife' : 'vm_ghost');
-            const kd = knifeDraw, rd = KNIFE_RIG_DRAW;
-            const fp = feel.pos, fr = feel.rot;
-            knifeRigRoot.setLocalPosition(rd[0] * kd + Math.sin(time * SWAY_RATE) * SWAY_POS + fp[0],
-                rd[1] * kd + Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6 + fp[1], rd[2] * kd + fp[2]);
-            knifeRigRoot.setLocalEulerAngles(rd[3] * kd + fr[0], fr[1], fr[2]);
-            const swing = knifeRig.clips.get('knife_swing')!;
-            let ct = -1;
-            if (swingT >= 0) {
-                swingT += dt;
-                ct = swingT < windup ? (swingT / windup) * RIG_KNIFE_WINDUP : RIG_KNIFE_WINDUP + (swingT - windup);
-                if (ct >= swing.duration) { swingT = -1; ct = -1; }
-            }
-            if (ct >= 0) knifeRig.pose(swing, ct);
-            else knifeRig.pose(knifeRig.clips.get('knife_idle'), 0);
+            lockVmFov(KNIFE_VM_ZOOM);
+            // Sway and the movement feel on top, scaled down by the zoom so they look as large as on the guns.
+            const fp = feel.pos, fr = feel.rot, z = 1 / KNIFE_VM_ZOOM;
+            knifeRigRoot.setLocalPosition((Math.sin(time * SWAY_RATE) * SWAY_POS + fp[0]) * z,
+                (Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6 + fp[1]) * z, fp[2] * z);
+            knifeRigRoot.setLocalEulerAngles(fr[0], fr[1], fr[2]);
+            if (kd0 > 0) {
+                // A defender drawing the knife: the pack's rise, by the draw progress.
+                kSwing = -1;
+                knifeRig.pose(kDraw, (1 - kd0) * kDraw.duration);
+            } else if (kSwing >= 0) {
+                const clip = kSwings[kSwing];
+                kT += dt;
+                kFade += dt;
+                const ct = kT < windup ? (kT / windup) * RIG_KNIFE_WINDUP : RIG_KNIFE_WINDUP + (kT - windup);
+                // Hold the swing's last pose while the attack is held (the next swing starts from there), else recover.
+                if (kRec < 0 && ((ct >= clip.duration && !local.firing) || kT >= KNIFE_HOLD_MAX)) kRec = 0;
+                if (kRec >= 0) {
+                    kRec += dt;
+                    if (kRec >= KNIFE_RECOVER) {
+                        kSwing = -1;
+                        knifeRig.pose(kIdle, time % kIdle.duration);
+                    } else {
+                        knifeRig.pose(kDraw, kRec * KNIFE_RECOVER_RATE);
+                        knifeRig.blend(clip, clip.duration, 1 - smooth01(kRec / KNIFE_RECOVER_FADE));
+                    }
+                } else if (kFade < KNIFE_SWING_FADE) {
+                    if (kFromKind === 0) knifeRig.pose(kIdle, time % kIdle.duration);
+                    else if (kFromKind === 1) knifeRig.pose(kSwings[kFromSwing], kFromT);
+                    else {
+                        const from = kSwings[kFromSwing];
+                        knifeRig.pose(kDraw, kFromRec * KNIFE_RECOVER_RATE);
+                        knifeRig.blend(from, from.duration, 1 - smooth01(kFromRec / KNIFE_RECOVER_FADE));
+                    }
+                    knifeRig.blend(clip, ct, smooth01(kFade / KNIFE_SWING_FADE));
+                } else knifeRig.pose(clip, ct);
+            } else knifeRig.pose(kIdle, time % kIdle.duration);
             return;
         }
+        lockVmFov(1);
         if (swingT < 0) {
             setKnifePose(KNIFE_REST, KNIFE_REST, 0);
             // Same idle sway as the gun, only while not swinging.
@@ -2248,6 +2318,22 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
         knifeSwing(windupSeconds: number): void {
             windup = Math.max(0.01, windupSeconds);
             swingT = 0;
+            // The rig: chain from a swing still held (as the pack's animator does), else start again from swing 0;
+            // either way crossfade from the pose showing now.
+            if (kSwing >= 0 && kSwings.length > 0) {
+                kFromKind = kRec < 0 ? 1 : 2;
+                kFromSwing = kSwing;
+                kFromT = Math.min(kSwings[kSwing].duration,
+                    kT < windup ? (kT / windup) * RIG_KNIFE_WINDUP : RIG_KNIFE_WINDUP + (kT - windup));
+                kFromRec = kRec;
+                kSwing = kRec < 0 ? (kSwing === 1 ? 2 + (kAlt++ & 1) : 1) : 0;
+            } else {
+                kFromKind = 0;
+                kSwing = 0;
+            }
+            kT = 0;
+            kRec = -1;
+            kFade = 0;
         },
 
         remoteSwing(id: number): void {

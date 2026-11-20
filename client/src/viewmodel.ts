@@ -11,10 +11,12 @@ import { SIGHTS, SIGHT_IRON } from '@shared/weapons';
  * with its gun's textured material (weapons.ts `WeaponMaterials`). The rifle (package T, tools/blender/fpm4.py) is the
  * owner's M4 animation pack as authored: the pack's own arm and finger joints, "weapon" (the gun's frame, origin at the
  * grip) and under it "mag", "round", "bolt", "catch", "trigger", "rearsight" (the folding rear sight, shrunk away
- * whenever an optic is mounted), "sup" and the sights. The pistol and knife (tools/blender/viewmodel.py) keep the
- * soldier's arm chains with the pack's gloved hands; their moving parts are "mag", "slide" and "sup". Empties "muzzle" (suppressor front), "muzzle_bare" (bare muzzle front) and "aim_<sight>"
- * hang from the weapon bone. The knife file has two meshes on the same armature ("rig_knife"): "vm_knife" (a
- * defender's sleeves) and "vm_ghost" (a ghost's), one shown at a time by node name.
+ * whenever an optic is mounted), "sup" and the sights. The pistol (tools/blender/viewmodel.py) keeps the soldier's arm
+ * chains with the M4 pack's gloved hands; its moving parts are "mag", "slide" and "sup". Empties "muzzle" (suppressor
+ * front), "muzzle_bare" (bare muzzle front) and "aim_<sight>" hang from the weapon bone. The knife (package V,
+ * tools/blender/fpknife.py) is the owner's knife pack as authored: its hands' joints, "weapon" (the pack's knife socket
+ * under hand_r) holding the karambit, and two meshes on the same armature ("rig_knife"): "vm_knife" (a defender's
+ * colours) and "vm_ghost" (a ghost's), one shown at a time by node name.
  *
  * Aimed: `<rig>_aim_<sight>` clips (one frame) hold the same grip with the arms solved from shoulders that keep their
  * place relative to the eye; presenter.ts lays them over the idle pose by the aim progress (`blend`), so the arms do
@@ -22,7 +24,7 @@ import { SIGHTS, SIGHT_IRON } from '@shared/weapons';
  *
  * Rig space: for a gun, the rig's origin is the grip at the gun's hip pose (presenter.ts places the rig root exactly
  * where it used to place the bare gun, so aiming, drawing, kick and sway still move the whole rig); for the knife it
- * is the camera. Clips are sampled by time, not played: `pose(clip, t)` writes every bone for time t, so the reload
+ * is the knife pack's eye (presenter.ts draws it with that pack's field of view). Clips are sampled by time, not played: `pose(clip, t)` writes every bone for time t, so the reload
  * follows the predicted reload progress exactly and the knife follows the predicted swing. Sampling is plain linear
  * interpolation over the exported keys (every bone is keyed on every frame at 30 fps), with no allocation.
  *

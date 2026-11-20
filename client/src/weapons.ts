@@ -9,7 +9,8 @@ import type { FileTrack, LoadReporter } from './loading';
 /**
  * Weapon meshes: client/public/models/weapons.glb, built by tools/blender/weapons.py from the models in
  * client/public/models/CREDITS.md: the M4 from the owner's animation pack (the rifle, package T; the same gun the
- * first-person rig holds), a Makarov PM (the pistol) and a tactical knife, with a red dot sight, a 2x scope and
+ * first-person rig holds), a Makarov PM (the pistol) and the karambit from the owner's knife pack (package V; the same
+ * knife the first-person rig holds), with a red dot sight, a 2x scope and
  * generated suppressors. Third-person (reduced) meshes; the
  * first-person rigs (viewmodel.ts) carry the full-detail ones. Every mesh has UVs into its gun's texture atlas and a
  * vertex colour (RGB tints the atlas, A = emission: the red dot's reticle); `WeaponMaterials` below draws them.
@@ -25,7 +26,9 @@ import type { FileTrack, LoadReporter } from './loading';
  *                sights, one per SIGHTS entry but iron (shared/weapons.ts), named gun_sight_<SightId>.
  *   pistol     : same axes as gun; origin = middle of the grip. 0.17 m bare, 0.28 m with the suppressor.
  *   pistol_suppressor / pistol_muzzle / pistol_muzzle_bare : as for gun.
- *   knife      : -Z = blade tip, +Y = spine (cutting edge toward -Y). Origin = middle of the handle. 0.30 m.
+ *   knife      : the karambit, in the frame of socket_knife (clips.py KNIFE_IN_HAND: -Z out of the fist's index side,
+ *                +Y toward the wrist), placed as the knife pack's own hand holds it: ring at the index finger, the
+ *                curved blade out of the pinky side. Origin = the grip point in the palm. 0.23 m.
  * The character GLB carries matching "socket_gun" / "socket_knife" nodes on the right wrist bone, so an
  * instance parented to a socket with an identity local transform sits in the hand (both guns share socket_gun).
  *

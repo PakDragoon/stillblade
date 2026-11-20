@@ -7,12 +7,16 @@ weapons.glb (third person), the weapon textures, and the full-detail parts the f
 
 Sources: tools/blender/source-art/realistic/ (git-ignored; see realistic.py and client/public/models/CREDITS.md):
 the M4 from the owner's animation pack (rifle, package T: fp-anims/m4_animations_gltf.zip, read by m4.py), the
-Makarov PM (pistol), the tactical knife, the red dot sight, and the 2x scope if the owner has downloaded it (otherwise
-a 2x combat scope is generated here). Run fpm4.py (the rifle rig) and viewmodel.py (pistol, knife) after this one.
+Makarov PM (pistol), the karambit from the owner's knife pack (package V: knifekit.py, with that pack's hands in the
+knife atlas), the red dot sight, and the 2x scope if the owner has downloaded it (otherwise a 2x combat scope is
+generated here). Run fpm4.py (the rifle rig), viewmodel.py (pistol) and fpknife.py (knife) after this one.
 
     ... --python tools/blender/weapons.py -- --rifle-only
-rebuilds everything but leaves the pistol and knife atlases as they are (they need the soldier's 1.2 GB texture zip
-for the sleeve regions); the pistol and knife meshes in weapons.glb come out byte for byte the same either way.
+rebuilds everything but leaves the pistol atlas as it is (it needs the soldier's 1.2 GB texture zip for the sleeve
+region); the pistol and knife meshes in weapons.glb come out byte for byte the same either way.
+    ... --python tools/blender/weapons.py -- --knife-only
+the same, and leaves the rifle atlas alone too: only the knife atlas and the two model files are written (the gun and
+pistol meshes in them come out byte for byte the same).
 
 Writes:
   client/public/models/weapons.glb                 third person: reduced meshes, the node layout below
@@ -25,13 +29,13 @@ Node layout of weapons.glb (unchanged names, so the client and soldier.py keep w
       empties gun_muzzle (suppressor front), gun_muzzle_bare (muzzle brake front) and gun_aim_<sight> (where the eye
       sits when aiming with that sight: on its optical axis, at its eye relief; presenter.ts aims the gun by them);
   pistol (mesh) with pistol_suppressor, pistol_muzzle, pistol_muzzle_bare, pistol_aim_iron;
-  knife (mesh).
+  knife (mesh): the karambit, placed as the knife pack's own hand holds it (see build_knife).
 Each mesh has positions, normals (the sources' own, carried through every reduction), UVs into its gun's atlas, and a
 vertex colour (RGB tints the atlas, A = emission: only the red dot's reticle). One material per gun: rifle, pistol,
 knife.
 
 Axis convention (glTF / engine space), origin = centre of the hand's grip (a third of the way down the pistol grip
-for the guns, the middle of the handle for the knife):
+for the guns; for the knife the grip point of the hand holding it, as in clips.py):
   -Z forward (gun: muzzle; knife: blade tip), +Y up (gun: sights; knife: spine), +X right.
 The character (soldier.py, clips.py) holds the rifle in "socket_gun", the pistol in "socket_pistol" and the knife in "socket_knife".
 
@@ -46,6 +50,7 @@ import math
 import os
 import sys
 
+import bmesh
 import bpy
 import numpy as np
 from mathutils import Matrix, Vector
@@ -53,6 +58,7 @@ from mathutils import Matrix, Vector
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import fpanims  # noqa: E402
+import knifekit  # noqa: E402
 import m4  # noqa: E402
 import packhands  # noqa: E402
 import realistic as rl  # noqa: E402
@@ -61,9 +67,8 @@ import soldier  # noqa: E402
 ROOT = rl.ROOT
 OUT = os.path.join(ROOT, 'client', 'public', 'models', 'weapons.glb')
 
-# Real sizes (metres): the PM is modelled in metres; the knife 0.30 (as before); the red dot's housing 0.056 wide; the
-# generated 2x scope 0.145 long. The M4 is the pack's, at its own size (0.865 m, stock extended).
-KNIFE_LENGTH = 0.30
+# Real sizes (metres): the PM is modelled in metres; the red dot's housing 0.056 wide; the generated 2x scope 0.145 long.
+# The M4 and the karambit are their packs', at their own sizes.
 REDDOT_WIDTH = 0.056
 SCOPE_LENGTH = 0.145
 # Where the fist closes on a pistol grip: this far down from the top of the grip (fraction of its length).
@@ -71,7 +76,6 @@ GRIP_DOWN = 0.35
 
 # Triangle budgets. First person: per source part (the rest kept as modelled); third person: per node.
 FP_REDDOT = {'main_shape': 900, 'main_bat_1': 220, 'main_buttons_1': 90, 'main_buttons_2': 90, 'main_a': 220}
-FP_KNIFE = 1300                     # per source mesh (two)
 TP_PISTOL_SCALE = 1.0               # real size (package O: the new hands hold it; M part 2 drew it 1.35x)
 TP = {'gun': 3200, 'pistol': 1700, 'knife': 800, 'reddot': 380, 'scope_dl': 380}
 # A downloaded scope, first person (package T: 3000 -> 1800 to keep the Low download within its budget; both optics
@@ -107,7 +111,12 @@ SCOPE_REAR_INSET = 0.012
 M4_S = 0.5
 M4_LIFT = 2.4
 BRASS_S = 0.6
-RIFLE_ONLY = '--rifle-only' in sys.argv
+KNIFE_ONLY = '--knife-only' in sys.argv
+RIFLE_ONLY = '--rifle-only' in sys.argv or KNIFE_ONLY
+# The third-person knife frame against the hand's grip frame (clips.py KNIFE_IN_HAND: blade out of the index side,
+# spine toward the wrist) and the grip frame's construction (clips.py GRIP_PALM_OFFSET, GRIP_ALONG_HAND).
+KNIFE_IN_HAND = Matrix(((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (0, 0, 0, 1)))
+TP_GRIP = (0.03, 0.55)
 
 
 def m4_surface(rgb, s):
@@ -131,7 +140,7 @@ def rifle_arm_regions():
 # Atlas layouts: realistic.LAYOUTS (shared with viewmodel.py, whose arms use the swatches).
 RIFLE_LAYOUT, RIFLE_SWATCHES = rl.LAYOUTS['rifle']
 PISTOL_LAYOUT, SIDE_SWATCHES = rl.LAYOUTS['pistol']
-KNIFE_LAYOUT, _ = rl.LAYOUTS['knife']
+KNIFE_LAYOUT, KNIFE_SWATCHES = rl.LAYOUTS['knife']
 
 # Generated parts: vertex colours (linear RGB; A = emission) on the 'metal' or 'polymer' swatch.
 SUPPRESSOR_RGBA = (0.11, 0.11, 0.115, 0.0)
@@ -369,29 +378,42 @@ def build_pistol():
 # Knife
 
 def build_knife():
-    path = rl.find_source('knife', ('.gltf', '.glb'))
-    if not path:
-        raise FileNotFoundError('knife source missing: tools/blender/source-art/realistic/knife/tactical_knife_gltf.zip')
-    log('knife source', path)
-    objs = rl.import_model(path)
-    mat = objs[0].data.materials[0]
-    maps = rl.material_maps(mat)
-    log('knife maps', {k: (v[0].name, v[1]) for k, v in maps.items()})
-    # Source: blade tip toward -Y, spine +Z. The handle is the mesh that does not reach the tip.
-    handle = max(objs, key=lambda o: min(v.co.y for v in o.data.vertices))
-    hlo, hhi = rl.bounds(handle)
-    pts = rl.points(objs)
-    fwd, up = Vector((0, -1, 0)), Vector((0, 0, 1))
-    length = max(p.dot(fwd) for p in pts) - min(p.dot(fwd) for p in pts)
-    centre = (hlo + hhi) / 2
-    s = KNIFE_LENGTH / length
-    rl.to_frame(objs, fwd, up, centre, s)
-    for o in objs:
-        rl.decimate(o, FP_KNIFE)
-    knife = rl.join(objs, 'fp_knife')
+    """The karambit of the owner's knife pack (package V), for the third person: placed against the hand's grip frame
+    exactly as the pack's own right hand holds it at its idle (the pack's hand_r and its socket weapon_r), so in
+    socket_knife (our hand's grip frame times KNIFE_IN_HAND) it sits in our soldier's fist the same way. Returns the
+    mesh (UVs into the atlas's karambit region) and the knife atlas's regions."""
+    pack = knifekit.Pack()
+    pose = pack.sample('idle', [0.0])[0]
+    grip = knifekit.grip_frame(pose, 'r', *TP_GRIP)
+    m = KNIFE_IN_HAND.inverted() @ grip.inverted() @ pose['weapon']
+    pos, tris = pack.knife_mesh_local()
+    bm = bmesh.new()
+    uvl = bm.loops.layers.uv.new('UVMap')
+    vs = [bm.verts.new(m @ v) for v in pos]
+    nm = m.to_3x3()
+    normals = []
+    for idx, uvs, nrms in tris:
+        try:
+            f = bm.faces.new([vs[i] for i in idx])
+        except ValueError:
+            continue
+        for lp, uv, nr in zip(f.loops, uvs, nrms):
+            lp[uvl].uv = uv
+            normals.append((nm @ nr).normalized())
+    me = bpy.data.meshes.new('fp_knife')
+    bm.to_mesh(me)
+    bm.free()
+    me.normals_split_custom_set(normals)
+    me.materials.append(bpy.data.materials.get('karambit') or bpy.data.materials.new('karambit'))
+    knife = bpy.data.objects.new('fp_knife', me)
+    bpy.context.scene.collection.objects.link(knife)
     lo, hi = rl.bounds(knife)
-    log('knife: scale', round(s, 5), 'bounds', tuple(round(c, 4) for c in lo), tuple(round(c, 4) for c in hi))
-    return {'body': knife, 'maps': maps, 'material': mat.name}
+    log('knife (karambit): tris', rl.tris(me), 'bounds', tuple(round(c, 4) for c in lo), tuple(round(c, 4) for c in hi))
+    lay = dict(KNIFE_LAYOUT)
+    regions = [rl.Region('karambit', lay['karambit'], pack.knife_maps()),
+               rl.Region('hands', lay['hands'], pack.hands_maps(), post=knifekit.hands_post(pack))]
+    # The pack's objects stay in the scene (not exported): the hands region's post reads the pack mesh's UVs.
+    return {'body': knife, 'regions': regions}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -414,7 +436,8 @@ def main():
     # The first-person arms' textures (package O) go into each gun's atlas: crops of the soldier's maps.
     arm_crops = {}
     if RIFLE_ONLY:
-        log('--rifle-only: the pistol and knife atlases are not rewritten (no soldier sources needed)')
+        log('--rifle-only / --knife-only: the pistol atlas is not rewritten (no soldier sources needed)'
+            + ('; nor the rifle atlas' if KNIFE_ONLY else ''))
     elif os.path.isdir(soldier.SRC):
         before = set(bpy.data.objects)
         _, sparts = soldier.fp_sources()
@@ -488,7 +511,8 @@ def main():
         atlas.remap(scope, swatch='metal')
         scope.data.color_attributes['Col'].data.foreach_set('color', [x for c in keep for x in c])
         rl.single_material(scope, 'rifle')
-    atlas.write()
+    if not KNIFE_ONLY:
+        atlas.write()
 
     # Aim points (eye positions) per sight; iron line from the front post.
     eye_y = -EYE_BEHIND_GRIP['rifle']
@@ -512,15 +536,13 @@ def main():
 
     # --- Knife ----------------------------------------------------------------------------------
     knife = build_knife()
-    katlas = rl.Atlas('knife', [(knife['material'], KNIFE_LAYOUT[0][1], knife['maps'])] + arm_regions('knife'),
-                      SIDE_SWATCHES)
+    katlas = rl.Atlas('knife', knife['regions'], KNIFE_SWATCHES)
     rl.prepare(knife['body'], katlas, 'knife')
-    if not RIFLE_ONLY:
-        katlas.write()
+    katlas.write()
 
     # --- First-person parts file (viewmodel.py) -----------------------------------------------------
     fp = list(parts.values()) + [rifle['sup'], reddot, scope,
-          pistol['body'], pistol['slide'], pistol['mag'], pistol['sup'], knife['body']]
+          pistol['body'], pistol['slide'], pistol['mag'], pistol['sup']]
     fp_empties = []
     for n, loc in (('fp_gun_muzzle', rifle['muzzle']), ('fp_gun_muzzle_bare', rifle['muzzle_bare']),
                    ('fp_pistol_muzzle', pistol['muzzle']), ('fp_pistol_muzzle_bare', pistol['muzzle_bare'])):
