@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { TICK_RATE } from '@shared/constants';
+import { KNIFE_COOLDOWN_TICKS, KNIFE_WINDUP_TICKS, TICK_RATE } from '@shared/constants';
 import { DEFENDER_KNIFE, SIGHTS, SIGHT_IRON, WEAPONS } from '@shared/weapons';
 
 /**
@@ -88,14 +88,40 @@ describe('first-person viewmodels', () => {
         }
     });
 
-    it('knife: idle and swing, the defender and ghost meshes on one armature', () => {
+    it('knife (package V): the knife pack clips at the rule lengths, its joints, two looks on one armature', () => {
         const g = readGlb('viewmodel_knife.glb');
         const c = clips(g);
-        expect(c.has('knife_idle')).toBe(true);
-        // Windup 0.2 s (the rule's), slash 0.12 s, recovery 0.2 s.
-        expect(DEFENDER_KNIFE.windupTicks / TICK_RATE).toBeCloseTo(0.2, 3);
-        expect(c.get('knife_swing')).toBeGreaterThan(0.5);
+        const windup = DEFENDER_KNIFE.windupTicks / TICK_RATE, cooldown = DEFENDER_KNIFE.cooldownTicks / TICK_RATE;
+        expect(windup).toBeCloseTo(KNIFE_WINDUP_TICKS / TICK_RATE, 6);
+        expect(cooldown).toBeCloseTo(KNIFE_COOLDOWN_TICKS / TICK_RATE, 6);
+        // The pack's idle loop (2.67 s) and its quick draw at the defender knife's draw time (presenter.ts samples it by
+        // draw progress, and plays it at the pack's own speed as the recovery after a swing).
+        expect(c.get('knife_idle')).toBeCloseTo(160 / 60, 1);
+        expect(c.get('knife_draw')).toBeCloseTo(DEFENDER_KNIFE.drawTicks / TICK_RATE, 2);
+        // Four swings: each strikes at the windup (the client maps 0.2 s of clip onto the rule's windup) and is over
+        // before the next swing may start, so a held attack chains them.
+        for (let i = 0; i < 4; i++) {
+            const d = c.get(`knife_swing_${i}`)!;
+            expect(d, `knife_swing_${i}`).toBeGreaterThan(windup + 0.2);
+            expect(d, `knife_swing_${i}`).toBeLessThanOrEqual(cooldown);
+        }
+        expect(c.has('knife_swing')).toBe(false); // the old single swing is gone
+        // Not exported: no holster time, inspect, sprint or heavy stab in the rules.
+        for (const n of ['knife_holster', 'knife_inspect', 'knife_sprint', 'knife_strike']) expect(c.has(n), n).toBe(false);
+        const names = nodeNames(g);
+        for (const n of ['weapon', 'hand_r', 'hand_l', 'lowerarm_r', 'lowerarm_twist_01_r', 'index_03_r', 'thumb_03_l',
+            'upperarm_r']) expect(names.has(n), n).toBe(true);
+        for (const n of ['head', 'pelvis', 'spine_05']) expect(names.has(n), n).toBe(false); // no skin above the arms
+        expect((g as unknown as { skins: unknown[] }).skins.length).toBe(1);
         expect(g.meshes.map(m => m.name).sort()).toEqual(['vm_ghost', 'vm_knife']);
+        // The ghost look reuses the defender mesh's vertex data and differs only in its colours.
+        type P = { attributes: Record<string, number>; indices: number };
+        const [k, gh] = ['vm_knife', 'vm_ghost'].map(n => (g.meshes.find(m => m.name === n) as unknown as { primitives: P[] }).primitives[0]);
+        expect(gh.indices).toBe(k.indices);
+        for (const a of Object.keys(k.attributes)) {
+            if (a === 'COLOR_0') expect(gh.attributes[a]).not.toBe(k.attributes[a]);
+            else expect(gh.attributes[a], a).toBe(k.attributes[a]);
+        }
     });
 });
 
