@@ -5,8 +5,6 @@
 {$SB_DOMAIN} {
 	reverse_proxy game:8080
 
-	log {
-		output stdout
-		format console
-	}
+	# No access log (package W, privacy): it would write every player's IP address into the server's logs.
+	# Caddy's own messages (certificates, errors) still go to `docker compose logs caddy`.
 }
