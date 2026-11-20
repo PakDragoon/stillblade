@@ -34,7 +34,7 @@ The owner has no game development experience and expects the game to have every 
 | Idle players | Never removed mid-round: standing still is how ghosts play. |
 | First and third person are separate models | Owner, 2026-11-19: third person (what other players see) keeps our Quantum soldier; first person (your own arms) must NOT be cut from the soldier any more. A third-person model is built to be seen small and far away; up close its arms look plain and blurry (the orange tube). First person gets dedicated arms made for close-up viewing. The soldier's rolled-up sleeves (bare forearms) match the M4 pack's bare forearms with gloves. |
 | Rifle becomes the M4 | Owner, 2026-11-19: the defender rifle is the M4 from the owner's downloaded "M4 - FPS Weapon Animations Pack FREE" (Fab), in BOTH views, replacing the AK-105. First person uses that pack's own arms, M4 and animations exactly as authored (no retargeting onto another gun). The game rules stay the same (damage, magazine 30, reload 2.2 s tactical / 2.7 s empty, fire rate); only the look changes. Our red dot and 2x scope move onto the M4's rail. |
-| Pistol and knife on hold | Owner, 2026-11-19: keep our current pistol and knife (with the pack's gloved hands) until he picks a matching pack. Candidates seen: Fab "FPS Pistol And Knife Animations" by Bugrimov Maksim ($34.99, Unity/Unreal only: ask the seller for FBX before buying) and the free Fab "Knife FPS Animations" (karambit, Unity/Unreal). The KINEMATION "Tactical FPS Shooter Pack" ($99.99) was considered and set aside. |
+| Knife from the owner's pack, pistol still on hold | Owner, 2026-11-20: the knife (both teams, both views) is the free Fab "Knife FPS Animations" pack he downloaded (its karambit, first-person hands and clips as authored; package V part 1, HANDOFF "Package V part 1"). The pistol stays as it is (the Makarov with the M4 pack's gloved hands) until he picks a matching pack. Earlier (2026-11-19) both were on hold; candidates seen then: Fab "FPS Pistol And Knife Animations" by Bugrimov Maksim ($34.99, Unity/Unreal only: ask the seller for FBX before buying) and the free Fab "Knife FPS Animations" (karambit, Unity/Unreal). The KINEMATION "Tactical FPS Shooter Pack" ($99.99) was considered and set aside. |
 | How to choose art packs | One seller's matched set (arms, guns, animations on one hand skeleton); a full list per item (idle, aim, fire, tactical and empty reload, draw, holster, walk/run; knife: idle, 2+ swings, heavy stab, draw); FBX or GLB, not Unreal-only; 20+ reviews and a first-person video; Fab Standard/Personal licence is fine. The owner sends links to the main session before buying. |
 | Character lab first | Owner, 2026-11-19: new characters, guns and animations are perfected on a standalone page (`/v2_character`, package U) before they go into the game. |
 
@@ -60,7 +60,8 @@ The owner has no game development experience and expects the game to have every 
 | 9 | S. Loading screen with real progress (owner: "it only says downloading map"): one bar with a percentage weighted by bytes, what is loading now, the steps ticked off with their sizes, a note after 10 s without progress, Try again on a failed download; on the menu, the join and a map change (**reviewed, merged into `main` and pushed 2026-11-19**) | Sonnet 5.5 | nothing |
 | 10 | T. The M4 everywhere: first person uses the M4 pack's own arms, M4 and animations as authored; the third-person soldier holds the same M4; our sights moved onto it; the AK-105 retired (owner, 2026-11-19; **built 2026-11-20, reviewed and merged into `main` and pushed 2026-11-20; no protocol change; nothing seen on a real GPU or in motion; see HANDOFF "Package T"**) | Opus 5.5 | nothing (the pack zip is on the owner's PC) |
 | 11 | U. Character lab page `/v2_character`: soldier, rifle, pistol and knife with every view and animation, no map (owner, 2026-11-19; **paused until the owner has new assets**; groundwork on branch `claude/character-lab`, commits `54b2dd6` and `ffd56f7`, not merged; `docs/review/lab/STATUS.md` there says what is left) | Opus 5.5 | the owner's next pack (pistol and knife) |
-| later | V. Pistol and knife from a matched pack (owner, 2026-11-19: **on hold** until he chooses one) | Opus 5.5 | owner's purchase, then U |
+| 12 | V part 1. The knife from the owner's "Knife FPS Animations" pack: its karambit in both views for both teams, its first-person hands, skeleton and clips as authored (idle, quick draw, four chained swings), recoloured per team, its swing recordings as the slash sound (**built 2026-11-20 on `claude/knife-pack-d7d621`, not reviewed or merged; no protocol change; see HANDOFF "Package V part 1"**) | Opus 5.5 | the pack (on the owner's PC) |
+| later | V part 2. The pistol from a matched pack (**on hold** until the owner chooses one) | Opus 5.5 | owner's purchase |
 | later | J. Accounts, saved stats, leaderboard | Opus 5.5 | always-on server (the owner is still comparing VPS offers) |
 | later | I. Grenades | Opus 5.5 | not a priority (owner, 2026-11-17) |
 | later | K. Voice chat | Opus 5.5 | not a priority (owner, 2026-11-17) |
@@ -284,3 +285,13 @@ Decided by the owner on 2026-11-19 (decisions table: "First and third person are
 - No protocol or rule change expected; the empty-reload rule (protocol 17) stays.
 - Before/after pictures (Low and High, lit and dark): hip, aimed with each sight, both reloads, draw, fire, third person front and side; `npm test`, `npm run typecheck`; a HANDOFF section.
 
+## V. Pistol and knife from the owner's packs (Opus 5.5)
+
+**Part 1, the knife: built 2026-11-20** on `claude/knife-pack-d7d621` (HANDOFF "Package V part 1", pictures
+`docs/review/knife/`). Source: `tools/blender/source-art/realistic/fp-anims/knife_fps_animations.unitypackage` (the
+owner's free Fab "Knife FPS Animations", a Unity package; git-ignored, extracted as data by `tools/blender/knifepack.py`).
+Done the M4 way (package T): the pack's hands, karambit, skeleton and clips as authored, only time-scaled to the rules
+(draw 0.3 s, windup 0.2 s, a swing every 0.7 s); the karambit replaces the Tactical Knife in third person too.
+Rebuild order: `weapons.py -- --knife-only` (knife atlas, third-person karambit), then `fpknife.py`.
+
+**Part 2, the pistol: on hold** until the owner picks a matched pack (ROADMAP decisions, "How to choose art packs").

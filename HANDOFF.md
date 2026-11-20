@@ -1,6 +1,6 @@
 # Stillblade — handoff
 
-Last rewritten 2026-11-15; **status updated 2026-11-19: everything is on `main`, pushed and deployed, protocol 17 (packages A to H, L, M parts 1 and 2, N, O with three follow-ups, P, Q, R with the pack hands), 502 tests, typecheck clean, the game server restarted on protocol 17. Landed 2026-11-19: package Q (visual and feel polish: 4x anti-aliasing on both tiers, players and the gun lit by probes of each map's baked light, metal reflections, weapon bob, look inertia, jump and landing, crouch tilt, spring recoil, a vignette on High) and package R (the owner's downloaded M4 pack's motion on our AK, a 2.7 s empty reload with the AK's charging handle, protocol 17, and the pack's gloved hands on all three rigs). See "Package Q" and "Package R" at the end. Landed later 2026-11-19: package S (a loading screen with real progress, step list, stall note and Try again; 523 tests); the defender's first-person sleeve is now the third-person shirt's own sleeve with folds (still plain; a matched arms pack is the real fix). **Package T (the M4 everywhere) built 2026-11-20, reviewed, merged into `main` and pushed 2026-11-20 on the owner's word; review: tests and typecheck on the branch and on merged `main`, the client diffs read line by line, `git diff main -- shared server` empty, 8 screenshots looked at; reviewer's note: the bare forearms read smooth, pale and plastic and lighter than the soldier's skin (the owner chose to merge as is): the rifle is the M4 from the owner's pack in both views, first person using that pack's own arms, gun and clips as authored, the bolt held open on an empty magazine, our sights on the M4's rail, the AK-105 retired; no protocol change (see "Package T" at the end). Pistol and knife on hold.** Paused: the character lab page (package U, `/v2_character`, branch `claude/character-lab`, groundwork only; see `docs/review/lab/STATUS.md` there) until the owner has new assets. Open: the cost of 4x anti-aliasing on integrated graphics is unmeasured (compare `?tier=low` with `?tier=low&aa=0`); armor balance and all new motion are untested in real matches.** The live site rebuilds from `main` on every push; the game server runs on the owner's PC behind a Cloudflare Tunnel and must run a `main` with the same protocol as the site. **Nothing from waves 3 to 6 has been played with a mouse, seen on a real GPU or listened to**: animations and models were judged from Blender renders and headless Chrome (software GL) screenshots, sounds from measured levels. Older sections below describe each package as it was when built, so some numbers in them (test counts, protocol versions, "not on `main`") are historical; **"What to do next" near the end is the current summary, read it first.** The owner's live server holds port 8080 on his PC, so `npm run dev` needs that server stopped first.
+Last rewritten 2026-11-15; **status updated 2026-11-19: everything is on `main`, pushed and deployed, protocol 17 (packages A to H, L, M parts 1 and 2, N, O with three follow-ups, P, Q, R with the pack hands), 502 tests, typecheck clean, the game server restarted on protocol 17. Landed 2026-11-19: package Q (visual and feel polish: 4x anti-aliasing on both tiers, players and the gun lit by probes of each map's baked light, metal reflections, weapon bob, look inertia, jump and landing, crouch tilt, spring recoil, a vignette on High) and package R (the owner's downloaded M4 pack's motion on our AK, a 2.7 s empty reload with the AK's charging handle, protocol 17, and the pack's gloved hands on all three rigs). See "Package Q" and "Package R" at the end. Landed later 2026-11-19: package S (a loading screen with real progress, step list, stall note and Try again; 523 tests); the defender's first-person sleeve is now the third-person shirt's own sleeve with folds (still plain; a matched arms pack is the real fix). **Package T (the M4 everywhere) built 2026-11-20, reviewed, merged into `main` and pushed 2026-11-20 on the owner's word; review: tests and typecheck on the branch and on merged `main`, the client diffs read line by line, `git diff main -- shared server` empty, 8 screenshots looked at; reviewer's note: the bare forearms read smooth, pale and plastic and lighter than the soldier's skin (the owner chose to merge as is): the rifle is the M4 from the owner's pack in both views, first person using that pack's own arms, gun and clips as authored, the bolt held open on an empty magazine, our sights on the M4's rail, the AK-105 retired; no protocol change (see "Package T" at the end). Pistol and knife on hold; the knife since built as package V part 1 (2026-11-20, branch `claude/knife-pack-d7d621`, not merged; see "Package V part 1" at the end), the pistol still on hold.** Paused: the character lab page (package U, `/v2_character`, branch `claude/character-lab`, groundwork only; see `docs/review/lab/STATUS.md` there) until the owner has new assets. Open: the cost of 4x anti-aliasing on integrated graphics is unmeasured (compare `?tier=low` with `?tier=low&aa=0`); armor balance and all new motion are untested in real matches.** The live site rebuilds from `main` on every push; the game server runs on the owner's PC behind a Cloudflare Tunnel and must run a `main` with the same protocol as the site. **Nothing from waves 3 to 6 has been played with a mouse, seen on a real GPU or listened to**: animations and models were judged from Blender renders and headless Chrome (software GL) screenshots, sounds from measured levels. Older sections below describe each package as it was when built, so some numbers in them (test counts, protocol versions, "not on `main`") are historical; **"What to do next" near the end is the current summary, read it first.** The owner's live server holds port 8080 on his PC, so `npm run dev` needs that server stopped first.
 
 **If you are a new session:** this file tells you what exists, what has and has not been verified, the rules that must not be broken, and how the owner wants work done. `ROADMAP.md` tells you what to build next and what is already decided. Read both before changing anything. `DEPLOY.md` covers hosting. You need nothing else: no memory files or earlier conversations are assumed.
 
@@ -384,6 +384,7 @@ Warehouse's lightmap on the GPU grows from about 48 MB to 85 MB with mipmaps (th
   2. First person never takes arms from the soldier again: it uses dedicated arms. For the rifle that is the M4 pack's own arms, M4 and animations, used exactly as authored.
   3. The rifle becomes the M4 in both views (what you hold is what others see), replacing the AK-105; game rules unchanged; our red dot and 2x scope move onto the M4.
   4. Pistol and knife stay as they are (with the pack's hands) and are **on hold** until the owner picks a matched pack (package V).
+- **Package V part 1 (the knife from the owner's "Knife FPS Animations" pack) built 2026-11-20 on `claude/knife-pack-d7d621`, not reviewed or merged; no protocol change.** The knife in both views for both teams is the pack's karambit; first person uses the pack's own hands, skeleton and clips as authored (idle, quick draw, four chained swings), drawn with the pack's own 34.5-degree view; coyote gloves and orange sleeves for defenders, dark for ghosts; the pack's swing recordings are the slash sound. The pistol stays on hold. See "Package V part 1" at the end; pictures in `docs/review/knife/`.
 - **Paused: package U, the character lab** (`/v2_character`): a standalone page with the soldier, rifle, pistol and knife, every view (first person as in the game, third person with orbit), every animation with play/pause/speed/scrub, debug overlays, a "current vs candidate" side-by-side, no map. Branch `claude/character-lab` holds shared groundwork only (`54b2dd6`, no game change, and `ffd56f7`, `docs/review/lab/STATUS.md` with what is left). Resume it when the owner has new assets; the full brief is in that session and summarised in ROADMAP "U".
 - **Buying art (owner):** send the links to the main session before buying. What to look for is in ROADMAP's decisions ("How to choose art packs"). Candidates already seen: Bugrimov's "FPS Pistol And Knife Animations" ($34.99, Unity/Unreal: ask the seller whether FBX animations are included), the free "Knife FPS Animations" (karambit), KINEMATION's "Tactical FPS Shooter Pack" ($99.99, has an AK-105, no knife; set aside).
 - **For the owner to do or check:**
@@ -1475,3 +1476,123 @@ triangles where the AK rig had 22,275).
 (the draw clip has the bolt forward, so the bolt jumps back when it ends; small, left as is); a remote player's empty
 reload in third person (unchanged: the 2.2 s third-person clip, then a hold); the right hand's fingers against the
 trigger frame by frame; the pack's normal map handedness (used as is, as in package R); the seller's name.
+
+## Package V part 1 (the knife from the owner's knife pack) in detail
+
+Built 2026-11-20 on branch `claude/knife-pack-d7d621` (from `main` at `ec84382`); **not reviewed or merged.** No rule,
+number or message change: `git diff main -- shared server` is empty, protocol stays 17, no server restart needed. 524
+tests (`models.test.ts` covers the knife rig's clips against the rules, its joints and its two looks), typecheck clean.
+Pictures: `docs/review/knife/` (README there). **Nothing was seen on a real GPU, in motion, with a mouse, or heard**:
+Blender Workbench stills and SwiftShader frozen frames only.
+
+**The pack.** "Knife FPS Animations" on Fab (free, Fab Standard License; the seller's name is not in the download:
+`[SELLER NAME]` in `client/public/models/CREDITS.md` for the owner to fill in), downloaded by the owner as
+`tools/blender/source-art/realistic/fp-anims/knife_fps_animations.unitypackage` (177 MB, git-ignored, in the main
+checkout). A Unity package: `tools/blender/knifepack.py` reads it as data (standard-library tar, only a whitelist of
+FBX, PNG and WAV files written, paths checked) into `source-art/realistic/build/unzipped/knife-pack/`; its C# scripts,
+prefabs and scenes are never run (two were read as text to learn how the pack wires things). Measured (logged by
+`fpknife.py`):
+- Hands `Hands_rig.fbx`: one skinned mesh, 10,606 triangles, 5,337 vertices, **full-finger gloves and camouflage
+  sleeves to the upper arm, no bare skin**; a UE-style skeleton of 63 joints (52 from the upper arms down); the knife
+  socket `weapon_r` under `hand_r` (6.9, 2.8, 5.2 cm and 116 degrees from it at idle; the clips move it against the
+  hand only in the draw and the inspect).
+- Knife `SKM_Knife.fbx`: a karambit ("ViperFANG"), 4,300 triangles, 22.6 cm, skinned to its own bone `spin`; the pack's
+  script parents it to the socket at identity, which is what we do.
+- Clips (60 fps): idle 5.33 s (a 2.67 s loop twice), draw 1.0, quick_draw 0.5, swing_0 0.667, swing_1/2/3 0.5,
+  holster 0.667, inspect 4.83, sprint 0.667, sprint_prepare 0.333, strike_prepare 0.633 + strike_hit / strike_miss (a
+  heavy stab), empty. Its animator (`.controller`, read as text) plays swings at 1.1x and chains Swing_0 -> Swing_1 ->
+  Swing_3 while the attack is held, then returns through Quick_draw; Swing_2 is in the pack but not in its animator.
+  Each swing's "TraceHit" event is at 50.2 % of the clip.
+- The eye: its camera hangs from the head bone (6.93 cm along it), **vertical field of view 34.5 degrees**; the head
+  bone never moves and turns by at most about 3 degrees.
+- Textures 2k (used) and 4k (not): hands and knife colour, normal (OpenGL style, used as is), occlusion-roughness-metal.
+
+**What the player gets.**
+- **First person, both teams:** the pack's hands and karambit on its own skeleton, bind pose and clips, nothing
+  retargeted (`viewmodel_knife.glb`, `tools/blender/fpknife.py`). Drawn from the pack's own eye with **the pack's own
+  34.5-degree view** (presenter.ts `KNIFE_VM_ZOOM`, through the existing viewmodel zoom: at the game's 74 degrees the
+  hands were small in the middle of the screen, `blender/vm74-idle.jpg` against `pack-idle.jpg`). Package Q's sway and
+  movement feel stay on top, scaled down by the zoom.
+- **Idle:** the pack's idle loop (2.67 s), looped.
+- **Draw (defender knife, 0.3 s):** the pack's quick_draw (0.5 s) at 1.67x, by the predicted draw progress. Ghosts
+  have no switch.
+- **Swings:** four clips. Each one's wind-up, from its start to **the moment its blade crosses the middle of the view**,
+  fills the rule's 0.2 s windup, so the blade passes the crosshair when the slash lands; the rest plays at the pack's
+  1.1x (swing_0: 0-0.265 s in 0.2 s (1.33x), 0.57 s long; swing_1/2/3: 0-0.15/0.17/0.16 s in 0.2 s (0.77-0.83x, a
+  little slower than authored), 0.5 s long; all shorter than the 0.7 s between swings). While the attack is held they
+  chain as the pack's animator does, **0, 1, 2, 1, 3, 1, 2, ...** (swing_1 starts within 8-10 cm of where 0, 2 and 3
+  end, and 2 and 3 where 1 ends; a 0.06 s crossfade hides that gap), chosen by a per-rig counter in the presenter (no
+  randomness, no clock). The swing's last pose is held while the attack is held; on release (or 0.8 s after a swing
+  with none following) the knife comes back up through the pack's quick_draw at its own speed with a 0.2 s crossfade,
+  as the pack returns through Quick_draw. A new swing always starts with that crossfade from whatever is showing.
+  Everything is driven by the existing `knifeSwing` event (the predicted windup), as before.
+- **Defender look:** gloves coyote (the M4 rig's colour), sleeves the defenders' orange; **ghost look:** dark gloves and
+  sleeves. The knife atlas holds the hands in grey (glove and sleeve each normalised; the camouflage pattern muted to
+  45 % of its contrast) and the rig's vertex colours tint them; the two looks are two mesh nodes sharing all vertex
+  data but the colours (`vm_ghost` reuses `vm_knife`'s accessors), so one draw call and almost no extra bytes.
+- **Third person:** the karambit (800 triangles) replaces the Tactical Knife in `weapons.glb` for defenders and ghosts,
+  placed in `socket_knife` the way the pack's own hand holds it (its grip frame, built like clips.py's, measured on the
+  pack's hand at idle). The third-person clips are unchanged. Still at most 2 draw calls per armed player.
+  It reads small from a few metres: the karambit is 22.6 cm and curls out of the fist's pinky side, where the Tactical
+  Knife stuck forward 30 cm (`after/low-third-person-defender-close.jpg`). Not scaled up (kept as authored).
+- **Sound:** the knife slash sound (`knife_slash_1..4.mp3`) is now the pack's four swing recordings (mono, MP3 64
+  kbit/s, through `tools/process-audio.mjs`; the source files go in `tools/audio-source/knife-pack/`). Measured mean
+  -20.5 to -21.4 dB against the old Kenney slashes' -19.5 to -20.5 dB (peaks -1.7 to -2.1 against -0.9 and -4.2). The
+  windup sound, its range and who hears it are unchanged. No audio interface change was needed (same event, more
+  variants: `SAMPLE_SETS.knife_slash` 2 -> 4).
+- **Unchanged:** the M4 and pistol rigs and atlases (byte for byte), the gun and pistol meshes in `weapons.glb` (checked
+  node by node against `main`), every rule.
+
+**Decisions taken on my own judgment.**
+- **The pack's 34.5-degree view for the knife** instead of the game's 74 degrees (above). The guns keep 74.
+- **The strike lands where the blade crosses the middle of the view, not at the pack's own hit event:** with the pack's
+  view, its "TraceHit" comes 0.07-0.1 s later, when the blade is already at or past the edge (swing_1's knife is off the
+  right edge then). This slows the wind-up of swings 1-3 slightly (0.77-0.83x) instead of speeding it up.
+- **Clips used:** idle, quick_draw (as the 0.3 s draw: the full draw is a 1 s flourish that would run 3.3x), swing_0..3,
+  quick_draw again as the recovery. **Not used:** draw (too long, above), holster (a switch has no holster time in the
+  rules), inspect (no inspect key or rule), sprint and sprint_prepare (no sprint rule: running is the normal pace, and a
+  lowered knife would look unready), strike_prepare/hit/miss (the knife has one attack), empty.
+- **All four swings used**, including swing_2, which the pack's own animator leaves out (it fits the chain: it starts
+  where swing_1 ends).
+- **Defender sleeves orange**, the team colour and the third-person shirt's: the pack has camouflage sleeves and no
+  bare skin, so the M4's bare forearm cannot be matched; gloves coyote like the M4's. The camouflage pattern is muted,
+  not removed (it still shows as light and dark orange patches; see `after/low-defender-swing1-strike.jpg`).
+- **The M4's bare forearms (reviewer's note):** the knife pack has no skin texture at all, so it offers nothing to
+  replace them with. The M4 rig is unchanged.
+- **Faces the pack's camera never sees are dropped** (10,606 -> 8,327 hand triangles: the upper arms, mostly), tested
+  over every exported frame with a 25 % margin and aspects up to 2.4:1.
+- **Vertex weld after quantising** (`fpknife.py weld`): Blender's exporter wrote one vertex per corner because custom
+  normals come back slightly different per corner; once stored as bytes they are identical and are merged (17,601 ->
+  8,562 vertices). The pack's normals are kept as authored.
+- **The knife atlas re-laid out** (karambit 0.375 of the width, hands 0.625, swatches): it no longer needs the
+  soldier's texture zip, so `weapons.py` now always writes it; new switch `--knife-only` writes only it (rifle and
+  pistol atlases untouched).
+
+**Numbers.** First-person knife: one skinned mesh per look, 12,627 triangles (hands 8,327, karambit 4,300), 53 bones
+(52 arm joints and `weapon`), 8,562 vertices in the file, one draw call (checked: only `vm_knife` drawn). Before:
+the soldier-arms rig with the Tactical Knife. Third-person karambit 800 triangles. Draw calls in the captured views
+(`docs/review/knife/*/report.json`): first person with the knife Low 20 (before 19; only one knife mesh is drawn, the
+difference is elsewhere in the scene), High 42 (42); third person unchanged within one. Sizes:
+`viewmodel_knife.glb` 589,480 -> 676,596; `weapons.glb` 320,076 -> 321,928; knife atlases 1024: albedo 158,898 -> 62,166,
+normal 112,450 -> 104,748; 2048: 368,990 -> 146,750, 429,044 -> 394,920. **Low model download 4,662,534 -> 4,647,068
+bytes** (budget 4,718,592), **High 7,203,930 -> 7,036,534**. Sounds +7.8 KB. No per-frame allocation added (the
+presenter's knife state is numbers; clips are looked up once at load).
+
+**Files.** New: `tools/blender/knifepack.py` (the safe extractor), `knifekit.py` (the pack read in Blender: meshes,
+poses, eye, grip frame, glove/sleeve islands, the grey hands and the tints), `fpknife.py` (the rig; `--preview <dir>`,
+`--no-export`; the GLB weld and ghost passes), `tools/knife-shots.mjs` (the review capture; `--quick` for a check).
+Changed: `weapons.py` (the karambit, `--knife-only`), `realistic.py` (knife layout), `viewmodel.py` (pistol only now),
+`client/src/presenter.ts` (the knife rig: zoom, clips, chain, recovery), `viewmodel.ts` and `weapons.ts` (comments),
+`audio-logic.ts` (4 slash variants), `models.test.ts`, `tools/process-audio.mjs` and `audio-map.json` (the swing
+recordings, a licence column that is not always CC0), both `CREDITS.md`. Rebuild order: `weapons.py -- --knife-only`,
+then `fpknife.py` (deterministic: rebuilt twice, byte for byte the same).
+
+**What the owner must check by playing** (none of it was seen in motion): the swings at full speed with the attack held
+(the chain 0, 1, 2, 1, 3 and its 0.06 s crossfades), whether the blade crossing the crosshair feels like the moment of
+the hit, the recovery after letting go, the 0.3 s draw (the quick draw at 1.67x), the 34.5-degree framing at his field
+of view and screen shape, the orange sleeves with their muted camouflage, the ghost's dark hands in a dark corner, the
+karambit in other players' hands, and the new slash sounds by ear.
+
+**Not verified:** anything on a real GPU, in motion, with a mouse or by ear; the "before" swing pictures were taken
+with an earlier version of the capture (full game speed), so some of their strike frames fall after the old swing;
+the seller's name; whether the pack's normal maps are meant to be read as they are (no flip in its shader, used as is).

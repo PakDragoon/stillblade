@@ -561,8 +561,15 @@ def weld(path):
             for n, r in zip(names, rows):
                 ai = prim['attributes'][n]
                 a = g['accessors'][ai]
-                g['bufferViews'].append({'buffer': 0, 'byteLength': 0, 'target': 34962})
-                chunks[len(g['bufferViews']) - 1] = r[keep].tobytes()
+                rows_ = r[keep]
+                view = {'buffer': 0, 'byteLength': 0, 'target': 34962}
+                if rows_.shape[1] % 4:
+                    # Vertex elements must start on 4-byte boundaries (the byte normals are 3 bytes): pad each one.
+                    pad = 4 - rows_.shape[1] % 4
+                    rows_ = np.hstack([rows_, np.zeros((len(rows_), pad), np.uint8)])
+                    view['byteStride'] = rows_.shape[1]
+                g['bufferViews'].append(view)
+                chunks[len(g['bufferViews']) - 1] = np.ascontiguousarray(rows_).tobytes()
                 a['bufferView'] = len(g['bufferViews']) - 1
                 a['byteOffset'] = 0
                 a['count'] = int(len(keep))
