@@ -6,24 +6,27 @@
 |---|---|---|
 | `character_high.glb` (938 KB), `character_low.glb` (657 KB; a player downloads one) | The soldier (defenders) and the stealth suit (ghosts) made from "Quantum Modular Character Free Sample" by Quantum Assets (below), with animation clips retargeted from "SWAT" by Quaternius (CC0) and generated ones, processed by `tools/blender/soldier.py` and `clips.py` | Fab Standard License (the character); CC0 (the SWAT clips) |
 | `textures/character_{albedo,normal}_{1024,2048}.webp` | The Quantum character's texture maps, cropped and resampled into one atlas, the shirt dyed orange | Fab Standard License |
-| `weapons.glb` (302 KB) | Third-person weapons: "AK-105" by SpatialNeglect, "Makarov Pistol (PM)" by TaigaForest, "Tactical Knife" and "Red Dot Sight" by Gerardo Justel, "AR Scope (Game-Ready)" by Scape (all five below) and generated suppressors, processed by `tools/blender/weapons.py` | CC-BY (the five models; see below) |
-| `textures/{rifle,pistol,knife}_{albedo,normal}_{1024,2048}.webp` | The same five models' texture maps, resampled into one atlas per gun by `tools/blender/realistic.py`, plus the first-person arms: since package R's hands trial, the gloves and fingertip skin from "M4 - FPS Weapon Animations Pack FREE (v.1)" (glove recoloured coyote), the sleeve fabric (and on the knife the ghost's suit) from the Quantum character | CC-BY (weapons); Fab Standard License (arms, gloves) |
-| `viewmodel_rifle.glb` (1.26 MB), `viewmodel_pistol.glb` (662 KB), `viewmodel_knife.glb` (589 KB) | The first-person arms holding the full-detail weapons above, processed by `tools/blender/viewmodel.py` and `packhands.py`: the gloved hands are the mesh of "M4 - FPS Weapon Animations Pack FREE (v.1)" (below), reshaped onto our skeleton; defenders' sleeves are the Quantum shirt's own upper-arm sleeve moved onto the forearm (`packhands.sleeve_from_shirt`); the ghost's forearms are the Quantum body as a suit. Since package R the rifle's reload, empty reload, draw and fire clips are motion retargeted from the same pack | Fab Standard License (arms, gloves, rifle motion) and CC-BY (weapons) |
+| `weapons.glb` (321 KB) | Third-person weapons: the M4 from "M4 - FPS Weapon Animations Pack FREE (v.1)" (the rifle, package T; below), "Makarov Pistol (PM)" by TaigaForest, "Tactical Knife" and "Red Dot Sight" by Gerardo Justel, "AR Scope (Game-Ready)" by Scape (below) and generated suppressors, processed by `tools/blender/weapons.py` and `m4.py` | Fab Standard License (the M4); CC-BY (the other four models; see below) |
+| `textures/{rifle,pistol,knife}_{albedo,normal}_{1024,2048}.webp` | One atlas per gun by `tools/blender/realistic.py`: the rifle's holds the M4 pack's M4, round, glove (recoloured coyote) and arm skin maps with the red dot's and the AR Scope's maps (package T); the pistol's and knife's hold their models' maps, the pack's glove and fingertip skin, and the sleeve fabric (and on the knife the ghost's suit) from the Quantum character | Fab Standard License (M4, arms, gloves); CC-BY (the other weapons) |
+| `viewmodel_rifle.glb` (1.37 MB) | Package T: the M4 pack's own first-person arms (bare forearms, gloves), skeleton, M4 and clips (Reload, Reload_Empty, Fire, Draw), used as authored and only resampled to the game's reload, draw and fire times, by `tools/blender/fpm4.py`; with our red dot, 2x sight and suppressor on the M4 | Fab Standard License (arms, M4, motion) and CC-BY (sights) |
+| `viewmodel_pistol.glb` (662 KB), `viewmodel_knife.glb` (589 KB) | The first-person arms holding the full-detail pistol and knife, processed by `tools/blender/viewmodel.py` and `packhands.py`: the gloved hands are the mesh of "M4 - FPS Weapon Animations Pack FREE (v.1)" (below), reshaped onto our skeleton; defenders' sleeves are the Quantum shirt's own upper-arm sleeve moved onto the forearm (`packhands.sleeve_from_shirt`); the ghost's forearms are the Quantum body as a suit | Fab Standard License (arms, gloves) and CC-BY (weapons) |
 
-### The rifle's first-person motion (Fab Standard License, package R)
+### The rifle and the first-person hands (Fab Standard License, packages R and T)
 
 **"M4 - FPS Weapon Animations Pack FREE (v.1)"** on Fab by **[SELLER NAME: the owner fills this in from the Fab listing]** (downloaded by the owner,
 2026-11-18, as `m4_animations_gltf.zip`; free under the Fab Standard License, Personal and Professional use, which
-allows using it inside a game but not redistributing the source files). Used: its **motion** (the rifle's, the
-magazine's and the hands' movement in its Reload, Reload_Empty, Fire, Holster and Draw clips, measured by
-`tools/blender/fpanims.py` and put onto our AK-105 and arms by `tools/blender/viewmodel.py`, time-scaled to the
-game's rules, the M4's bolt-catch slap replaced by an AK charging-handle pull, the magazine rocked like an AK's) and,
-since the hands trial (package R, second commit), **its gloved hands**: the `Hand_Mesh` (glove and fingertip skin)
+allows using it inside a game but not redistributing the source files). Used since package T (2026-11-20): **its M4**
+(the rifle in both views: the full model with its moving magazine, top round, bolt, bolt catch and trigger in first
+person; reduced to 3,200 triangles in third person; its folding rear sight split off so it folds away under an optic),
+**its arms** (the `Hand_Mesh` glove and skin on its own skeleton and bind pose, the glove recoloured coyote) and **its
+clips** Reload, Reload_Empty, Fire and Draw as authored, resampled to the game's 2.2 s and 2.7 s reloads, 0.4 s draw
+and 0.1 s shot (`tools/blender/fpm4.py`, reading the pack with `fpanims.py` and `m4.py`). For the pistol and knife
+(packages R, still current): the `Hand_Mesh` (glove and fingertip skin)
 reshaped onto our skeleton by `tools/blender/packhands.py` (scaled to 0.71, the bare forearm cut away, the glove
 recoloured coyote for defenders and tinted near-black for ghosts), and its `Glove_D` and `Hand_D` colour, ORM and
-normal maps resampled into our gun atlases. These processed hands and textures **ship inside our game files**
-(`viewmodel_*.glb`, `textures/{rifle,pistol,knife}_*.webp`) as part of the game, which the licence allows. Not used:
-the M4, its magazines and bullets. The downloaded zip stays in the git-ignored
+normal maps resampled into our gun atlases. These processed models and textures **ship inside our game files**
+(`weapons.glb`, `viewmodel_*.glb`, `textures/{rifle,pistol,knife}_*.webp`) as part of the game, which the licence
+allows. Not used: its second magazine and the Holster clip. The downloaded zip stays in the git-ignored
 `tools/blender/source-art/realistic/fp-anims/` and must not be committed or redistributed.
 
 ### The soldier (Fab Standard License)
@@ -45,20 +48,18 @@ The game's weapons are made from these models, downloaded by the owner from Fab 
 there under a Creative Commons Attribution licence (the licence version was not checked by the build session; see each
 listing):
 
-- **"AK-105"** by **SpatialNeglect**: https://www.fab.com/listings/9b9836c5-b73c-4216-a389-a61549eb3a74 (the rifle)
 - **"Makarov Pistol (PM)"** by **TaigaForest**: https://www.fab.com/listings/6af98baa-bc87-4a38-ae33-db73ca1c855c (the pistol)
 - **"Tactical Knife"** by **Gerardo Justel**: https://www.fab.com/listings/33452f11-fc65-479e-8d6e-75bf8be1c0ff (the knife, ghosts' and defenders')
 - **"Red Dot Sight"** by **Gerardo Justel**: https://www.fab.com/listings/3a8c2a97-481e-403b-a61b-aef09a96debe (the 1x red dot)
 - **"AR Scope (Game-Ready)"** by **Scape**: https://www.fab.com/listings/346c6bbd-a204-4317-9e10-b25c653821a8 (the 2x sight;
-  package O: oriented and placed on the AK's rail by script, its lens tube left out so the aimed view looks through
+  package O: oriented and placed on the rifle's rail by script (the M4's since package T), its lens tube left out so the aimed view looks through
   it, reduced to 3,000 triangles in first person and 380 in third person, its five materials' maps cropped into the
   rifle atlas)
 
 Changes made (all by script, `tools/blender/weapons.py`, `realistic.py`, `viewmodel.py`): re-oriented, scaled to real
-size and centred on the grip; reduced in triangles (first person: the AK-105 from 17,568 to 11,998 with its raised
-cheek rest left out of first person; the knife from 22,578 to 4,398; the red dot from 23,281 to 2,172 without its
+size and centred on the grip; reduced in triangles (the knife from 22,578 to 4,398; the red dot from 23,281 to 2,172 without its
 screws and glass; the Makarov kept at 11,578 without its loose cartridges and two internal spring meshes; third person
-reduced further), split into moving parts (AK magazine and bolt carrier; Makarov slide, magazine), joined with generated
+reduced further), split into moving parts (Makarov slide, magazine), joined with generated
 parts; each gun's texture maps resampled into one atlas (base colour with ambient occlusion and a lifted metal colour;
 roughness and metalness folded into one surface value; normal map) and saved as WebP; a glowing reticle added on the red
 dot's glass.
@@ -96,14 +97,14 @@ in `realistic/`):
 
 | File | Size | Author | Used |
 |---|---|---|---|
-| `realistic/rifle/ak105fbx.zip` (FBX + 4K maps for two materials) | 60,139,447 bytes | SpatialNeglect | The rifle |
+| `realistic/rifle/ak105fbx.zip` (FBX + 4K maps for two materials) | 60,139,447 bytes | SpatialNeglect ("AK-105", CC-BY) | No longer (the rifle until package T; nothing of it ships) |
 | `realistic/pistol/source.zip` (`SM_PM_Ammo_9x18.fbx` + 4K maps) | 82,911,353 bytes | TaigaForest | The pistol |
 | `realistic/knife/tactical_knife_gltf.zip` (glTF + 4K maps) | 26,344,712 bytes | Gerardo Justel | The knife |
 | `realistic/reddot/red_dot_sight.glb` (4K maps embedded) | 76,141,388 bytes | Gerardo Justel | The red dot |
 | `realistic/scope2x/ar_scope_game_ready_gltf.zip` (glTF, 5 materials, 4K maps) | 56,855,445 bytes | Scape | The 2x sight |
 | `realistic/soldier/fbx_all_assets.zip` (FBX parts) | 34,856,279 bytes | Quantum Assets | The soldier, the ghost and the first-person arms |
 | `realistic/soldier/pbr_textures.zip` (121 4K PNGs) | 1,210,534,656 bytes | Quantum Assets | Their textures (BaseColor, OcclusionRoughnessMetallic, Unity_Normal; the Arms normal map is DirectX-style and is flipped) |
-| `realistic/fp-anims/m4_animations_gltf.zip` (one glTF scene: M4, hands, 5 clips on one 10 s timeline) | 7,987,134 bytes | see "The rifle's first-person motion" | The rifle's first-person motion and the gloved hands (package R) |
+| `realistic/fp-anims/m4_animations_gltf.zip` (one glTF scene: M4, hands, 5 clips on one 10 s timeline) | 7,987,134 bytes | see "The rifle and the first-person hands" | The M4 in both views, the rifle's first-person arms and clips (package T), the gloved hands on the pistol and knife (package R) |
 
 Earlier downloads (packages A and F), with a generic HTTP client and no account, licence as shown on poly.pizza:
 

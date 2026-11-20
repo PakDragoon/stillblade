@@ -95,8 +95,8 @@ const GROUPS: Group[] = [
     },
     {
         title: 'Reload and weapon switch', items: [
-            { label: 'Rifle reload (2.2 s)', note: 'out 0.71 s, in 1.55 s, no bolt', run: () => engine.reload(where(0), state.local, 0, reloadId++) },
-            { label: 'Rifle empty reload (2.7 s)', note: 'out 0.74 s, in 1.63 s, bolt 1.94 s', run: () => engine.reload(where(0), state.local, 0, reloadId++, true) },
+            { label: 'Rifle reload (2.2 s)', note: 'out 0.63 s, in 1.52 s, no bolt', run: () => engine.reload(where(0), state.local, 0, reloadId++) },
+            { label: 'Rifle empty reload (2.7 s)', note: 'out 0.69 s, in 1.62 s, bolt catch 2.04 s', run: () => engine.reload(where(0), state.local, 0, reloadId++, true) },
             { label: 'Pistol reload (1.4 s)', note: 'out 0.15 s, in 0.7 s, slide 1.0 s', run: () => engine.reload(where(0), state.local, 1, reloadId++) },
             { label: 'Reload, cut off after 1 s', note: 'must go silent at once', run: () => { const id = reloadId++; engine.reload(where(0), state.local, 0, id); setTimeout(() => engine.cancelReload(id), 1000); } },
             { label: 'Switch to rifle', run: () => engine.weaponSwitch(0) },

@@ -4,8 +4,9 @@ Stillblade first-person viewmodels: arms and hands holding each weapon, with the
     "C:/Program Files/Blender Foundation/Blender 5.3/blender.exe" --background --factory-startup \
         --python tools/blender/viewmodel.py [-- --rig rifle|pistol|knife]
 
-Writes client/public/models/viewmodel_rifle.glb, viewmodel_pistol.glb and viewmodel_knife.glb (one file per rig, so
-each holds only its own clips). Sources:
+Writes client/public/models/viewmodel_pistol.glb and viewmodel_knife.glb (one file per rig, so each holds only its
+own clips). Since package T the rifle rig (viewmodel_rifle.glb) is the M4 pack's own arms, M4 and clips, built by
+tools/blender/fpm4.py; the AK rifle code below (package R's retargeting) is no longer run. Sources:
   - the arms (package O): the Quantum soldier's forearms, hands and rolled-up sleeves for defenders, the stealth
     suit's arms with gloves for ghosts (soldier.py fp_sources / fp_arms: the same skeleton and textures as the third-
     person characters; their textures live in each gun's atlas, written by weapons.py);
@@ -1295,7 +1296,11 @@ def main():
         if '--preview' in rest:
             global PREVIEW_DIR
             PREVIEW_DIR = os.path.abspath(rest[rest.index('--preview') + 1])
-    for name in ('rifle', 'pistol', 'knife'):
+    # Package T: the rifle rig is the M4 pack's own arms, gun and clips, built by fpm4.py (the AK rifle path below is
+    # kept only for reference; the AK and its atlas layout are gone, so it no longer runs).
+    if only == 'rifle':
+        raise SystemExit('the rifle rig is built by tools/blender/fpm4.py (package T)')
+    for name in ('pistol', 'knife'):
         if only and name != only:
             continue
         build(name)

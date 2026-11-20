@@ -7,15 +7,17 @@ import { loadAssetTracked } from './fetch-progress';
 import type { FileTrack, LoadReporter } from './loading';
 
 /**
- * Weapon meshes: client/public/models/weapons.glb, built by tools/blender/weapons.py (package M part 2) from the
- * realistic CC-BY models in client/public/models/CREDITS.md: an AK-105 (the rifle), a Makarov PM (the pistol) and a
- * tactical knife, with a red dot sight, a 2x scope and generated suppressors. Third-person (reduced) meshes; the
+ * Weapon meshes: client/public/models/weapons.glb, built by tools/blender/weapons.py from the models in
+ * client/public/models/CREDITS.md: the M4 from the owner's animation pack (the rifle, package T; the same gun the
+ * first-person rig holds), a Makarov PM (the pistol) and a tactical knife, with a red dot sight, a 2x scope and
+ * generated suppressors. Third-person (reduced) meshes; the
  * first-person rigs (viewmodel.ts) carry the full-detail ones. Every mesh has UVs into its gun's texture atlas and a
  * vertex colour (RGB tints the atlas, A = emission: the red dot's reticle); `WeaponMaterials` below draws them.
  *
  * Node layout and axis convention (engine space, metres, origin at the centre of the hand's grip):
  *   gun        : -Z = muzzle direction, +Y = sights up (magazine and grip hang toward -Y), +X = right.
- *                Origin = middle of the pistol grip. 0.39 m long bare, 0.66 m with the suppressor.
+ *                Origin = a third of the way down the pistol grip. The M4: 0.87 m long bare, 1.0 m with the
+ *                suppressor; its folding rear sight stays up in third person.
  *   gun_suppressor     : child mesh of gun, in gun's own frame (identity local transform).
  *   gun_muzzle         : child of gun, centre of the suppressor's front face.
  *   gun_muzzle_bare    : child of gun, centre of the bare barrel's front face.

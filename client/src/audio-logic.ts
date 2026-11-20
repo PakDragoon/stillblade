@@ -157,18 +157,19 @@ export function surfaceUnder(boxes: readonly Box[], pos: Readonly<Vec3>): Surfac
 
 /**
  * Reload cue times in seconds from the start, matching the first-person clips and the synthesised reloads. The rifle's
- * (package R) come from the downloaded animation pack retargeted onto the AK (tools/blender/viewmodel.py logs them as
- * "pack cues"): the tactical reload (2.2 s) takes the magazine out at 0.71 s and seats the new one at 1.55 s, with a
- * round still chambered, so no bolt; the empty reload (2.7 s, `reloadEmptyTicks`) takes it out at 0.74 s, seats it at
- * 1.63 s and pulls the charging handle at 1.94 s, which slams home `RELOAD_BOLT_SLAM` later (2.07 s).
+ * (package T) are the M4 animation pack's own events at our clips' speeds (tools/blender/fpm4.py logs them as "pack
+ * cues"): the tactical reload (2.2 s) takes the magazine out at 0.63 s and seats it again at 1.52 s, with a round still
+ * chambered, so no bolt; the empty reload (2.7 s, `reloadEmptyTicks`) takes it out at 0.69 s, seats it at 1.62 s, and
+ * the left palm slaps the bolt catch at 2.04 s, which lets the locked-back bolt slam home `RELOAD_BOLT_SLAM` later
+ * (2.09 s).
  */
 export const RELOAD_CUES = {
-    rifle: { parts: ['reload_rifle_out', 'reload_rifle_in'], times: [0.71, 1.55] },
-    rifle_empty: { parts: ['reload_rifle_out', 'reload_rifle_in', 'reload_rifle_bolt'], times: [0.74, 1.63, 1.94] },
+    rifle: { parts: ['reload_rifle_out', 'reload_rifle_in'], times: [0.63, 1.52] },
+    rifle_empty: { parts: ['reload_rifle_out', 'reload_rifle_in', 'reload_rifle_bolt'], times: [0.69, 1.62, 2.04] },
     pistol: { parts: ['reload_pistol_out', 'reload_pistol_in', 'reload_pistol_slide'], times: [0.15, 0.7, 1.0] }
 } as const;
-/** Seconds from the charging handle's pull to the bolt slamming home in the rifle's empty reload (the synthesised one). */
-export const RELOAD_BOLT_SLAM = 0.125;
+/** Seconds from the bolt catch's release to the bolt slamming home in the rifle's empty reload (the synthesised one). */
+export const RELOAD_BOLT_SLAM = 0.05;
 
 /**
  * Package N: how a gunshot at distance `d` mixes the close recording and the distant tail (equal power, so the

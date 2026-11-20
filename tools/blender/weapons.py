@@ -6,8 +6,13 @@ weapons.glb (third person), the weapon textures, and the full-detail parts the f
         --python tools/blender/weapons.py
 
 Sources: tools/blender/source-art/realistic/ (git-ignored; see realistic.py and client/public/models/CREDITS.md):
-the AK-105 (rifle), the Makarov PM (pistol), the tactical knife, the red dot sight, and the 2x scope if the owner has
-downloaded it (otherwise a 2x combat scope is generated here). Run viewmodel.py after this one.
+the M4 from the owner's animation pack (rifle, package T: fp-anims/m4_animations_gltf.zip, read by m4.py), the
+Makarov PM (pistol), the tactical knife, the red dot sight, and the 2x scope if the owner has downloaded it (otherwise
+a 2x combat scope is generated here). Run fpm4.py (the rifle rig) and viewmodel.py (pistol, knife) after this one.
+
+    ... --python tools/blender/weapons.py -- --rifle-only
+rebuilds everything but leaves the pistol and knife atlases as they are (they need the soldier's 1.2 GB texture zip
+for the sleeve regions); the pistol and knife meshes in weapons.glb come out byte for byte the same either way.
 
 Writes:
   client/public/models/weapons.glb                 third person: reduced meshes, the node layout below
@@ -30,10 +35,11 @@ for the guns, the middle of the handle for the knife):
   -Z forward (gun: muzzle; knife: blade tip), +Y up (gun: sights; knife: spine), +X right.
 The character (soldier.py, clips.py) holds the rifle in "socket_gun", the pistol in "socket_pistol" and the knife in "socket_knife".
 
-Suppressors (room option): a realistic can generated here (the AK's slips over its muzzle brake; the pistol's screws
+Suppressors (room option): a realistic can generated here (the M4's slips over its flash hider; the pistol's screws
 on its muzzle), its own node, merged into the gun's one mesh by the client when the room has suppressors.
-Sights (package M): the AK-105 has a Picatinny rail on its dust cover; the red dot and the 2x scope stand on it (the
-iron sights are the gun's own). Like the suppressor, each is merged into the one gun mesh in third person and is a bone
+Sights (package M; package T moved them onto the M4): the red dot stands on the upper receiver's rail ahead of the
+folding rear sight, the 2x scope's eyepiece over the rail's rear end (the rear sight folds away in first person
+whenever an optic is mounted); the iron sights are the M4's own. Like the suppressor, each is merged into the one gun mesh in third person and is a bone
 scaled away in the first-person rig.
 """
 import math
@@ -41,10 +47,13 @@ import os
 import sys
 
 import bpy
+import numpy as np
 from mathutils import Matrix, Vector
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import fpanims  # noqa: E402
+import m4  # noqa: E402
 import packhands  # noqa: E402
 import realistic as rl  # noqa: E402
 import soldier  # noqa: E402
@@ -52,9 +61,8 @@ import soldier  # noqa: E402
 ROOT = rl.ROOT
 OUT = os.path.join(ROOT, 'client', 'public', 'models', 'weapons.glb')
 
-# Real sizes (metres): AK-105 with the stock unfolded and its muzzle brake 0.824; the PM is modelled in metres;
-# the knife 0.30 (as before); the red dot's housing 0.056 wide; the generated 2x scope 0.145 long.
-RIFLE_LENGTH = 0.824
+# Real sizes (metres): the PM is modelled in metres; the knife 0.30 (as before); the red dot's housing 0.056 wide; the
+# generated 2x scope 0.145 long. The M4 is the pack's, at its own size (0.865 m, stock extended).
 KNIFE_LENGTH = 0.30
 REDDOT_WIDTH = 0.056
 SCOPE_LENGTH = 0.145
@@ -62,13 +70,13 @@ SCOPE_LENGTH = 0.145
 GRIP_DOWN = 0.35
 
 # Triangle budgets. First person: per source part (the rest kept as modelled); third person: per node.
-FP_RIFLE = {'BARREL': 1900, 'FOLDING_STOCK_CHICK_REST': 900, 'MUZZLE_BRAKE': 700, 'IRON_SIGHT': 850,
-            'FOLDING_STOCK': 750, 'HAND_GUARD': 1500, 'RECEIVER': 2300}
-FP_REDDOT = {'main_shape': 1300, 'main_bat_1': 220, 'main_buttons_1': 90, 'main_buttons_2': 90, 'main_a': 220}
+FP_REDDOT = {'main_shape': 900, 'main_bat_1': 220, 'main_buttons_1': 90, 'main_buttons_2': 90, 'main_a': 220}
 FP_KNIFE = 1300                     # per source mesh (two)
 TP_PISTOL_SCALE = 1.0               # real size (package O: the new hands hold it; M part 2 drew it 1.35x)
 TP = {'gun': 3200, 'pistol': 1700, 'knife': 800, 'reddot': 380, 'scope_dl': 380}
-FP_SCOPE_DL = 3000                  # a downloaded scope, first person
+# A downloaded scope, first person (package T: 3000 -> 1800 to keep the Low download within its budget; both optics
+# ship in the rifle rig and only one is shown).
+FP_SCOPE_DL = 1800
 # The downloaded 2x sight (AR Scope by Scape): its axes in the model's own frame, scale to metres, the lens material.
 SCOPE_DL = {'forward': (0, 1, 0), 'up': (0, 0, 1), 'scale': 1.0, 'lens': ('scope_Material.003',)}
 # Its four remaining materials, each in its own rectangle of the rifle atlas (inside the 'scope' region).
@@ -76,12 +84,49 @@ SCOPE_DL_REGIONS = {'scope_Material.001': (0.75, 0.375, 1.0, 0.5), 'scope_Materi
                     'scope_Material.002': (0.875, 0.3125, 1.0, 0.375), 'scope_Material.004': (0.875, 0.25, 1.0, 0.3125)}
 
 # Eye positions when aimed (the shipped frame, metres): iron sights put the eye this far behind the grip (the rifle:
-# a cheek weld over the stock's front, so the stock passes under the eye and the receiver's top leads to the front
-# post; at 0.44, past the stock's end, the gun was seen end-on as a thin strip); the red dot this far behind its glass;
+# a cheek weld on the M4's stock, about 12 cm behind its folding rear sight, so the rear aperture frames the front post
+# and the receiver's top shows; package O found that an eye too far back (0.44 on the AK) shows the gun end-on as a
+# thin strip, and the AK's 0.20 made the M4 small in the view); the red dot this far behind its glass;
 # the 2x scope this far behind its eyepiece, so the eyepiece fills the view like a real combat scope.
-EYE_BEHIND_GRIP = {'rifle': 0.20, 'pistol': 0.30}
+EYE_BEHIND_GRIP = {'rifle': 0.12, 'pistol': 0.30}
 REDDOT_EYE_RELIEF = 0.175
 SCOPE_EYE_RELIEF = 0.045
+
+# M4 (package T): the suppressor slips over the flash hider; the red dot stands this far ahead of the gun joint (the
+# front of the magazine well, on the upper receiver), the 2x scope's eyepiece this far in from the rail's rear end.
+SUP_LENGTH = 0.185
+SUP_OVERLAP = 0.055
+SUP_RADIUS = 0.019
+REDDOT_JOINT_Y = 0.035
+SCOPE_REAR_INSET = 0.012
+# The pack's M4 and round have no roughness or metal maps (the pack sets them matte, non-metal): one surface value
+# each (metal-like for the anodised gun, so package Q's reflections read on it; brass for the round). The M4's base
+# colour is very dark (median 0.11 stored, where the AK's was about 0.2 before realistic.py's metal lift raised it to
+# about 0.3): it is lifted by M4_LIFT so the gun reads as dark grey anodised metal instead of a black silhouette under
+# the game's probe lighting (seen in the first review shots).
+M4_S = 0.5
+M4_LIFT = 2.4
+BRASS_S = 0.6
+RIFLE_ONLY = '--rifle-only' in sys.argv
+
+
+def m4_surface(rgb, s):
+    rgb[...] = np.clip(rgb * M4_LIFT, 0, 1)
+    s[...] = M4_S
+
+
+def brass_surface(rgb, s):
+    s[...] = BRASS_S
+
+
+def rifle_arm_regions():
+    """The pack's arms on the M4 (package T): its glove (coyote, as on the pistol and knife) and its whole skin map
+    region (bare forearms and fingertips)."""
+    lay = rl.ARM_LAYOUTS_PACK['rifle']
+    src = packhands.source()
+    return [rl.Region('glove', lay['glove'], src.maps('Glove_D'), post=packhands.coyote),
+            rl.Region('handskin', lay['handskin'], src.maps('Hand_D'), crop=m4.skin_crop(), post=packhands.matte)]
+
 
 # Atlas layouts: realistic.LAYOUTS (shared with viewmodel.py, whose arms use the swatches).
 RIFLE_LAYOUT, RIFLE_SWATCHES = rl.LAYOUTS['rifle']
@@ -111,92 +156,43 @@ def grip_origin(pts):
 
 
 # ---------------------------------------------------------------------------------------------
-# Rifle: AK-105
+# Rifle: the M4 from the owner's animation pack (package T; m4.py)
 
 def build_rifle():
-    path = rl.find_source('rifle', ('.fbx',))
-    if not path:
-        raise FileNotFoundError('AK-105 source missing: tools/blender/source-art/realistic/rifle/ak105fbx.zip')
-    log('rifle source', path)
-    objs = by_name(rl.import_model(path))
-    tex = os.path.dirname(path)
-    tex = os.path.join(tex, 'textures') if os.path.isdir(os.path.join(tex, 'textures')) else tex
-    maps = {}
-    for mat in ('ak105', 'folding_stock'):
-        stem = 'ak105_ak' if mat == 'ak105' else 'ak105_folding_stock'
-        maps[mat] = {'base': (rl.load_image(os.path.join(tex, f'{stem}_BaseColor.png')), None),
-                     'rough': (rl.load_image(os.path.join(tex, f'{stem}_Roughness.png')), 0),
-                     'metal': (rl.load_image(os.path.join(tex, f'{stem}_Metallic.png')), 0),
-                     'normal': (rl.load_image(os.path.join(tex, f'{stem}_Normal.png')), None)}
-    # Source: muzzle toward -Y, sights +Z, charging handle on -X (the right side).
-    fwd, up = Vector((0, -1, 0)), Vector((0, 0, 1))
-    pg = objs['PISTOL GRIP']
-    pts = [v.co.copy() for v in pg.data.vertices]
-    origin, _ = grip_origin(pts)
-    xs = [p.x for p in pts]
-    origin.x = (min(xs) + max(xs)) / 2
-    all_pts = rl.points(list(objs.values()))
-    length = max(p.dot(fwd) for p in all_pts) - min(p.dot(fwd) for p in all_pts)
-    s = RIFLE_LENGTH / length
-    rl.to_frame(list(objs.values()), fwd, up, origin, s)
-    log('rifle: source length', round(length, 4), 'scale', round(s, 5), 'grip origin (source)',
-        tuple(round(c, 4) for c in origin))
-
-    # Landmarks (shipped frame).
-    brake = objs['MUZZLE_BRAKE']
-    blo, bhi = rl.bounds(brake)
-    bore_x, bore_z = (blo.x + bhi.x) / 2, (blo.z + bhi.z) / 2
-    mx, my, mz, _ = rl.front_face(brake)
+    if not os.path.exists(fpanims.ZIP):
+        raise FileNotFoundError('M4 source missing: tools/blender/source-art/realistic/fp-anims/m4_animations_gltf.zip')
+    m = m4.M4()
+    lm = m.landmarks()
+    objs = {}
+    for part in m4.PARTS:
+        made = m.part_object(part, 'fp_gun' if part == 'body' else f'fp_gun_{part}')
+        objs[part] = made[0]
+        if part == 'body':
+            objs['rearsight'] = made[1]
+    for k, o in objs.items():
+        log('rifle part', k, 'tris', rl.tris(o.data))
+    maps = {'M4_D': m.maps('M4_D'), 'Bullet5_56x45mm_D': m.maps('Bullet5_56x45mm_D')}
+    bore_x, bore_z = lm['bore']
+    my = lm['muzzle_y']
     muzzle_bare = Vector((bore_x, my, bore_z))
-    barrel_pts = rl.points(objs['BARREL'])
-    post = [p for p in barrel_pts if p.y > blo.y - 0.09]
-    iron_z = max(p.z for p in post)
-    rear = max(rl.points(objs['IRON_SIGHT']), key=lambda p: p.z)
-    dc = rl.points(objs['DUST_COVER'])
-    rail_z = max(p.z for p in dc)
-    rail = [p for p in dc if p.z > rail_z - 0.002]
-    rail_y = (min(p.y for p in rail), max(p.y for p in rail))
-    hlo, hhi = rl.bounds(objs['HAND_GUARD'])
-    handle = max(rl.points(objs['BOLT_CARRIER']), key=lambda p: p.x)
-    mag_ax, mag_lo, mag_hi = rl.axis_of(rl.points(objs['MAGAZINE']))
-    grip_ax, glo, ghi = rl.axis_of(rl.points(pg))
-    log('rifle: bore x/z', round(bore_x, 4), round(bore_z, 4), 'muzzle brake front', round(my, 4), 'rear', round(blo.y, 4),
-        'front post top', round(iron_z, 4), 'rear sight top', tuple(round(c, 4) for c in rear),
-        'rail top', round(rail_z, 4), 'from', tuple(round(c, 4) for c in rail_y),
-        'handguard', tuple(round(c, 4) for c in hlo), tuple(round(c, 4) for c in hhi),
-        'charging handle', tuple(round(c, 4) for c in handle))
-
-    # First-person reduction (normals carried over).
-    for name, target in FP_RIFLE.items():
-        rl.decimate(objs[name], target)
-    mag = objs.pop('MAGAZINE')
-    bolt = objs.pop('BOLT_CARRIER')
-    # The raised cheek rest stands almost at the sight line right in front of the eye when aiming: first person
-    # leaves it out (the folding stock itself stays); third person keeps it.
-    cheek = objs.pop('FOLDING_STOCK_CHICK_REST')
-    cheek.name = cheek.data.name = 'fp_gun_cheek'
-    body = rl.join(list(objs.values()), 'fp_gun')
-    mag.name = mag.data.name = 'fp_gun_mag'
-    bolt.name = bolt.data.name = 'fp_gun_bolt'
-
-    # Suppressor: a can that slips over the muzzle brake.
-    br = (bhi.x - blo.x) / 2
-    sup = suppressor('fp_gun_suppressor', (bore_x, bore_z), blo.y - 0.006, 0.185, br + 0.0045, 32)
-    muzzle = Vector((bore_x, blo.y - 0.006 + 0.185, bore_z))
-
+    mag_ax, mag_lo, mag_hi = lm['mag']
+    hlo, hhi = lm['handguard']
+    # Suppressor: a can over the flash hider (its rear this far behind the muzzle).
+    back = my - SUP_OVERLAP
+    sup = suppressor('fp_gun_suppressor', (bore_x, bore_z), back, SUP_LENGTH, SUP_RADIUS, 32)
+    muzzle = Vector((bore_x, back + SUP_LENGTH, bore_z))
     marks = {
-        'mark_rifle_grip': (Vector((0, 0, 0)), grip_ax),
+        'mark_rifle_grip': (Vector((0, 0, 0)), m.grip_axis),
         'mark_rifle_mag': ((mag_lo + mag_hi) / 2, mag_ax),
         'mark_rifle_mag_bottom': (mag_lo, mag_ax),
         'mark_rifle_handguard': (Vector((bore_x, hlo.y + (hhi.y - hlo.y) * 0.22, (hlo.z + hhi.z) / 2)),
                                  Vector((0, 0, 1))),
         'mark_rifle_handguard_size': (Vector(((hhi.x - hlo.x) / 2, (hhi.y - hlo.y) / 2, (hhi.z - hlo.z) / 2)),
                                       Vector((0, 0, 1))),
-        'mark_rifle_handle': (handle, Vector((1, 0, 0))),
+        'mark_rifle_handle': (lm['handle'], Vector((1, 0, 0))),
     }
-    return {'body': body, 'mag': mag, 'bolt': bolt, 'cheek': cheek, 'sup': sup, 'maps': maps,
-            'bore': (bore_x, bore_z), 'muzzle': muzzle, 'muzzle_bare': muzzle_bare, 'iron_z': iron_z,
-            'rail': (rail_z, rail_y), 'marks': marks}
+    return {'parts': objs, 'sup': sup, 'reddot_y': REDDOT_JOINT_Y - m.grip.y, 'maps': maps, 'bore': (bore_x, bore_z), 'muzzle': muzzle,
+            'muzzle_bare': muzzle_bare, 'iron_z': lm['iron_z'], 'rail': (lm['rail_z'], lm['rail_y']), 'marks': marks}
 
 
 def suppressor(name, centre, back, length, radius, segments):
@@ -417,7 +413,9 @@ def main():
 
     # The first-person arms' textures (package O) go into each gun's atlas: crops of the soldier's maps.
     arm_crops = {}
-    if os.path.isdir(soldier.SRC):
+    if RIFLE_ONLY:
+        log('--rifle-only: the pistol and knife atlases are not rewritten (no soldier sources needed)')
+    elif os.path.isdir(soldier.SRC):
         before = set(bpy.data.objects)
         _, sparts = soldier.fp_sources()
         arm_crops = soldier.fp_crops(sparts)
@@ -437,13 +435,14 @@ def main():
             return [rl.Region(k, r, constant=0.2) for k, r in rl.ARM_LAYOUTS[name].items()]
         return soldier.fp_regions(rl.ARM_LAYOUTS[name], arm_crops)
 
-    # --- Rifle and its sights -------------------------------------------------------------------
+    # --- Rifle (the M4) and its sights --------------------------------------------------------------
     rifle = build_rifle()
+    parts = rifle['parts']
     bore_x, bore_z = rifle['bore']
     rail_z, (ry0, ry1) = rifle['rail']
     reddot, reddot_maps, rd_axis, rd_glass = build_reddot()
-    # Red dot: on the dust-cover rail, a little ahead of its middle.
-    rd_y = ry0 + (ry1 - ry0) * 0.58
+    # Red dot: on the upper receiver's rail, ahead of the folding rear sight (folded whenever an optic is mounted).
+    rd_y = rifle['reddot_y']
     reddot.data.transform(Matrix.Translation((bore_x, rd_y, rail_z)))
     dot = rl.disc('reticle', (bore_x, rd_y + rd_glass - 0.0005, rail_z + rd_axis), (0, -1, 0), RETICLE_RADIUS,
                   'gen_glow', segments=12)
@@ -460,20 +459,23 @@ def main():
     else:
         scope, sc_axis, sc_rear, sc_front = build_scope_generated(32, 'fp_gun_sight_scope2x')
         scope_source = 'generated'
-    # 2x scope: its eyepiece over the rear of the rail (the eye close behind it when aiming).
-    sc_y = ry0 + 0.012 - sc_rear
+    # 2x scope: its eyepiece over the rear of the receiver's rail (the eye close behind it when aiming).
+    sc_y = ry0 + SCOPE_REAR_INSET - sc_rear
     scope.data.transform(Matrix.Translation((bore_x, sc_y, rail_z)))
     log('2x scope', scope_source, 'axis height', round(sc_axis, 4), 'eyepiece y', round(sc_y + sc_rear, 4),
-        'tris', rl.tris(scope.data))
+        'tris', rl.tris(scope.data), 'red dot y', round(rd_y, 4), 'rail', round(ry0, 4), round(ry1, 4))
 
-    regions = [(k, r, {'ak105': rifle['maps']['ak105'], 'folding_stock': rifle['maps']['folding_stock'],
-                       'sight': reddot_maps, 'scope': {}}[k]) for k, r in RIFLE_LAYOUT if not (scope_path and k == 'scope')]
+    src_maps = {'M4_D': rifle['maps']['M4_D'], 'Bullet5_56x45mm_D': rifle['maps']['Bullet5_56x45mm_D'],
+                'sight': reddot_maps, 'scope': {}}
+    posts = {'M4_D': m4_surface, 'Bullet5_56x45mm_D': brass_surface}
+    regions = [rl.Region(k, r, src_maps[k], post=posts.get(k)) for k, r in RIFLE_LAYOUT
+               if not (scope_path and k == 'scope')]
     if scope_path:
         # The downloaded sight: one rectangle per material, cropped to the part of its maps the model uses.
         for mname, rect in SCOPE_DL_REGIONS.items():
             regions.append(rl.Region(mname, rect, scope_maps.get(mname, {}), crop=rl.uv_crop([scope], mname)))
-    atlas = rl.Atlas('rifle', regions + arm_regions('rifle'), RIFLE_SWATCHES)
-    for o in (rifle['body'], rifle['mag'], rifle['bolt'], rifle['cheek']):
+    atlas = rl.Atlas('rifle', regions + rifle_arm_regions(), RIFLE_SWATCHES)
+    for o in parts.values():
         rl.prepare(o, atlas, 'rifle')
     rl.prepare(reddot, atlas, 'rifle', material_region={m.name: 'sight' for m in reddot.data.materials if m})
     rl.prepare(dot, atlas, 'rifle', swatch='glow', colour=RETICLE_RGBA)
@@ -504,7 +506,8 @@ def main():
     for o in (pistol['body'], pistol['slide'], pistol['mag']):
         rl.prepare(o, patlas, 'pistol')
     rl.prepare(pistol['sup'], patlas, 'pistol', swatch='metal', colour=SUPPRESSOR_RGBA)
-    patlas.write()
+    if not RIFLE_ONLY:
+        patlas.write()
     pistol_aims = {'iron': (pistol['bore'][0], -EYE_BEHIND_GRIP['pistol'], pistol['iron_z'])}
 
     # --- Knife ----------------------------------------------------------------------------------
@@ -512,10 +515,11 @@ def main():
     katlas = rl.Atlas('knife', [(knife['material'], KNIFE_LAYOUT[0][1], knife['maps'])] + arm_regions('knife'),
                       SIDE_SWATCHES)
     rl.prepare(knife['body'], katlas, 'knife')
-    katlas.write()
+    if not RIFLE_ONLY:
+        katlas.write()
 
     # --- First-person parts file (viewmodel.py) -----------------------------------------------------
-    fp = [rifle['body'], rifle['mag'], rifle['bolt'], rifle['sup'], reddot, scope,
+    fp = list(parts.values()) + [rifle['sup'], reddot, scope,
           pistol['body'], pistol['slide'], pistol['mag'], pistol['sup'], knife['body']]
     fp_empties = []
     for n, loc in (('fp_gun_muzzle', rifle['muzzle']), ('fp_gun_muzzle_bare', rifle['muzzle_bare']),
@@ -532,9 +536,8 @@ def main():
     export(fp + fp_empties, rl.FP_GLB)
 
     # --- Third person (weapons.glb) ------------------------------------------------------------------
-    gun = tp_copy([rifle['body'], rifle['mag'], rifle['bolt'], rifle['cheek']], 'gun', TP['gun'])
-    gsup = suppressor('gun_suppressor', rifle['bore'], rifle['muzzle'].y - 0.185, 0.185,
-                      (rl.bounds(rifle['sup'])[1].x - rl.bounds(rifle['sup'])[0].x) / 2, 12)
+    gun = tp_copy(list(parts.values()), 'gun', TP['gun'])
+    gsup = suppressor('gun_suppressor', rifle['bore'], rifle['muzzle'].y - SUP_LENGTH, SUP_LENGTH, SUP_RADIUS, 12)
     rl.prepare(gsup, atlas, 'rifle', swatch='metal', colour=SUPPRESSOR_RGBA)
     grd = tp_copy([reddot], 'gun_sight_reddot', TP['reddot'])
     if scope_path:
