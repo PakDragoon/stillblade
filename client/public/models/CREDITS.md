@@ -13,7 +13,7 @@
 
 ### The rifle and the first-person hands (Fab Standard License, packages R and T)
 
-**"M4 - FPS Weapon Animations Pack FREE (v.1)"** on Fab by **[SELLER NAME: the owner fills this in from the Fab listing]** (downloaded by the owner,
+**"M4 - FPS Weapon Animations Pack FREE (v.1)"** on Fab by **BarcodeGames** (https://www.fab.com/sellers/BarcodeGames) (downloaded by the owner,
 2026-11-18, as `m4_animations_gltf.zip`; free under the Fab Standard License, Personal and Professional use, which
 allows using it inside a game but not redistributing the source files). Used since package T (2026-11-20): **its M4**
 (the rifle in both views: the full model with its moving magazine, top round, bolt, bolt catch and trigger in first
