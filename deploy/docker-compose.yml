@@ -18,6 +18,9 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        # The commit named in recording headers: `SB_COMMIT=$(git rev-parse --short HEAD) docker compose up -d --build`.
+        SB_COMMIT: ${SB_COMMIT:-}
     image: stillblade-server
     restart: unless-stopped
     init: true
@@ -26,6 +29,11 @@ services:
       SB_ALLOWED_ORIGINS: ${SB_ALLOWED_ORIGINS:?Set SB_ALLOWED_ORIGINS in deploy/.env}
       # Caddy is the only thing that can reach this container, so its X-Forwarded-For is trustworthy.
       SB_TRUST_PROXY: "1"
+      # Package W: feedback, match records and input recordings go to ./data beside this file.
+      SB_DATA_DIR: /data
+    volumes:
+      # The host folder must exist and belong to uid 1000 before the first start (DEPLOY.md, "Data folder").
+      - ./data:/data
     # No "ports:" on purpose: the game server is reachable only through Caddy.
     expose:
       - "8080"

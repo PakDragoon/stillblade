@@ -18,7 +18,8 @@
         "dev:client": "vite",
         "dev:server": "tsx watch server/src/main.ts",
         "server": "tsx server/src/main.ts",
-        "bot": "tsx tools/bot.ts"
+        "bot": "tsx tools/bot.ts",
+        "data": "tsx tools/data.ts"
     },
     "dependencies": {
         "playcanvas": "^2.24.0",

@@ -2,6 +2,11 @@ node_modules/
 dist/
 *.log
 feedback.log
+
+# Package W: the server's data folder (local runs and the VPS's deploy/data) and the owner's copy of the VPS data
+/data/
+/deploy/data/
+/vps-data/
 .DS_Store
 *.blend1
 .vite/

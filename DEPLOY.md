@@ -365,6 +365,72 @@ Clean up old images after a few updates, to save disk space:
 docker image prune -f
 ```
 
+#### The data folder (package W)
+
+Everything the game server keeps is in one folder on the server, `~/stillblade/deploy/data`, mounted into the container at `/data`, so it survives every rebuild:
+
+- `feedback.log`: feedback notes and automatic error reports, one JSON line each.
+- `matches/<year>-<month>.jsonl`: one line per round (how it ended, the plant and defuse, every kill, each player's damage), one per finished match (score, everyone's statistics, MVP) and one per abandoned match. Files older than 12 months are deleted by the server.
+- `recordings/<date>-<room>-<n>.sbrec.gz`: one file per match with every player's inputs, for replays and for teaching bots. Deleted after 90 days, or sooner (oldest first) when the folder passes 2000 MB.
+
+The folder must exist and belong to user id 1000 before the first start (the container runs as its `node` user, id 1000; on the Lightsail VPS the `ubuntu` user is also 1000). Once, from `~/stillblade/deploy`:
+
+```bash
+mkdir -p data && sudo chown 1000:1000 data
+```
+
+If it is wrong, the server still runs, and its log says `[data] data folder /data cannot be created or written`.
+
+To put the commit in the recordings' headers, start with (instead of the plain `docker compose up -d --build`):
+
+```bash
+SB_COMMIT=$(git rev-parse --short HEAD) docker compose up -d --build
+```
+
+Settings (in `deploy/docker-compose.yml` under `environment`, or for a local server in the shell): `SB_DATA_DIR` (the folder; `./data` locally), `SB_FEEDBACK_FILE` (default `<data folder>/feedback.log`; empty means console only), `SB_RECORD=0` (no recordings; match records stay on), `SB_RECORD_MAX_MB` (default 2000), `SB_RECORD_KEEP_DAYS` (default 90), `SB_MATCH_KEEP_MONTHS` (default 12). The privacy page in the game's menu states the defaults; change it (`shared/privacy.ts`) if you change them.
+
+#### Reading the data from your PC
+
+Run these in the project folder on your PC (PowerShell). They log in with the SSH key you already use; nothing is stored.
+
+The last 20 feedback notes and error reports (`--n 50` for more):
+
+```powershell
+npm run data -- feedback
+```
+
+Recent matches (date, map, score, how each round ended, ghost and defender wins) and the balance numbers (`--days 30` for a longer stretch):
+
+```powershell
+npm run data -- matches
+```
+
+The list of recordings, copying new ones to the `vps-data/recordings` folder (git-ignored):
+
+```powershell
+npm run data -- recordings
+```
+
+Everything (feedback log, match files, new recordings) into `vps-data/`:
+
+```powershell
+npm run data -- pull
+```
+
+Balance numbers over any match files (win rate per side and map, how rounds are won, average round length, kills by weapon and body zone):
+
+```powershell
+npx tsx tools/matchstats.ts vps-data/matches/2026-11.jsonl
+```
+
+Check that a recording replays exactly (it must be replayed with the code it was recorded with; its header names the commit):
+
+```powershell
+npx tsx tools/replay.ts vps-data/recordings/2026-11-20-public-1.sbrec.gz
+```
+
+Another server: add `--host user@address` (or set `SB_VPS_HOST`) and, if the folder is elsewhere, `--dir path/to/data` (relative to that login's home). `--local data` reads a data folder on this PC instead (a local server writes to `data/`).
+
 ---
 
 ## Part C: check it works end to end
@@ -402,4 +468,4 @@ docker image prune -f
 - **No accounts.** Players are anonymous; names are not reserved and there is no login, ban list or persistent stats.
 - **No DDoS protection** beyond whatever your VPS provider includes by default. The server has basic per-IP connection limits, but a determined flood can still take it offline.
 - **No automatic deployments.** Updating the server is a manual `git pull` plus `docker compose up -d --build`; updating the client is a manual workflow run.
-- **No backups needed, and none set up.** The server keeps no saved data except Caddy's certificates, which it can re-issue.
+- **No backups.** The server keeps Caddy's certificates (it can re-issue them) and the data folder (`deploy/data`: feedback, match records, recordings). Copy the data to your PC with `npm run data -- pull` now and then; a lost VPS loses what was not copied.

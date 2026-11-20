@@ -2,6 +2,7 @@ import { DEFAULT_ROOM_OPTIONS, type RoomOptions } from '../../shared/room-option
 import type { Team } from '../../shared/protocol';
 import type { MapData } from '../../shared/types';
 import { Game, type Connection } from './game';
+import type { GameObserver } from './game-events';
 import { cleanName } from './namefilter';
 import { fullestPublicRoom } from './roomlist';
 
@@ -30,7 +31,9 @@ export class Rooms {
     constructor(
         readonly maps: ReadonlyMap<string, MapData>,
         readonly defaultMap: string,
-        private readonly limits: RoomLimits = { maxRooms: 50, maxPlayersPerRoom: 10 }
+        private readonly limits: RoomLimits = { maxRooms: 50, maxPlayersPerRoom: 10 },
+        /** Package W: what each new room (not a practice range) keeps; see server/src/roomdata.ts. */
+        private readonly observe: ((game: Game, roomId: string) => GameObserver | null) | null = null
     ) {
         if (!maps.has(defaultMap)) throw new Error(`default map ${defaultMap} is not loaded`);
     }
@@ -53,6 +56,7 @@ export class Rooms {
             game.code = roomId;
             // A new room starts at the current tick time so its clock is never behind the loop's.
             game.now = now;
+            if (!practice && this.observe) game.observer = this.observe(game, roomId);
             this.rooms.set(roomId, game);
             created = true;
         } else if (game.bans.isBanned(conn.ip, cleanName(name), game.now)) {
@@ -88,7 +92,10 @@ export class Rooms {
         const game = this.rooms.get(roomId);
         if (!game) return;
         game.leave(id);
-        if (game.humanCount() === 0) this.rooms.delete(roomId); // bots never keep a room open
+        if (game.humanCount() === 0) { // bots never keep a room open
+            game.observer?.matchAbandoned?.(game, 'room closed'); // a match in progress ends here
+            this.rooms.delete(roomId);
+        }
     }
 
     tick(now: number): void {

@@ -37,6 +37,7 @@ import { hitZone, zoneDamage, type HitZone } from '../../shared/zones';
 import { chooseName, cleanName, maskChat } from './namefilter';
 import { Bans, KickVote, MAP_VOTE_LEAD_MS, MapVote } from './votes';
 import { BOT_NAMES, BotBrain, BotRng, hashSeed, siteNodes, type BotRole, type BotWorld } from './bots';
+import type { GameObserver } from './game-events';
 
 export interface Connection {
     send(msg: ServerMsg): void;
@@ -276,6 +277,11 @@ export class Game implements BotWorld {
     /** Plans shared by each team's bots, picked per round from a generator seeded by the room code. */
     private botRng: BotRng | null = null;
     private readonly teamSites: Record<Team, number> = { ghosts: 0, defenders: 0 };
+    /**
+     * Package W: a passive listener (match records, input recordings; server/src/game-events.ts). It only
+     * reads; nothing in the match depends on whether one is attached.
+     */
+    observer: GameObserver | null = null;
 
     /**
      * `rounds: false` keeps the match in warmup (free roam with respawns), for tests of the core mechanics.
@@ -395,6 +401,7 @@ export class Game implements BotWorld {
         if (back) { player.stats = { ...back.stats }; this.departed.delete(shown); }
         player.joinedAt = player.chatTokensAt = this.now;
         this.players.set(id, player);
+        this.observer?.join?.(this, player);
         conn.send({
             type: 'welcome', version: PROTOCOL_VERSION, id, team, map: this.map.name,
             mapName: this.map.displayName ?? this.map.name, time: this.now, options: { ...this.options }, room: this.code,
@@ -555,6 +562,7 @@ export class Game implements BotWorld {
     leave(id: number): void {
         // The creator role passes to the longest-connected player by itself (see `creatorId`).
         const p = this.players.get(id);
+        if (p) this.observer?.leave?.(this, p);
         if (p && p.id === this.carrierId) this.dropBomb(p, 'lost'); // the bomb stays where they stood
         if (p && this.matchInProgress()) {
             this.purgeDeparted();
@@ -587,6 +595,7 @@ export class Game implements BotWorld {
     handleMessage(id: number, msg: ClientMsg): void {
         const p = this.players.get(id);
         if (!p) return;
+        if (msg.type !== 'cmd') this.observer?.message?.(this, p, msg);
         switch (msg.type) {
             case 'cmd': this.handleCmd(id, msg.cmd); break;
             case 'ready':
@@ -636,6 +645,7 @@ export class Game implements BotWorld {
         if (!this.practice && Math.abs((n[to] + 1) - (n[p.team] - 1)) > MAX_TEAM_GAP) { this.notice(p, 'That would make the teams uneven.'); return; }
         p.group = (1 - p.group) as 0 | 1;
         p.team = this.teamOf(p.group);
+        this.observer?.teamChange?.(this, p);
         this.spawn(p);
         this.sendRoster();
         if (this.practice) this.setUpPractice(p); // the targets change sides with the person
@@ -768,6 +778,7 @@ export class Game implements BotWorld {
         p.actionTicks = 0;
         p.respawnAt = 0;
         p.vis = p.team === 'ghosts' ? 0 : 1;
+        this.observer?.spawn?.(this, p);
         p.conn.send({ type: 'spawn', pos: spawn.pos, yaw: p.yaw, sight: p.loadout.sight });
     }
 
@@ -782,6 +793,7 @@ export class Game implements BotWorld {
         if (p.credits <= 0) return;
         p.credits--;
         p.lastSeq = cmd.seq;
+        this.observer?.cmd?.(this, p, cmd);
         this.trackInput(p, cmd);
         if (!p.alive) return;
 
@@ -858,6 +870,7 @@ export class Game implements BotWorld {
             } else if (p.actionTicks >= DEFUSE_TICKS) {
                 p.actionTicks = 0;
                 p.stats.defuses++;
+                this.observer?.defuse?.(this, p);
                 this.endRound('defenders', 'defused');
             }
             return;
@@ -970,6 +983,7 @@ export class Game implements BotWorld {
         const split = applyDamage(victim, amount, kind, zone, this.split);
         if (victim.team === 'ghosts') victim.vis = Math.max(victim.vis, VIS_HURT_SPIKE);
         this.recordHit(victim, attacker, amount, split, kind, weapon, zone);
+        this.observer?.hit?.(this, victim, attacker, split, kind, weapon, zone);
         if (victim.health > 0) return false;
         victim.alive = false;
         // Only warmup has respawns; in a round the dead wait for the next one.
@@ -979,6 +993,7 @@ export class Game implements BotWorld {
         victim.actionTicks = 0;
         if (victim.id === this.carrierId) this.dropBomb(victim, 'lost'); // at their feet, on the floor
         this.recordKill(victim, attacker);
+        this.observer?.kill?.(this, victim, attacker, kind, weapon, zone);
         // The kill feed: who and how, never where, so everyone may have it.
         const kill: KillMsg = { type: 'kill', killer: attacker.id, victim: victim.id, kind };
         if (weapon !== undefined) kill.weapon = weapon;
@@ -1137,6 +1152,7 @@ export class Game implements BotWorld {
     tick(now: number): void {
         this.now = now;
         this.tickCount++;
+        this.observer?.tickStart?.(this, now);
         this.stepBots();
         for (const p of this.players.values()) {
             if (p.credits < MAX_CMD_CREDITS) p.credits++;
@@ -1151,16 +1167,21 @@ export class Game implements BotWorld {
         this.stepKickVote();
         if (this.rosterDirty) this.sendRoster();
         if (this.tickCount % SNAPSHOT_EVERY === 0) this.sendSnapshots();
+        this.observer?.tickEnd?.(this);
     }
 
     private setPhase(phase: Phase, duration: number): void {
         this.phase = phase;
         this.phaseEndsAt = duration > 0 ? this.now + duration : 0;
+        this.observer?.phase?.(this, phase);
         this.broadcast(this.roundMsg());
     }
 
     private startRound(): void {
-        if (this.roundsPlayed === 0 && !this.held) this.resetMatch(); // a fresh match: nothing carries over from warmup
+        if (this.roundsPlayed === 0 && !this.held) { // a fresh match: nothing carries over from warmup
+            this.resetMatch();
+            this.observer?.matchStart?.(this);
+        }
         this.held = false; // a held match resumes here with its score, sides and statistics
         this.startRequested = false;
         this.bomb = null;
@@ -1184,6 +1205,7 @@ export class Game implements BotWorld {
         }
         this.clearBomb();
         this.assignCarrier();
+        this.observer?.roundStart?.(this);
         this.setPhase('freeze', FREEZE_MS);
         // A fresh carrier and no dropped bomb: ghosts are told who has it, defenders that nothing is in sight.
         for (const p of this.players.values()) {
@@ -1205,7 +1227,7 @@ export class Game implements BotWorld {
             p.conn.send(p.team === 'ghosts' ? this.ghostBombMsg() : { type: 'bomb', dropped: null });
         }
         this.startRequested = false;
-        if (hold) { this.held = true; this.graceUntil = this.now + GRACE_MS; }
+        if (hold) { this.held = true; this.graceUntil = this.now + GRACE_MS; this.observer?.matchHeld?.(this); }
         else this.resetMatch();
         for (const p of this.players.values()) {
             p.ready = false;
@@ -1220,6 +1242,7 @@ export class Game implements BotWorld {
         p.actionTicks = 0;
         this.bomb = [...p.state.pos] as Vec3;
         p.stats.plants++;
+        this.observer?.plant?.(this, p, this.bomb);
         this.clearBomb(); // planted: nobody carries it any more
         this.setPhase('planted', BOMB_MS);
         this.sendBombToGhosts();
@@ -1232,6 +1255,7 @@ export class Game implements BotWorld {
         const group = winner === 'ghosts' ? this.ghostGroup : 1 - this.ghostGroup;
         this.matchOver = ++this.score[group] >= this.options.roundsToWin;
         this.countQuietRounds();
+        this.observer?.roundEnd?.(this, winner, reason);
         this.setPhase('over', this.matchOver ? MATCH_OVER_MS : OVER_MS);
         this.sendRoster();
         if (this.matchOver) {
@@ -1240,6 +1264,7 @@ export class Game implements BotWorld {
                 score: { ghosts: this.score[this.ghostGroup], defenders: this.score[1 - this.ghostGroup] }
             };
             this.summary.mvp = pickMvp(this.summary.players);
+            this.observer?.matchEnd?.(this, this.summary);
             this.broadcast(this.summary);
             this.openMapVote();
         }
@@ -1281,7 +1306,10 @@ export class Game implements BotWorld {
         const expired = this.now >= this.phaseEndsAt;
         switch (this.phase) {
             case 'warmup':
-                if (this.held && this.now >= this.graceUntil) this.resetMatch(); // too long: a fresh lobby
+                if (this.held && this.now >= this.graceUntil) { // too long: a fresh lobby
+                    this.observer?.matchAbandoned?.(this, 'hold expired');
+                    this.resetMatch();
+                }
                 if (playable && (this.held || !this.lobby || this.startRequested || this.everyoneReady())) this.startRound();
                 break;
             case 'freeze':
@@ -1306,6 +1334,7 @@ export class Game implements BotWorld {
                 if (finished) this.resetMatch(); // rematch: same room and map, groups kept
                 else if (this.roundsPlayed === halftimeRound(this.options.roundsToWin)) {
                     this.setGhostGroup((1 - this.ghostGroup) as 0 | 1);
+                    this.observer?.sidesSwapped?.(this);
                 }
                 if (playable) this.startRound();
                 else this.toWarmup(!finished);

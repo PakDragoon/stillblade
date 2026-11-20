@@ -12,6 +12,8 @@ import { handleRoomsRequest } from './rooms-http';
 import { RoomListCache } from './roomlist';
 import { ConnectionReportLimit, Reports, originAllowed, routeClientMessage } from './reports';
 import { Rooms, cleanRoomId } from './rooms';
+import { DataStore, dataConfigFromEnv } from './datastore';
+import { roomObserver, serverCommit } from './roomdata';
 
 // Not PORT: dev tooling sets that for the web client, and the two must not collide.
 const port = Number(process.env.SB_SERVER_PORT) || DEFAULT_PORT;
@@ -21,8 +23,14 @@ const allowedOrigins = (process.env.SB_ALLOWED_ORIGINS ?? '').split(',').map(s =
 /** Behind a reverse proxy the socket's address is the proxy's; the real one is in X-Forwarded-For. */
 const trustProxy = process.env.SB_TRUST_PROXY === '1';
 
+/** Package W: one folder for everything kept (SB_DATA_DIR; server/src/datastore.ts). */
+const dataCfg = dataConfigFromEnv();
+const data = new DataStore(dataCfg);
+data.prepare();
+void data.prune();
+const commit = serverCommit();
 /** Where feedback notes and error reports are appended, one JSON line each (also printed). Empty writes only to the console. */
-const feedbackFile = process.env.SB_FEEDBACK_FILE ?? 'feedback.log';
+const feedbackFile = dataCfg.feedbackFile;
 const reports = new Reports(feedbackFile);
 
 /** The caller's address as the server counts it: X-Forwarded-For only behind a trusted proxy. */
@@ -48,7 +56,7 @@ const maps = loadMaps(mapsDir);
 /** Each room is an independent match. Rooms are created on first join and dropped when empty. */
 const rooms = new Rooms(maps, defaultMapId(maps, process.env.SB_DEFAULT_MAP), {
     maxRooms: MAX_ROOMS, maxPlayersPerRoom: MAX_PLAYERS_PER_ROOM
-});
+}, () => roomObserver(data, { record: dataCfg.record, commit }));
 const roomList = new RoomListCache();
 const perIp = new Map<string, number>();
 const alive = new WeakSet<WebSocket>();
@@ -182,7 +190,10 @@ function shutdown(): void {
     clearInterval(pinger);
     clearInterval(pingTell);
     for (const ws of wss.clients) ws.close(1001, 'Server restarting');
-    http.close(() => process.exit(0));
+    // Matches in progress are closed off and their recordings finished before the process ends.
+    for (const game of rooms.rooms.values()) game.observer?.matchAbandoned?.(game, 'server stopped');
+    const flushed = data.flush();
+    http.close(() => { void flushed.then(() => process.exit(0)); });
     setTimeout(() => process.exit(0), 2000).unref();
 }
 process.on('SIGTERM', shutdown);
@@ -191,6 +202,7 @@ process.on('SIGINT', shutdown);
 http.listen(port, () => {
     console.log(
         `Stillblade server: maps ${[...maps.keys()].join(', ')} (default ${rooms.defaultMap}), ${TICK_RATE} Hz, port ${port}, ` +
-        `origins ${allowedOrigins.length ? allowedOrigins.join(' ') : 'any'}, feedback ${feedbackFile || 'console only'}`
+        `origins ${allowedOrigins.length ? allowedOrigins.join(' ') : 'any'}, feedback ${feedbackFile || 'console only'}, ` +
+        `data ${dataCfg.dir} (recordings ${dataCfg.record ? 'on' : 'off'}${commit ? `, commit ${commit}` : ''})`
     );
 });
