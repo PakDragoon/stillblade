@@ -30,3 +30,6 @@ To put the game online, see [DEPLOY.md](DEPLOY.md).
 - `tools/blender/` — headless Blender scripts that generate maps. Each map is a definition file in `tools/blender/maps/` built by `npm run map -- <id>` (`greybox` = Test Map 1, about 2.5 minutes; `warehouse`, about 4 minutes; GPU bake; add `--no-bake` to reuse the lightmap, `--verify-only` for the checks). `python tools/blender/mapkit.py <id>` runs the checks without Blender; `python tools/blender/mapplan.py <id>` draws plan images.
 
 Maps are built only from axis-aligned boxes; the collision system supports nothing else.
+
+## Upcoming
+2 new maps with larger area and appropriate objects placement
