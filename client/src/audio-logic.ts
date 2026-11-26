@@ -12,7 +12,7 @@ export const SAMPLE_EXT = 'mp3';
 
 /**
  * Every recorded sound set and how many variants it has. The variants of set `s` are `s_1` ... `s_n` (file
- * `s_1.mp3`). `tools/audio-map.mjs` must name exactly these (a test checks it). A set with nothing loaded falls
+ * `s_1.mp3`). `tools/audio-map.json` must name exactly these (a test checks it). A set with nothing loaded falls
  * back to the synthesised sound, so this list is also the list of what may be missing.
  */
 export const SAMPLE_SETS: Readonly<Record<string, number>> = {
@@ -28,7 +28,7 @@ export const SAMPLE_SETS: Readonly<Record<string, number>> = {
     breath_calm: 4, breath_hard: 3,
     reload_rifle_out: 1, reload_rifle_in: 1, reload_rifle_bolt: 1,
     reload_pistol_out: 1, reload_pistol_in: 1, reload_pistol_slide: 1,
-    knife_windup: 1, knife_slash: 4, knife_hit: 2,
+    knife_windup: 1, knife_hit: 2,
     bomb_beep: 1, bomb_planted: 1, bomb_defused: 1, bomb_drop: 1, bomb_pickup: 1, explosion: 1,
     hit_body: 1, hit_head: 1, hit_kill: 1, dry: 1,
     switch_rifle: 1, switch_pistol: 1, switch_knife: 1, ui_click: 2

@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { TICK_RATE } from '../../shared/constants';
-import { DEFAULT_PORT, decodeClient, encodeServer, type Team } from '../../shared/protocol';
+import { DEFAULT_PORT, PROTOCOL_VERSION, decodeClient, encodeServer, type Team } from '../../shared/protocol';
 import { parseRoomOptions } from '../../shared/room-options';
 import { cleanSight } from '../../shared/weapons';
 import { defaultMapId, loadMaps } from './maps';
@@ -31,7 +31,7 @@ void data.prune();
 const commit = serverCommit();
 /** Where feedback notes and error reports are appended, one JSON line each (also printed). Empty writes only to the console. */
 const feedbackFile = dataCfg.feedbackFile;
-const reports = new Reports(feedbackFile);
+const reports = new Reports(feedbackFile, undefined, err => data.warn('feedback', `feedback log not written: ${err.message}`));
 
 /** The caller's address as the server counts it: X-Forwarded-For only behind a trusted proxy. */
 function clientIp(req: { headers: Record<string, string | string[] | undefined>; socket: { remoteAddress?: string } }): string {
@@ -68,7 +68,7 @@ let ticks = 0;
 const http = createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/health') {
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-        res.end(JSON.stringify({ ok: true, rooms: rooms.rooms.size, players: rooms.playerCount() }));
+        res.end(JSON.stringify({ ok: true, protocol: PROTOCOL_VERSION, commit: commit || null, persistence: data.healthy ? 'ok' : 'degraded', rooms: rooms.rooms.size, players: rooms.playerCount() }));
         return;
     }
     if (handleReportRequest(req, res, { reports, allowedOrigins, clientIp })) return;
@@ -88,6 +88,15 @@ wss.on('connection', (ws, req) => {
     // ws://host:port/?room=CODE&name=NICK&sight=0..2&map=ID&suppressed=1&public=1&max=6&rounds=3&bots=1&level=hard (map and options only matter to
     // whoever creates the room); quick=1 without a room picks the fullest public room, or makes a public one.
     const query = new URL(req.url ?? '/', 'ws://localhost').searchParams;
+    if (query.get('version') !== String(PROTOCOL_VERSION)) {
+        ws.close(1008, 'Game update required. Reload the page.');
+        return;
+    }
+    const intent = query.get('intent');
+    if ((intent === 'join' || intent === 'create') && !/^[a-z0-9-]{1,24}$/i.test(query.get('room') ?? '')) {
+        ws.close(1008, 'Invalid room code');
+        return;
+    }
     const conn = {
         ip,
         send: (msg: Parameters<typeof encodeServer>[0]) => { if (ws.readyState === ws.OPEN) ws.send(encodeServer(msg)); },
@@ -105,8 +114,13 @@ wss.on('connection', (ws, req) => {
         if (!found) options.public = true;
     }
     // sight=N: the rifle sight for the first spawn (validated by cleanSight; later changes come as `sight` messages).
-    const joined = rooms.join(roomId, query.get('map'), conn, name, ticks * TICK_MS, options, practice, cleanSight(query.get('sight')));
-    if (!joined.ok) { ws.close(joined.reason === 'Unknown map' ? 1008 : 1013, joined.reason); return; }
+    const joined = rooms.join(roomId, query.get('map'), conn, name, ticks * TICK_MS, options, practice, cleanSight(query.get('sight')),
+        intent === 'join' || intent === 'create' ? intent : undefined);
+    if (!joined.ok) {
+        const refused = joined.reason === 'Unknown map' || joined.reason === 'Unknown room' || joined.reason === 'Room code taken';
+        ws.close(refused ? 1008 : 1013, joined.reason);
+        return;
+    }
 
     perIp.set(ip, open + 1);
     alive.add(ws);
@@ -153,7 +167,10 @@ wss.on('connection', (ws, req) => {
 });
 
 // Drop connections that have gone silent (closed laptop, lost network) so their player leaves the match.
+const retention = setInterval(() => { void data.prune(); }, 60 * 60_000);
 const heartbeat = setInterval(() => {
+    reports.ipLimits.prune(Date.now());
+    for (const room of rooms.rooms.values()) room.bans.prune(room.now);
     for (const ws of wss.clients) {
         if (!alive.has(ws)) { ws.terminate(); continue; }
         alive.delete(ws);
@@ -187,6 +204,7 @@ function shutdown(): void {
     console.log('Shutting down');
     clearInterval(loop);
     clearInterval(heartbeat);
+    clearInterval(retention);
     clearInterval(pinger);
     clearInterval(pingTell);
     for (const ws of wss.clients) ws.close(1001, 'Server restarting');

@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, readdirSync, utimesSync, writeFileSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -77,7 +78,16 @@ describe('package W: the data folder', () => {
         expect(recs).toHaveLength(1);
         expect(recs[0]).toMatch(/^\d{4}-\d{2}-\d{2}-disk-1\.sbrec\.gz$/);
         expect((lines[0] as { recording: string }).recording).toBe(recs[0]);
-        const res = replayRecording(readFileSync(join(dir, 'recordings', recs[0])), new Map([['greybox', map()]]));
+        const backup = temp();
+        mkdirSync(join(backup, 'recordings'));
+        const restored = join(backup, 'recordings', recs[0]);
+        const recording = readFileSync(join(dir, 'recordings', recs[0]));
+        writeFileSync(restored, recording.subarray(0, 10));
+        const pull = spawnSync(process.execPath, ['--import', 'tsx', 'tools/data.ts', 'pull', '--local', dir, '--out', backup], { encoding: 'utf8' });
+        expect(pull.status, pull.stderr).toBe(0);
+        expect(readFileSync(restored)).toEqual(recording);
+        const res = replayRecording(readFileSync(restored), new Map([['greybox', map()]]));
+        rmSync(backup, { recursive: true, force: true });
         expect(res.mismatch).toBeNull();
         expect(res.truncated).toBe(false);
         expect(res.checkpoints).toBeGreaterThan(60);
@@ -98,6 +108,33 @@ describe('package W: the data folder', () => {
         expect(s2.name).toBe('2026-11-20-room-2.sbrec.gz');
     });
 
+    it('publishes only completed recordings and reserves distinct names across concurrent writers', async () => {
+        const dir = temp();
+        const store = new DataStore(dataConfigFromEnv({ SB_DATA_DIR: dir }));
+        expect(store.prepare()).toBe(true);
+        const one = store.openRecording('2026-11-20-room');
+        const two = store.openRecording('2026-11-20-room');
+        one.write(new Uint8Array([1]));
+        two.write(new Uint8Array([2]));
+        await expect.poll(() => readdirSync(store.recordingsDir).length).toBe(2);
+        expect(readdirSync(store.recordingsDir).every(n => n.endsWith('.partial'))).toBe(true);
+        await Promise.all([one.end(), two.end()]);
+        const names = await Promise.all([one.published, two.published]);
+        expect(new Set(names)).toEqual(new Set(['2026-11-20-room-1.sbrec.gz', '2026-11-20-room-2.sbrec.gz']));
+        expect(readdirSync(store.recordingsDir).sort()).toEqual(names.sort());
+        await store.flush();
+        expect(store.healthy).toBe(true);
+        rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('reports degraded persistence if an existing feedback path cannot be opened as a file', () => {
+        const dir = temp();
+        const store = new DataStore(dataConfigFromEnv({ SB_DATA_DIR: dir, SB_FEEDBACK_FILE: dir }), () => undefined);
+        expect(store.prepare()).toBe(false);
+        expect(store.healthy).toBe(false);
+        rmSync(dir, { recursive: true, force: true });
+    });
+
     it('a folder it cannot write warns and never throws', async () => {
         const dir = temp();
         const blocker = join(dir, 'file');
@@ -105,6 +142,7 @@ describe('package W: the data folder', () => {
         const warnings: string[] = [];
         const store = new DataStore(dataConfigFromEnv({ SB_DATA_DIR: join(blocker, 'data') }), m => warnings.push(m));
         expect(store.prepare()).toBe(false);
+        expect(store.healthy).toBe(false);
         store.appendMatchLine('2026-11.jsonl', () => '{}');
         const sink = store.openRecording('2026-11-20-x');
         sink.write(new Uint8Array(10));
@@ -125,6 +163,8 @@ describe('package W: the data folder', () => {
             const t = (now - daysAgo * 86_400_000) / 1000;
             utimesSync(p, t, t);
         };
+        rec('stale.sbrec.gz.partial', 100, 2);
+        rec('recent.sbrec.gz.partial', 100, 0);
         rec('a.sbrec.gz', 100, 120); // too old
         rec('b.sbrec.gz', 1000, 10);
         rec('c.sbrec.gz', 1000, 5);
@@ -132,7 +172,7 @@ describe('package W: the data folder', () => {
         writeFileSync(join(dir, 'recordings', 'notes.txt'), 'kept'); // not a recording
         for (const m of ['2025-10', '2025-11', '2025-12', '2026-11']) writeFileSync(join(dir, 'matches', `${m}.jsonl`), '');
         await store.prune();
-        expect(readdirSync(join(dir, 'recordings')).sort()).toEqual(['c.sbrec.gz', 'd.sbrec.gz', 'notes.txt']);
+        expect(readdirSync(join(dir, 'recordings')).sort()).toEqual(['c.sbrec.gz', 'd.sbrec.gz', 'notes.txt', 'recent.sbrec.gz.partial']);
         // Twelve months kept: December 2025 to November 2026.
         expect(readdirSync(join(dir, 'matches')).sort()).toEqual(['2025-12.jsonl', '2026-11.jsonl']);
         expect(existsSync(join(dir, 'recordings', 'b.sbrec.gz'))).toBe(false);

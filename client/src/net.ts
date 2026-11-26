@@ -127,7 +127,9 @@ export class Net {
             this.resolveWelcome = resolve;
             this.rejectWelcome = reject;
         });
-        this.ws = new WebSocket(url);
+        const address = new URL(url);
+        address.searchParams.set('version', String(PROTOCOL_VERSION));
+        this.ws = new WebSocket(address);
         this.ws.binaryType = 'arraybuffer';
         this.ws.onopen = () => { this.connected = true; };
         this.ws.onclose = e => {
@@ -136,7 +138,13 @@ export class Net {
             else this.onClose?.(e.code, e.reason);
         };
         this.ws.onmessage = e => {
+            // Validate the welcome before decoding a binary message with our protocol layout.
+            if (!this.welcomed && typeof e.data !== 'string') return;
             const msg = decodeServer(e.data as string | ArrayBuffer);
+            if (!this.welcomed && msg.type === 'welcome') {
+                this.deliver(msg);
+                return;
+            }
             if (this.lagMs > 0) setTimeout(() => this.deliver(msg), this.lagMs / 2);
             else this.deliver(msg);
         };
@@ -155,7 +163,12 @@ export class Net {
 
     private deliver(msg: ServerMsg): void {
         if (msg.type === 'welcome') {
-            if (msg.version !== PROTOCOL_VERSION) console.warn('Server protocol version differs; reload the page.');
+            if (msg.version !== PROTOCOL_VERSION) {
+                this.rejectWelcome(new Error('Game update required. Reload the page.'));
+                this.ws.onmessage = null;
+                this.ws.close();
+                return;
+            }
             this.id = msg.id;
             this.team = msg.team;
             this.welcomed = true;

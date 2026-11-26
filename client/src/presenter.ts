@@ -1195,6 +1195,8 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
 
     let recoilT = 0;
     let flashT = 0;
+    let weaponMotion = 1;
+    let reduceFlashes = false;
     /** Seconds since the last local shot (the rig's fire clip, package R); large when none. */
     let vmFireT = 1e3;
     let localAlive = false;
@@ -1247,7 +1249,7 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
             feelIn.yaw = local.yaw;
             feelIn.pitch = local.pitch;
             feelIn.aim = team === 'defenders' && local.weapon !== SLOT_KNIFE ? vmAim : 0;
-            feel.update(dt, feelIn);
+            if (weaponMotion) feel.update(dt, feelIn);
             // A brief roll and flick of the view on each shot, gone within about 0.15 s. The camera's recoil offset,
             // which the crosshair follows, is the game core's and unchanged.
             if (feel.cam[0] !== 0 || feel.cam[1] !== 0) camera.rotateLocal(feel.cam[0], 0, feel.cam[1]);
@@ -1346,7 +1348,7 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
             // Switch: rises from below, rotated, easing into place as draw falls from 1 to 0 (unless a draw clip does it).
             const d = drawByClip ? 0 : d0 * d0;
             // Subtle time-based sway (the presenter has no player speed); damped while firing and aiming.
-            const s = (1 - 0.7 * k) * (1 - (1 - AIM_SWAY) * a);
+            const s = weaponMotion * (1 - 0.7 * k) * (1 - (1 - AIM_SWAY) * a);
             const sx = Math.sin(time * SWAY_RATE) * SWAY_POS * s;
             const sy = Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6 * s;
             // On top: the movement and recoil feel (bob, look inertia, jump and landing, crouch tilt, kick springs).
@@ -1372,8 +1374,8 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
             lockVmFov(KNIFE_VM_ZOOM);
             // Sway and the movement feel on top, scaled down by the zoom so they look as large as on the guns.
             const fp = feel.pos, fr = feel.rot, z = 1 / KNIFE_VM_ZOOM;
-            knifeRigRoot.setLocalPosition((Math.sin(time * SWAY_RATE) * SWAY_POS + fp[0]) * z,
-                (Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6 + fp[1]) * z, fp[2] * z);
+            knifeRigRoot.setLocalPosition((weaponMotion * Math.sin(time * SWAY_RATE) * SWAY_POS + fp[0]) * z,
+                (weaponMotion * Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6 + fp[1]) * z, fp[2] * z);
             knifeRigRoot.setLocalEulerAngles(fr[0], fr[1], fr[2]);
             if (kd0 > 0) {
                 // A defender drawing the knife: the pack's rise, by the draw progress.
@@ -1412,7 +1414,7 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
         if (swingT < 0) {
             setKnifePose(KNIFE_REST, KNIFE_REST, 0);
             // Same idle sway as the gun, only while not swinging.
-            knife.translateLocal(Math.sin(time * SWAY_RATE) * SWAY_POS, Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6, 0);
+            if (weaponMotion) knife.translateLocal(Math.sin(time * SWAY_RATE) * SWAY_POS, Math.sin(time * SWAY_RATE * 2) * SWAY_POS * 0.6, 0);
             return;
         }
         swingT += dt;
@@ -1481,6 +1483,25 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
         remoteFlashes.push({ e, loud: loudFlash(app.root), t: 0 });
     }
     let nextFlash = 0;
+
+    const showRemoteFlash = (mp: pc.Vec3, rot: pc.Quat, fx: number): void => {
+        const f = remoteFlashes[nextFlash];
+        nextFlash = (nextFlash + 1) % REMOTE_FLASH_COUNT;
+        const e = suppressedLook ? f.e : f.loud;
+        (suppressedLook ? f.loud : f.e).enabled = false;
+        e.setRotation(rot);
+        e.setPosition(mp);
+        if (suppressedLook) {
+            e.setLocalScale(0.06 * fx, 0.06 * fx, 0.1 * fx);
+            e.translateLocal(0, 0, -0.04 * fx);
+        } else {
+            // Bigger than first person: it is seen from metres away.
+            e.setLocalScale(LOUD_FLASH_SIZE * 1.3 * fx, LOUD_FLASH_SIZE * 1.3 * fx, LOUD_FLASH_SIZE * 2 * fx);
+        }
+        e.rotateLocal(0, 0, Math.random() * 90);
+        e.enabled = true;
+        f.t = suppressedLook ? REMOTE_FLASH_TIME : LOUD_FLASH_TIME;
+    };
 
     /** The living defender whose eye is nearest `from` (within SHOOTER_MATCH), or null. */
     const findShooter = (from: Vec3): Remote | null => {
@@ -1588,6 +1609,7 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
         if (match.phase !== 'over' || match.reason !== 'exploded' || !match.bombPos || boomRound === match.round) return;
         boomRound = match.round;
         boomX = match.bombPos[0]; boomY = match.bombPos[1]; boomZ = match.bombPos[2];
+        if (reduceFlashes) return;
         boomT = BOOM_TIME;
         effects.explosion(boomX, boomY, boomZ);
     };
@@ -2247,6 +2269,19 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
             pipsKey = aliveCount.ghosts + 16 * aliveCount.defenders + 256 * totalCount.ghosts + 4096 * totalCount.defenders;
         },
 
+        setComfort(reduceMotion: boolean, hideFlashes: boolean): void {
+            if (weaponMotion !== Number(!reduceMotion)) feel.reset();
+            weaponMotion = Number(!reduceMotion);
+            if (hideFlashes && !reduceFlashes) {
+                flashT = boomT = 0;
+                for (const f of remoteFlashes) {
+                    f.t = 0;
+                    f.e.enabled = f.loud.enabled = false;
+                }
+            }
+            reduceFlashes = hideFlashes;
+        },
+
         shot(from: Vec3, to: Vec3, isLocal: boolean, weapon: number): void {
             const slot = slotOf(weapon);
             const fx = SLOT_LOOKS[slot].fx;
@@ -2255,9 +2290,9 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
                 // one, except a shot predicted on the very frame of a switch).
                 kickSlot = slot;
                 recoilT = SLOT_LOOKS[slot].kickTime;
-                feel.shoot(SLOT_LOOKS[slot].recoil, ++localShots, vmAim);
+                if (weaponMotion) feel.shoot(SLOT_LOOKS[slot].recoil, ++localShots, vmAim);
                 vmFireT = 0;
-                flashT = suppressedLook ? FLASH_TIME : LOUD_FLASH_TIME;
+                flashT = reduceFlashes ? 0 : suppressedLook ? FLASH_TIME : LOUD_FLASH_TIME;
                 const v = vmGuns[vmSlot];
                 (suppressedLook ? v.flash : v.loud).setLocalEulerAngles(0, 0, Math.random() * 90);
                 tmpA.copy(v.muzzle.getPosition());
@@ -2270,22 +2305,9 @@ export const createPresenter: CreatePresenter = (app, camera, loads) => {
                     const rot = ch.gunRotation();
                     if (mp && rot) {
                         tmpA.copy(mp);
-                        const f = remoteFlashes[nextFlash];
-                        nextFlash = (nextFlash + 1) % REMOTE_FLASH_COUNT;
-                        const e = suppressedLook ? f.e : f.loud;
-                        (suppressedLook ? f.loud : f.e).enabled = false;
-                        e.setRotation(rot);
-                        e.setPosition(mp);
-                        if (suppressedLook) {
-                            e.setLocalScale(0.06 * fx, 0.06 * fx, 0.1 * fx);
-                            e.translateLocal(0, 0, -0.04 * fx);
-                        } else {
-                            // Bigger than first person: it is seen from metres away.
-                            e.setLocalScale(LOUD_FLASH_SIZE * 1.3 * fx, LOUD_FLASH_SIZE * 1.3 * fx, LOUD_FLASH_SIZE * 2 * fx);
+                        if (!reduceFlashes) {
+                            showRemoteFlash(mp, rot, fx);
                         }
-                        e.rotateLocal(0, 0, Math.random() * 90);
-                        e.enabled = true;
-                        f.t = suppressedLook ? REMOTE_FLASH_TIME : LOUD_FLASH_TIME;
                     }
                 }
             }

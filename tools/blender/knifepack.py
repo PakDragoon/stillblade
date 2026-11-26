@@ -23,7 +23,7 @@ SRC = os.path.join(HERE, 'source-art', 'realistic', 'fp-anims', 'knife_fps_anima
 OUT = os.path.join(HERE, 'source-art', 'realistic', 'build', 'unzipped', 'knife-pack')
 ART = 'Assets/Knife_FPS_Animations/Art/'
 # What is used (paths under ART): the first-person hands and their clips, the knife and its clips, the 2k textures
-# (not the 4k ones), the knife's swing recordings.
+# (not the 4k ones). The pack's demo audio is excluded.
 WANTED = [
     r'Character/Mesh/Hands_rig\.fbx',
     r'Character/Animations/AS_Hands_[a-z_0-9]+\.fbx',
@@ -31,7 +31,6 @@ WANTED = [
     r'Weapon/Mesh/SKM_Knife\.fbx',
     r'Weapon/Animations/AS_Knife_[a-z_]+\.fbx',
     r'Weapon/Textures/2k/T_ViperFANG_2k_[A-Za-z]+\.png',
-    r'Weapon/Audio/SW_Swing_[0-9]\.WAV',
 ]
 _WANTED = [re.compile(re.escape(ART) + w + '$') for w in WANTED]
 

@@ -10,12 +10,20 @@ import {
 import { buildReport, reportBytes } from '../../shared/report';
 import { handleReportRequest } from './report-http';
 import {
-    ConnectionReportLimit, ERRORS_PER_SESSION, FEEDBACK_PER_WINDOW, FEEDBACK_WINDOW_MS, Reports, SlidingLimit, cleanReport, originAllowed, routeClientMessage
+    ConnectionReportLimit, ERRORS_PER_SESSION, FEEDBACK_PER_WINDOW, FEEDBACK_WINDOW_MS, HTTP_PER_WINDOW, HTTP_WINDOW_MS, IpReportLimits, Reports, SlidingLimit, cleanReport, originAllowed, routeClientMessage
 } from './reports';
 
 const MIN = 60_000;
 const feedback = (text: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({ type: 'report', kind: 'feedback', text, ctx: {}, ...extra });
 const error = (text: string, stack?: string): Record<string, unknown> => ({ type: 'report', kind: 'error', text, stack, ctx: {} });
+
+it('expires the per-address HTTP report entry without another request from that address', () => {
+    const limits = new IpReportLimits();
+    for (let i = 0; i < HTTP_PER_WINDOW; i++) expect(limits.allow('192.0.2.1', 42)).toBe(true);
+    expect(limits.allow('192.0.2.1', 43)).toBe(false);
+    expect(limits.prune(41 + HTTP_WINDOW_MS)).toBe(1);
+    expect(limits.prune(42 + HTTP_WINDOW_MS)).toBe(0);
+});
 
 describe('cleaning and capping', () => {
     it('caps every text field in characters, not UTF-16 units', () => {

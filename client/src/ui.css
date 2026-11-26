@@ -269,3 +269,10 @@ body.no-stats #hud, body.no-stats #sb-info .ping { display: none; }
 @media (max-width: 760px) { #lobby-screen .teams { grid-template-columns: 1fr; } #lobby-screen .optgrid { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 640px) { #room-list .room { grid-template-columns: 1fr 1fr 64px; } #room-list .room.cols { display: none; } #ui .optgrid { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { #menu-screen .rings i, #loading-screen .bar i, #loading-screen .steps li .mark::before { animation: none; } }
+
+.frame-capture { position: fixed; z-index: 12; top: 8px; right: 12px; display: flex; align-items: center; gap: 8px;
+    max-width: calc(100vw - 24px); flex-wrap: wrap; justify-content: end; padding: 8px; color: #e8eaed; background: #14191f;
+    border: 1px solid #738185; border-radius: 4px; color-scheme: dark; }
+.frame-capture button { font: inherit; padding: 4px 8px; cursor: pointer; }
+.frame-capture button:disabled { cursor: default; }
+.frame-capture button:focus-visible { outline: 2px solid #7fe0c4; outline-offset: 2px; }

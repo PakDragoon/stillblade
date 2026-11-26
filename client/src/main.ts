@@ -25,7 +25,7 @@ import { DEFAULT_MAP, isMapId, type MapListEntry } from '@shared/maps';
 import { SettingsStore, type Quality } from './settings';
 import { Radar } from './radar';
 import { Ui, type JoinChoice } from './ui';
-import { DEFUSE_TICKS, PLANT_TICKS, canAct, insideSite, movementLocked, type Phase } from '@shared/rules';
+import { DEFUSE_TICKS, PLANT_TICKS, canAct, gateWeaponInput, insideSite, movementLocked, type Phase } from '@shared/rules';
 import { rayWorld } from '@shared/raycast';
 import type { Box, MapData, Vec3 } from '@shared/types';
 import { createAudio } from './audio';
@@ -37,6 +37,7 @@ import { applyMapLook, type LookTuning, type MapLookHandle } from './maplook';
 import { buildMapLighting, type MapLighting } from './lighting';
 import { measureTier, rendererName, resolveTier, tierFromRenderer, urlTier, type Tier, type TierChoice } from './graphics';
 import { Net } from './net';
+import { frameCapturePanel } from './frame-capture';
 import { isTouchOnly, showPhoneNotice } from './phone';
 import { reporter } from './report';
 import { createPresenter } from './presenter';
@@ -95,6 +96,9 @@ reporter.install();
 /** How a refused or lost connection is explained to the player. */
 function explainFailure(reason: string): { title: string; message: string } {
     const r = reason.toLowerCase();
+    if (r.includes('update required')) return { title: 'Game update required', message: 'Your page and the game server are running different versions. Reload the game. If the update is still rolling out, try again shortly.' };
+    if (r.includes('unknown room') || r.includes('invalid room code')) return { title: 'Room not found', message: 'Check the code with your friend. The room may have closed. Go back to the menu to enter a code or create a new room.' };
+    if (r.includes('room code taken')) return { title: 'Room code already in use', message: 'Return to the menu and choose Create room again to generate a fresh code.' };
     if (r.includes('removed')) return { title: 'Removed from this room', message: 'You were removed from this room. You cannot rejoin it for 10 minutes; you can join or make another room.' };
     if (r.includes('room full')) return { title: 'Room full', message: 'This room is full. Ask for another room code, or use Quick play.' };
     if (r.includes('unknown map')) return { title: 'Map not found', message: 'This server does not have the map in that link. Create a room and pick one of the listed maps.' };
@@ -380,6 +384,7 @@ async function start(): Promise<void> {
     // as soon as audio unlocks (the join), on the loading screen, instead of after a delay in the game.
     const boxes: Box[] = [];
     const audio = createAudio(boxes, { loads, loadDelayMs: 0 });
+    settings.watch(st => audio.setVolumes({ master: st.master, effects: st.effects, footsteps: st.footsteps }));
     presenter.setWorld(boxes);
     const radar = new Radar(document.body);
     /** `?auto=1` skips the menu and the lobby panel; `?quiet=1` also stops the pause menu opening (for scripted checks). */
@@ -426,7 +431,7 @@ async function start(): Promise<void> {
         choice = { name: params.get('name') ?? saved, room: params.get('room') ?? '', map: params.get('map') ?? '', options: parseRoomOptions(params), quick: params.get('quick') === '1' };
         if (params.get('practice') === '1') choice.practice = params.get('side') === 'ghosts' ? 'ghosts' : 'defenders';
     }
-    else if (rejoin && typeof rejoin.room === 'string') choice = rejoin;
+    else if (rejoin && typeof rejoin.room === 'string') choice = { ...rejoin, intent: rejoin.practice ? undefined : 'join' };
     else {
         const wanted = params.get('map') ?? '';
         // While the player picks a room, a quiet line under the menu follows the models downloading in the background.
@@ -442,12 +447,11 @@ async function start(): Promise<void> {
         }, fetchRooms);
         clearInterval(prepTimer);
         ui.setPreparing(null);
-        // An invite link's map is only a request for a new room; a joiner takes the room's own.
-        if (params.get('room') && choice.room === params.get('room')!.trim()) choice.map = wanted;
     }
     audio.unlock();
     const query = new URLSearchParams();
     if (choice.room) query.set('room', choice.room);
+    if (choice.intent) query.set('intent', choice.intent);
     if (choice.name) query.set('name', choice.name);
     if (choice.map) query.set('map', choice.map);
     // The rifle sight for our first spawn (the loadout page; later changes go as `sight` messages).
@@ -494,7 +498,10 @@ async function start(): Promise<void> {
             break;
         } catch (err) {
             const f = explainFailure(err instanceof Error ? err.message : String(err));
-            ui.showError(f.title, f.message);
+            const updateRequired = f.title === 'Game update required';
+            const canRetry = !updateRequired && f.title !== 'Room not found' && f.title !== 'Room code already in use';
+            ui.showError(f.title, f.message, canRetry, updateRequired);
+            if (!canRetry) { stopJoinPoll(); loads.holding = false; return; }
             await new Promise<void>(resolve => { retryNow = resolve; });
         }
     }
@@ -627,6 +634,8 @@ async function start(): Promise<void> {
     };
     const bombView: BombView = { pos: [0, 0, 0], timeLeft: 0 };
     let alive = false;
+    let specId = 0;
+    let specStep = 0;
     let health = MAX_HEALTH;
     /** Own armor from the self snapshot (never predicted; nobody else's armor is ever sent). */
     let armor = MAX_ARMOR;
@@ -725,6 +734,7 @@ async function start(): Promise<void> {
             armor = me.armor;
             alive = me.alive;
             respawnAt = me.respawnAt;
+            specId = me.spectateId;
             vis = me.vis;
             action = me.actionTicks / (me.team === 'ghosts' ? PLANT_TICKS : DEFUSE_TICKS);
             let drop = 0;
@@ -751,8 +761,8 @@ async function start(): Promise<void> {
             const defender = me.team === 'defenders';
             for (let i = 0; i < pending.length; i++) {
                 const c = pending[i];
-                stepPlayer(curr, c, TICK_DT, boxes);
                 if (!c.live) continue;
+                stepPlayer(curr, c, TICK_DT, boxes);
                 if (defender) {
                     stepLoadout(loadout, c, c.armed);
                     if (practice) fillReserves(loadout); // as the server does in a practice range
@@ -775,6 +785,9 @@ async function start(): Promise<void> {
             }
         },
         spawn(pos: Vec3, yaw: number, sight: number): void {
+            pending.length = 0; // commands from the last life cannot predict this body
+            specId = 0;
+            specStep = 0;
             copyPlayerState(curr, createPlayerState(pos));
             copyPlayerState(prev, curr);
             errorOffset[0] = errorOffset[1] = errorOffset[2] = 0;
@@ -937,8 +950,6 @@ async function start(): Promise<void> {
     let fps = 60;
     let hudTimer = 0;
     /** Spectating: the teammate being followed (by id), and a queued left/right press. */
-    let specId = -1;
-    let specStep = 0;
     const radarSubject: { pos: Vec3; yaw: number; team: 'ghosts' | 'defenders' } = { pos: [0, 0, 0], yaw: 0, team: 'ghosts' };
     const specInput = (code: string): void => {
         if (inputMatches(bindings().value, 'specPrev', code)) specStep = -1;
@@ -946,29 +957,25 @@ async function start(): Promise<void> {
     };
     window.addEventListener('keydown', e => { if (!input.suspended && !e.repeat) specInput(e.code); });
     document.addEventListener('mousedown', e => { const c = mouseInput(e.button); if (c && !input.suspended && input.locked) specInput(c); });
-    /** Picks the living teammate to follow; returns null when there is none (map overview). Teammates only, never enemies. */
+    /** Follow the server-approved teammate and ask it to change cameras when cycling. */
     const pickSpectated = (remotes: readonly RemoteView[]): RemoteView | null => {
-        let first: RemoteView | null = null, cur: RemoteView | null = null, next: RemoteView | null = null, prev: RemoteView | null = null;
+        let followed: RemoteView | null = null;
+        let first = Infinity, last = 0, next = Infinity, previous = 0;
         for (const r of remotes) {
             if (r.team !== net.team || !r.alive) continue;
-            if (!first || r.id < first.id) first = r;
-            if (r.id === specId) cur = r;
+            if (r.id === specId) followed = r;
+            if (!specStep) continue;
+            first = Math.min(first, r.id);
+            last = Math.max(last, r.id);
+            if (r.id > specId) next = Math.min(next, r.id);
+            if (r.id < specId) previous = Math.max(previous, r.id);
         }
-        if (!first) return null;
-        if (specStep !== 0 && cur) {
-            for (const r of remotes) {
-                if (r.team !== net.team || !r.alive || r.id === cur.id) continue;
-                if (r.id > cur.id && (!next || r.id < next.id)) next = r;
-                if (r.id < cur.id && (!prev || r.id > prev.id)) prev = r;
-            }
-            let last: RemoteView | null = null;
-            for (const r of remotes) if (r.team === net.team && r.alive && (!last || r.id > last.id)) last = r;
-            cur = specStep > 0 ? next ?? first : prev ?? last;
+        if (specStep && followed) {
+            const target = specStep > 0 ? (Number.isFinite(next) ? next : first) : previous || last;
+            if (target !== specId) net.sendMsg({ type: 'spectate', target });
+            specStep = 0;
         }
-        specStep = 0;
-        cur ??= first;
-        specId = cur!.id;
-        return cur;
+        return followed;
     };
 
     // Adaptive resolution: integrated GPUs are fill-rate bound, so when frames run long the cheapest
@@ -991,8 +998,8 @@ async function start(): Promise<void> {
         // The field of view setting is the view's base; aiming narrows it from there (the frame loop sets it).
         baseFov = st.fov;
         tanHalfFov = Math.tan((st.fov / 2) * RAD);
-        audio.setVolumes({ master: st.master, effects: st.effects, footsteps: st.footsteps });
         presenter.setCrosshair({ style: st.crosshairStyle, color: st.crosshairColor, size: st.crosshairSize });
+        presenter.setComfort(st.reduceWeaponMotion, st.reduceCombatFlashes);
         ui.applySettingsToPage(st);
         // Graphics quality picks the tier (Auto measures on the loading screen); it no longer caps the resolution.
         tierChoice = choiceOf(st.quality);
@@ -1022,7 +1029,7 @@ async function start(): Promise<void> {
             seq: seq++, forward: 0, right: 0, yaw: 0, jump: false, walk: false, crouch: false,
             pitch: Math.fround(input.pitch), fire: input.fire, use: input.use, reload: input.reload,
             slot: 0, swap: false, aim: false, drop: false,
-            viewTime: net.renderTime(), live: alive, armed: false, acting: false
+            viewTime: net.renderTime(), live: alive, observerOnly: !alive, armed: false, acting: false
         };
         input.sample(cmd);
         input.sampleWeapons(cmd, loadout.slot, SLOT_COUNT);
@@ -1037,7 +1044,8 @@ async function start(): Promise<void> {
             cmd.right = 0;
             cmd.jump = false;
         }
-        cmd.armed = !acting && phase !== 'freeze';
+        // The server can be one phase ahead; only send a trigger the local weapon could use.
+        cmd.armed = gateWeaponInput(cmd, phase, acting);
         cmd.acting = acting;
         pending.push(cmd);
         if (pending.length > 120) pending.shift(); // server silent for 2 s: stop hoarding
@@ -1198,7 +1206,7 @@ async function start(): Promise<void> {
                 camera.setPosition(mapCx, height, mapCz);
                 camera.setEulerAngles(-90, 0, 0);
             }
-        } else specId = -1;
+        } else specStep = 0;
         local.spectating = followed ? (rosterNames.get(followed.id) ?? `Player ${followed.id}`) : null;
         local.spectateId = followed ? followed.id : -1;
         local.overview = spectating && !followed;
@@ -1223,7 +1231,7 @@ async function start(): Promise<void> {
         radar.update(dt, radarSubject, remotes, match.phase === 'planted' ? match.bombPos : null, match.droppedBomb);
         ui.tick(net.serverTime());
         listener.team = net.team;
-        listener.alive = alive;
+        listener.alive = alive || followed !== null;
         let bomb: BombView | null = null;
         if (match.phase === 'planted' && match.bombPos) {
             bombView.pos[0] = match.bombPos[0]; bombView.pos[1] = match.bombPos[1]; bombView.pos[2] = match.bombPos[2];
@@ -1245,6 +1253,11 @@ async function start(): Promise<void> {
                 `pos ${p[0].toFixed(1)} ${p[1].toFixed(1)} ${p[2].toFixed(1)}`;
         }
     });
+
+    if (params.get('perf') === '1') {
+        const record = frameCapturePanel(canvas, gpuName, antialias);
+        app.on('update', () => record(mapId, tier, app.stats.drawCalls.total, loads.holding));
+    }
 
     // Handle for automated checks and console debugging.
     Object.assign(window, {

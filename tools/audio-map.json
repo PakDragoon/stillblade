@@ -85,12 +85,6 @@
         ],
         "maxDur": 0.3
     },
-    "knife_slash": {
-        "n": 4,
-        "match": ["^SW_Swing_[0-3]$"],
-        "maxDur": 0.45,
-        "gain": 3
-    },
     "knife_hit": {
         "n": 2,
         "match": ["^impactSoft_heavy_00[0-4]$",

@@ -10,8 +10,11 @@
 // --local <folder> reads a data folder on this PC instead of the server (no SSH).
 // No key, password or token is stored or asked for: `ssh` and `scp` use the owner's own setup.
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, mkdtempSync } from 'node:fs';
+import { basename, join } from 'node:path';
+import { createGunzip } from 'node:zlib';
+import { Writable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { describeMatch, formatStats, groupMatches, matchStats, parseLines } from './matchsummary';
 import { formatReport } from './reportformat';
 
@@ -34,7 +37,7 @@ const q = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 function remote(cmd: string): string {
     const r = spawnSync('ssh', [...SSH_OPTS, host, cmd], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
     if (r.error) { console.error(`could not run ssh: ${r.error.message}`); process.exit(1); }
-    if (r.status !== 0 && r.status !== 1) { console.error(r.stderr.trim() || `ssh exited with ${r.status}`); process.exit(1); }
+    if (r.status !== 0) { console.error(r.stderr.trim() || `ssh exited with ${r.status}`); process.exit(1); }
     return r.stdout;
 }
 
@@ -47,7 +50,7 @@ function readData(rel: string, tailLines = 0): string {
         return tailLines ? text.split('\n').slice(-tailLines - 1).join('\n') : text;
     }
     const path = q(`${remoteDir}/${rel}`);
-    return remote(tailLines ? `tail -n ${tailLines} ${path} 2>/dev/null` : `cat ${path} 2>/dev/null`);
+    return remote(`if test -f ${path}; then ${tailLines ? `tail -n ${tailLines}` : 'cat'} ${path}; fi`);
 }
 
 /** Recording files on the server (or local folder): name, size and date. */
@@ -60,31 +63,63 @@ function listRecordings(): { name: string; size: number; date: string }[] {
             return { name: n, size: s.size, date: s.mtime.toISOString().slice(0, 16).replace('T', ' ') };
         });
     }
-    const text = remote(`cd ${q(`${remoteDir}/recordings`)} 2>/dev/null && find . -maxdepth 1 -name '*.sbrec.gz' -printf '%f %s %TY-%Tm-%Td %TH:%TM\\n'`);
+    const text = remote(`if test -d ${q(`${remoteDir}/recordings`)}; then cd ${q(`${remoteDir}/recordings`)} && find . -maxdepth 1 -type f -name '*.sbrec.gz' -printf '%f %s %TY-%Tm-%Td %TH:%TM\\n'; fi`);
     return text.trim().split('\n').filter(Boolean).map(l => {
         const [name, size, day, time] = l.split(' ');
         return { name, size: Number(size), date: `${day} ${time}` };
     }).sort((a, b) => (a.name < b.name ? -1 : 1));
 }
 
-/** Copies remote files (paths relative to the data folder) into `dest`. */
-function copy(rels: string[], dest: string): void {
+/** Read the entire stream to verify gzip length and CRC without holding its decompressed bytes in memory. */
+async function validRecording(path: string, size: number): Promise<boolean> {
+    try {
+        if (statSync(path).size !== size) return false;
+        await pipeline(createReadStream(path), createGunzip(), new Writable({ write(_chunk, _enc, cb) { cb(); } }));
+        return true;
+    } catch { return false; }
+}
+
+/** Stage each batch on the destination filesystem. Publish only fully transferred, checked files. */
+async function copy(rels: string[], dest: string, sizes?: Map<string, number>): Promise<void> {
     if (rels.length === 0) return;
     mkdirSync(dest, { recursive: true });
-    if (local) {
-        for (const r of rels) {
-            const from = join(local, r);
-            const to = join(dest, r.split('/').pop()!);
-            if (existsSync(from)) copyFileSync(from, to);
+    const stage = mkdtempSync(join(dest, '.pull-'));
+    try {
+        for (let i = 0; i < rels.length; i += 20) {
+            const batch = rels.slice(i, i + 20);
+            if (local) {
+                for (const rel of batch) {
+                    const source = join(local, rel), temp = join(stage, basename(rel));
+                    copyFileSync(source, temp);
+                    const times = statSync(source);
+                    utimesSync(temp, times.atime, times.mtime);
+                }
+            } else {
+                const args = batch.map(rel => `${host}:${remoteDir}/${rel}`);
+                const r = spawnSync('scp', [...SSH_OPTS, '-p', ...args, stage], { stdio: 'inherit' });
+                if (r.status !== 0) throw r.error ?? new Error('scp failed');
+            }
+            for (const rel of batch) {
+                const name = basename(rel), temp = join(stage, name);
+                if (sizes && !await validRecording(temp, sizes.get(name)!)) throw new Error(`incomplete recording: ${name}; retry the pull`);
+                renameSync(temp, join(dest, name));
+            }
         }
-        return;
+    } finally { rmSync(stage, { recursive: true, force: true }); }
+}
+
+async function copyRecordings(list: ReturnType<typeof listRecordings>, dest: string): Promise<number> {
+    const sizes = new Map<string, number>();
+    const missing: string[] = [];
+    for (const { name, size } of list) {
+        if (!/^[a-zA-Z0-9_-]+\.sbrec\.gz$/.test(name)) throw new Error('unexpected recording name');
+        if (!await validRecording(join(dest, name), size)) {
+            missing.push(`recordings/${name}`);
+            sizes.set(name, size);
+        }
     }
-    // A few at a time, so one command line never gets too long.
-    for (let i = 0; i < rels.length; i += 20) {
-        const batch = rels.slice(i, i + 20).map(r => `${host}:${remoteDir}/${r}`);
-        const r = spawnSync('scp', [...SSH_OPTS, '-p', ...batch, dest], { stdio: 'inherit' });
-        if (r.status !== 0) { console.error('scp failed'); process.exit(1); }
-    }
+    await copy(missing, dest, sizes);
+    return missing.length;
 }
 
 const mb = (n: number): string => `${(n / 1024 / 1024).toFixed(1)} MB`;
@@ -122,22 +157,21 @@ switch (command) {
         for (const r of list) console.log(`${r.date}  ${mb(r.size).padStart(9)}  ${r.name}`);
         console.log(`${list.length} recordings, ${mb(total)} on the server`);
         const dest = join(out, 'recordings');
-        const missing = list.filter(r => !existsSync(join(dest, r.name))).map(r => `recordings/${r.name}`);
-        copy(missing, dest);
-        console.log(missing.length ? `copied ${missing.length} new to ${dest}` : `nothing new to copy (${dest} has them all)`);
+        const count = await copyRecordings(list, dest);
+        console.log(count ? `copied or repaired ${count} recordings in ${dest}` : `nothing new to copy (${dest} has them all)`);
         console.log('Check one with: npx tsx tools/replay.ts <file>');
         break;
     }
     case 'pull': {
-        copy(['feedback.log'], out);
+        const hasFeedback = local ? existsSync(join(local, 'feedback.log')) : remote(`if test -f ${q(`${remoteDir}/feedback.log`)}; then echo present; fi`).trim() === 'present';
+        if (hasFeedback) await copy(['feedback.log'], out);
         const matchFiles = local
             ? (existsSync(join(local, 'matches')) ? readdirSync(join(local, 'matches')) : [])
             : remote(`ls ${q(`${remoteDir}/matches`)} 2>/dev/null`).split('\n');
-        copy(matchFiles.filter(n => /^\d{4}-\d{2}\.jsonl$/.test(n.trim())).map(n => `matches/${n.trim()}`), join(out, 'matches'));
+        await copy(matchFiles.filter(n => /^\d{4}-\d{2}\.jsonl$/.test(n.trim())).map(n => `matches/${n.trim()}`), join(out, 'matches'));
         const dest = join(out, 'recordings');
-        const missing = listRecordings().filter(r => !existsSync(join(dest, r.name))).map(r => `recordings/${r.name}`);
-        copy(missing, dest);
-        console.log(`copied to ${out}/: feedback.log, ${matchFiles.length} match files, ${missing.length} new recordings`);
+        const count = await copyRecordings(listRecordings(), dest);
+        console.log(`copied to ${out}/: ${hasFeedback ? 'feedback.log, ' : ''}${matchFiles.filter(Boolean).length} match files, ${count} new or repaired recordings`);
         break;
     }
     default:

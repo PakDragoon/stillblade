@@ -38,6 +38,13 @@ The owner has no game development experience and expects the game to have every 
 | How to choose art packs | One seller's matched set (arms, guns, animations on one hand skeleton); a full list per item (idle, aim, fire, tactical and empty reload, draw, holster, walk/run; knife: idle, 2+ swings, heavy stab, draw); FBX or GLB, not Unreal-only; 20+ reviews and a first-person video; Fab Standard/Personal licence is fine. The owner sends links to the main session before buying. |
 | Character lab first | Owner, 2026-11-19: new characters, guns and animations are perfected on a standalone page (`/v2_character`, package U) before they go into the game. |
 
+## Playtest release and owner decisions (2026-11-26)
+
+- Hold the character lab (U), the matched pistol animation pack (V part 2), accounts and leaderboard (J), and grenades (I). Voice chat remains deferred.
+- Wait for the owner's map drawing before starting the next blockout. Review routes, spawns, objective distances and cover before final map art.
+- The playtest release focuses on room-entry clarity, practice, bot objective behavior, fair visibility and combat, accessibility settings, data recovery and release verification. Test both maps with the same players switching sides. Compare human-only, mixed and bot-only rounds separately.
+- Follow the [paired release procedure](DEPLOY.md#releasing-a-clientserver-protocol-change) for protocol 18. Verify the production client and game server together.
+
 ## Order of work
 
 | Wave | Package | Model | Depends on |

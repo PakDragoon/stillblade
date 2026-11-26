@@ -38,7 +38,11 @@ class MemoryStore implements RoomDataStore {
         this.files.set(name, chunks);
         return { name, write: b => { chunks.push(b); }, end: async () => { this.ended.add(name); } };
     }
-    appendMatchLine(_file: string, line: () => string): void { this.lines.push(JSON.parse(line()) as MatchLogLine); }
+    appendMatchLine(_file: string, line: () => string | Promise<string>): void {
+        const json = line();
+        if (typeof json !== 'string') throw new Error('memory recording should publish synchronously');
+        this.lines.push(JSON.parse(json) as MatchLogLine);
+    }
     warn(_kind: string, msg: string): void { this.warnings.push(msg); }
     /** A recording as the file on disk would hold it. */
     file(name: string): Uint8Array { return gzipSync(Buffer.concat(this.files.get(name)!)); }

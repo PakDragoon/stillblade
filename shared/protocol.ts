@@ -7,7 +7,7 @@ import type { InputCmd, Vec3 } from './types';
 import { GUN_COUNT, SIGHT_COUNT } from './weapons';
 import type { HitZone } from './zones';
 
-export const PROTOCOL_VERSION = 17;
+export { default as PROTOCOL_VERSION } from './protocol-version.json';
 export const DEFAULT_PORT = 8080;
 /** Snapshots per second sent to each client. */
 export const SNAPSHOT_RATE = 30;
@@ -33,6 +33,8 @@ export interface NetCmd extends InputCmd {
     aim: boolean;
     /** Drop the bomb (ghost carrying it; one command per key press). Refused while planting. */
     drop: boolean;
+    /** Sent before this client has a living body. Counts activity without advancing a new spawn. */
+    observerOnly?: boolean;
     /** Server time (ms) at which this client was drawing other players: the lag-compensation target. */
     viewTime: number;
 }
@@ -77,6 +79,8 @@ export interface SelfSnap {
     alive: boolean;
     /** Server time (ms) of the next respawn; meaningful only while dead. */
     respawnAt: number;
+    /** The living teammate determining this spectator’s view and cues, or 0. */
+    spectateId: number;
     /** The defender's weapons including its knife, predicted by the client: sent exactly (all small integers). */
     loadout: LoadoutState;
     /** The ghost knife timing, predicted by the client: sent exactly (small integers). */
@@ -383,6 +387,7 @@ export type ClientMsg =
     | { type: 'removeplayer'; target: number }
     /** Result card: pick the next map (a map id; the current one means "same map"). */
     | { type: 'mapvote'; map: string }
+    | { type: 'spectate'; target: number }
     /**
      * The rifle sight this player wants (index into `SIGHTS`). Sent on joining and on every change; the server
      * keeps it and mounts it at the player's next spawn, never mid-life.
@@ -443,7 +448,8 @@ const SNAP_GUNS = SNAP_LOADOUT + 6;
 const SNAP_MELEE = SNAP_GUNS + 7 * GUN_COUNT;
 const SNAP_KNIFE = SNAP_MELEE + 2;
 const SNAP_CARRY = SNAP_KNIFE + 2;
-const SNAP_COUNT = SNAP_CARRY + 1;
+const SNAP_SPECTATE = SNAP_CARRY + 1;
+const SNAP_COUNT = SNAP_SPECTATE + 2;
 const SNAP_HEAD_BYTES = SNAP_COUNT + 1;
 const SNAP_PLAYER_BYTES = 20;
 const ANGLE_SCALE = 32767 / Math.PI;
@@ -473,7 +479,7 @@ export function writeCmd(v: DataView, offset: number, c: NetCmd): void {
         (c.reload ? 32 : 0) | (c.swap ? 64 : 0) | (c.aim ? 128 : 0));
     v.setFloat64(offset + 16, c.viewTime, true);
     v.setUint8(offset + 24, c.slot);
-    v.setUint8(offset + 25, c.drop ? 1 : 0);
+    v.setUint8(offset + 25, (c.drop ? 1 : 0) | (c.observerOnly ? 2 : 0));
 }
 
 /** Reads one command written by `writeCmd` (or sent by a client) at `offset`. */
@@ -490,7 +496,8 @@ export function readCmd(v: DataView, offset = 0): NetCmd {
         swap: (flags & 64) !== 0, aim: (flags & 128) !== 0,
         viewTime: v.getFloat64(offset + 16, true),
         slot: v.getUint8(offset + 24),
-        drop: (v.getUint8(offset + 25) & 1) !== 0
+        drop: (v.getUint8(offset + 25) & 1) !== 0,
+        ...((v.getUint8(offset + 25) & 2) ? { observerOnly: true } : {})
     };
 }
 
@@ -534,6 +541,7 @@ function encodeSnap(m: Extract<ServerMsg, { type: 'snap' }>): Uint8Array<ArrayBu
     v.setUint8(SNAP_KNIFE, me.knife.cooldown);
     v.setUint8(SNAP_KNIFE + 1, me.knife.windup);
     v.setUint8(SNAP_CARRY, me.carry.wait);
+    v.setUint16(SNAP_SPECTATE, me.spectateId, true);
     v.setUint8(SNAP_COUNT, m.players.length);
     let o = SNAP_HEAD_BYTES;
     for (const p of m.players) {
@@ -607,6 +615,7 @@ function decodeSnap(v: DataView): ServerMsg {
             pos: [v.getFloat64(20, true), v.getFloat64(28, true), v.getFloat64(36, true)],
             vel: [v.getFloat64(44, true), v.getFloat64(52, true), v.getFloat64(60, true)],
             respawnAt: v.getFloat64(68, true),
+            spectateId: v.getUint16(SNAP_SPECTATE, true),
             loadout: decodeLoadout(v),
             knife: { cooldown: v.getUint8(SNAP_KNIFE), windup: v.getUint8(SNAP_KNIFE + 1) },
             carry: { carrier: (flags & 16) !== 0, wait: v.getUint8(SNAP_CARRY) }
@@ -659,6 +668,9 @@ export function decodeClient(data: ArrayBuffer | Uint8Array | string): ClientMsg
             case 'mapvote':
                 if (typeof m.map !== 'string' || m.map.length > 40) throw new Error('bad map vote');
                 return { type: 'mapvote', map: m.map };
+            case 'spectate':
+                if (typeof m.target !== 'number' || !Number.isSafeInteger(m.target) || m.target <= 0) throw new Error('bad spectator target');
+                return { type: 'spectate', target: m.target as number };
             case 'sight':
                 if (!Number.isInteger(m.sight) || (m.sight as number) < 0 || (m.sight as number) >= SIGHT_COUNT) throw new Error('bad sight');
                 return { type: 'sight', sight: m.sight as number };

@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { TICK_RATE } from '../../shared/constants';
-import { NavGraph } from '../../shared/nav';
+import { NAV_BOTH, NAV_WALK, NavGraph } from '../../shared/nav';
 import type { NetCmd, ServerMsg, Team } from '../../shared/protocol';
 import { DEFAULT_ROOM_OPTIONS, type RoomOptions } from '../../shared/room-options';
 import { insideSite } from '../../shared/rules';
@@ -317,6 +317,24 @@ describe('fill with bots', () => {
 });
 
 describe('practice range', () => {
+    for (const map of MAP_IDS) {
+        for (const team of ['ghosts', 'defenders'] as const) {
+            it(`${map} starts a ${team} player facing a stationary target`, () => {
+                const game = new Game(MAPS.get(map)!, { practice: true });
+                const conn = client();
+                const id = game.join(conn, 'Solo', { team });
+                const me = game.players.get(id)!;
+                const target = [...game.players.values()].find(p => p.brain?.role === 'target-static')!;
+                const dx = target.state.pos[0] - me.state.pos[0], dz = target.state.pos[2] - me.state.pos[2];
+                const spawn = conn.msgs.find(m => m.type === 'spawn')!;
+                const forward = (-Math.sin(spawn.yaw) * dx - Math.cos(spawn.yaw) * dz) / Math.hypot(dx, dz);
+                expect(forward).toBeGreaterThan(Math.cos(Math.PI / 8));
+                expect(game.clearLine([me.state.pos[0], me.eyeY, me.state.pos[2]],
+                    [target.state.pos[0], target.state.pos[1] + 1.2, target.state.pos[2]])).toBe(true);
+            });
+        }
+    }
+
     it('a private solo room with targets on the other side, reserves kept full, damage and zone reported per hit', () => {
         const rooms = new Rooms(MAPS, 'greybox');
         const conn = client();
@@ -378,6 +396,60 @@ describe('practice range', () => {
 });
 
 describe('BotBrain', () => {
+    it('keeps a carrier on the plant instead of chasing a defender outside knife reach', () => {
+        const game = game0();
+        const real = game.players.values().next().value!;
+        const map = MAPS.get('greybox')!;
+        const nav = new NavGraph(map.nav!);
+        const node = siteNodes(map, nav)[0][0];
+        const pos: Vec3 = [nav.x[node], nav.y[node], nav.z[node]];
+        const brain = new BotBrain('player', 'normal', 1);
+        brain.view.id = 1;
+        brain.view.phase = 'live';
+        brain.view.endsAt = 120_000;
+        brain.view.contacts.set(2, {
+            id: 2, team: 'defenders', pos: [pos[0], pos[1], pos[2] + 3.5], yaw: Math.PI,
+            alive: true, crouched: false, vis: 1, speed: 0, seen: 0, seenTick: 0
+        });
+        const cmd = brain.think({
+            id: 1, team: 'ghosts', alive: true, state: { pos, vel: [0, 0, 0], onGround: true, crouched: false },
+            loadout: real.loadout, knife: real.knife, carry: { carrier: true, wait: 0 }, health: 100
+        }, { map, nav, clearLine: () => false, teamSite: () => 0 });
+        expect(cmd.use).toBe(true);
+        expect(cmd.fire).toBe(false);
+    });
+
+    it('assigns a dropped bomb to the bot with the shorter route, even across stacked floors', () => {
+        const game = game0();
+        const loadout = game.players.values().next().value!.loadout;
+        const nav = new NavGraph({
+            cell: 1,
+            nodes: [0, 0, 0, 2, 0, 0, 0, 3, 0, 5, 3, 0, 5, 0, 0],
+            edges: [0, 1, NAV_BOTH | NAV_WALK, 1, 4, NAV_BOTH | NAV_WALK,
+                2, 3, NAV_BOTH | NAV_WALK, 3, 4, NAV_BOTH | NAV_WALK]
+        });
+        const world = { map: game.map, nav, clearLine: () => true, teamSite: () => 0 };
+        const modeAt = (id: number, pos: Vec3, otherId: number, otherPos: Vec3) => {
+            const brain = new BotBrain('player', 'normal', id);
+            brain.view.id = id;
+            brain.view.phase = 'live';
+            brain.view.endsAt = 120_000;
+            brain.view.dropped = [0, 0, 0];
+            brain.view.roster.set(otherId, { team: 'ghosts', alive: true, bot: true });
+            brain.view.contacts.set(otherId, {
+                id: otherId, team: 'ghosts', pos: otherPos, yaw: 0,
+                alive: true, crouched: false, vis: 0, speed: 0, seen: 0, seenTick: 0
+            });
+            brain.think({
+                id, team: 'ghosts', alive: true, state: { pos, vel: [0, 0, 0], onGround: true, crouched: false },
+                loadout, knife: { cooldown: 0, windup: 0 }, carry: { carrier: false, wait: 0 }, health: 100
+            }, world);
+            return brain.mode;
+        };
+        expect(modeAt(1, [0, 3, 0], 2, [2, 0, 0])).not.toBe('recover');
+        expect(modeAt(2, [2, 0, 0], 1, [0, 3, 0])).toBe('recover');
+    });
+
     it('produces strictly increasing commands without a map graph, and does nothing then', () => {
         const brain = new BotBrain('player', 'normal', 7);
         const self = {

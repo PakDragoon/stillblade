@@ -30,7 +30,7 @@ export const PRIVACY_SECTIONS: readonly PrivacySection[] = [
     {
         title: 'What it does not keep',
         lines: [
-            'Your IP address is used only while you are connected, to limit connections and to enforce a vote-kick ban for 10 minutes. It is not written into match records, recordings or reports.',
+            'The server uses your IP address in memory to limit connections. HTTP reports and vote-kick bans use 10-minute windows. Expired entries are cleared on a periodic sweep. It is not written into match records, recordings or reports.',
             'Chat is not recorded. Nothing is kept from the practice range or the warmup lobby.',
             'There are no accounts, no email addresses and no tracking or advertising cookies.'
         ]
