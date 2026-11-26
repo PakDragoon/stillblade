@@ -125,8 +125,10 @@ class Build:
             self.items.append(dict(name=b["name"], key=m.category_surface[b["category"]], mn=b["mn"], mx=b["mx"],
                                    tint=b["tint"], hide=b["hide"]))
         for v in m.visuals:
-            self.items.append(dict(name=v["name"], key=v["surface"], mn=v["mn"], mx=v["mx"],
-                                   tint=v["tint"], hide=()))
+            it = dict(name=v["name"], key=v["surface"], mn=v["mn"], mx=v["mx"], tint=v["tint"], hide=())
+            if v.get("obb"):        # oriented (turned) box: own faces, never hides another face
+                it.update(obb=True, corners=v["corners"], obb_hide=v["hide"])
+            self.items.append(it)
         # Invisible collision volumes (hide "all") are neither drawn nor occluders.
         self.items = [it for it in self.items if "all" not in it["hide"]]
         floor_boxes = [b for b in m.boxes if b["category"] in m.floor_categories]
@@ -193,14 +195,54 @@ def face_hidden(idx, mn, mx, axis, sign, solids, grid, map_mn, map_mx):
     return False
 
 
+def obb_faces(it, idx):
+    """Faces of an oriented visual box: its own six faces minus the hidden ones and any facing
+    down (they rest on something). Each face keeps the box face's winding; `axis`/`sign` are the
+    dominant direction of its normal, and a steep face carries `uvdir`, the horizontal direction
+    its texture runs along. Returns (faces, hidden count)."""
+    v = it["corners"]
+    faces, hidden = [], 0
+    for f, fname in zip(BOX_FACES, FACE_NAMES):
+        pts = [v[i] for i in f]
+        e1 = [pts[1][i] - pts[0][i] for i in range(3)]
+        e3 = [pts[3][i] - pts[0][i] for i in range(3)]
+        n = (e1[1] * e3[2] - e1[2] * e3[1], e1[2] * e3[0] - e1[0] * e3[2], e1[0] * e3[1] - e1[1] * e3[0])
+        ln = math.sqrt(sum(c * c for c in n))
+        n = tuple(c / ln for c in n)
+        if fname in it["obb_hide"] or n[2] < -0.7:
+            hidden += 1
+            continue
+        axis = max(range(3), key=lambda i: abs(n[i]))
+        sign = 1 if n[axis] > 0 else -1
+        face = {"pts": pts, "axis": axis, "sign": sign, "key": it["key"], "item": idx, "top": it["mx"][2],
+                "w": face_density(it, pts, axis, sign), "obb": True}
+        if axis != 2:
+            hl = math.hypot(n[0], n[1])
+            face["uvdir"] = (-n[1] / hl, n[0] / hl)
+        faces.append(face)
+    return faces, hidden
+
+
 def collect_faces(b):
     """All visible box faces: list of dicts {pts, axis, sign, key, item, top}."""
-    solids = [(it["mn"], it["mx"]) for it in b.items]
-    grid = mapkit.Grid2D(solids, 2.0)
-    map_mn = [min(s[0][i] for s in solids) for i in range(3)]
-    map_mx = [max(s[1][i] for s in solids) for i in range(3)]
+    far = ((1e9, 1e9, 1e9), (1e9, 1e9, 1e9))        # oriented boxes take no part in hiding faces
+    solids = [far if it.get("obb") else (it["mn"], it["mx"]) for it in b.items]
+    if any(it.get("obb") for it in b.items):
+        real = [i for i, it in enumerate(b.items) if not it.get("obb")]
+        grid = mapkit.Grid2D([solids[i] for i in real], 2.0)
+        grid.buckets = {k: [real[j] for j in v] for k, v in grid.buckets.items()}
+    else:
+        grid = mapkit.Grid2D(solids, 2.0)
+    box_solids = [s for s in solids if s is not far]
+    map_mn = [min(s[0][i] for s in box_solids) for i in range(3)]
+    map_mx = [max(s[1][i] for s in box_solids) for i in range(3)]
     faces, hidden = [], 0
     for idx, it in enumerate(b.items):
+        if it.get("obb"):
+            fs, hd = obb_faces(it, idx)
+            faces.extend(fs)
+            hidden += hd
+            continue
         mn, mx = it["mn"], it["mx"]
         v = box_verts(mn, mx)
         for f, (axis, sign), fname in zip(BOX_FACES, FACE_AXIS, FACE_NAMES):
@@ -315,6 +357,8 @@ def pack_lightmap(faces, size):
 
 def world_uv(p, axis):
     x, y, z = p
+    if isinstance(axis, tuple):         # a turned face: along its horizontal direction, and up
+        return (x * axis[0] + y * axis[1], z)
     return {2: (x, y), 1: (x, z), 0: (y, z)}[axis]
 
 
@@ -562,7 +606,7 @@ def build_scene(b, atlas_size, albedos):
     quads = []
     for f in faces:
         for pts, lm, cols in subdivide(b, f):
-            quads.append((pts, lm, cols, f["axis"], f["key"]))
+            quads.append((pts, lm, cols, f.get("uvdir") or f["axis"], f["key"]))
     used = [k for k in b.m.surfaces if any(f["key"] == k for f in faces)]
     mats = [make_bake_material("bake_" + k, albedos[k]) for k in used]
     obj, nverts = make_mesh_object(b.m.id + "_world", quads, used, mats)
@@ -579,7 +623,8 @@ def build_scene(b, atlas_size, albedos):
 # Paint decals (visual only, not baked: they borrow the lightmap of the surface below)
 # ---------------------------------------------------------------------------
 def faces_on_plane(faces, axis, sign, c):
-    return [f for f in faces if f["axis"] == axis and f["sign"] == sign and abs(f["pts"][0][axis] - c) < 1e-4]
+    return [f for f in faces if f["axis"] == axis and f["sign"] == sign and abs(f["pts"][0][axis] - c) < 1e-4
+            and not f.get("obb")]
 
 
 def decal_polys(faces, d):
@@ -808,7 +853,7 @@ def load_hdri_split(m):
 
 def find_face(faces, point, axis, sign):
     for f in faces:
-        if f["axis"] == axis and f["sign"] == sign and face_st(f, point) is not None:
+        if f["axis"] == axis and f["sign"] == sign and not f.get("obb") and face_st(f, point) is not None:
             return f
     return None
 

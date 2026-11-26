@@ -5,6 +5,10 @@
       "name": "Test Map 1"
     },
     {
+      "id": "trailerpark",
+      "name": "Trailer Park"
+    },
+    {
       "id": "warehouse",
       "name": "Warehouse"
     }

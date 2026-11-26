@@ -3,7 +3,7 @@ import { heldGun } from '../../shared/gun';
 import type { LoadoutState } from '../../shared/gun';
 import type { KnifeState } from '../../shared/knife';
 import type { CarryState } from '../../shared/bomb';
-import { NAV_JUMP, NavGraph } from '../../shared/nav';
+import { NAV_CROUCH, NAV_JUMP, NavGraph } from '../../shared/nav';
 import { SNAPSHOT_RATE, type NetCmd, type ServerMsg, type Team } from '../../shared/protocol';
 import type { BotLevel } from '../../shared/room-options';
 import { DEFUSE_RANGE, insideSite, type Phase } from '../../shared/rules';
@@ -309,6 +309,10 @@ export class BotBrain {
     // Navigation.
     private readonly path: number[] = [];
     private pathAt = 0;
+    /** The node the current path was planned from (the path itself starts after it). */
+    private pathStart = -1;
+    /** Set while following a crouch link (or about to): the command crouches whatever else the bot decided. */
+    private crouchLink = false;
     private readonly goal: Vec3 = [0, 0, 0];
     private hasGoal = false;
     private goalNode = -1;
@@ -366,6 +370,7 @@ export class BotBrain {
         c.forward = 0; c.right = 0; c.jump = false; c.walk = false; c.crouch = false; c.fire = false;
         c.use = false; c.reload = false; c.slot = 0; c.swap = false; c.aim = false; c.drop = false;
         c.viewTime = this.view.snapTime;
+        this.crouchLink = false;
         this.mode = 'idle';
         if (!this.lookInit || this.view.spawns !== this.planSpawns) this.onSpawn(self, world);
         if (self.alive && world.nav) {
@@ -374,6 +379,7 @@ export class BotBrain {
                 else this.ghost(self, world, world.nav);
             } else this.target(self);
         }
+        if (this.crouchLink) c.crouch = true;
         c.yaw = this.yaw;
         c.pitch = this.pitch;
         return c;
@@ -540,6 +546,11 @@ export class BotBrain {
                 const prev = this.pathAt > 0 ? this.path[this.pathAt - 1] : -1;
                 if (prev >= 0 && nav.linkKind(prev, n) === NAV_JUMP && nav.flatDist(n, pos[0], pos[2]) < 1.3 &&
                     nav.y[n] > pos[1] + 0.3 && self.state.onGround) this.cmd.jump = true;
+                // Crouch along a crouch link (a crouch opening), and from a metre before the node where one starts.
+                const from = prev >= 0 ? prev : this.pathStart;
+                if ((from >= 0 && nav.linkKind(from, n) === NAV_CROUCH) ||
+                    (this.pathAt + 1 < this.path.length && nav.linkKind(n, this.path[this.pathAt + 1]) === NAV_CROUCH &&
+                     nav.flatDist(n, pos[0], pos[2]) < 1.0)) this.crouchLink = true;
             }
         }
         if (remaining < 0.15 && this.pathAt >= this.path.length) return remaining;
@@ -557,6 +568,7 @@ export class BotBrain {
         if (start < 0 || end < 0) return false;
         this.goalNode = end;
         this.pathAt = 0;
+        this.pathStart = start;
         if (!nav.findPath(start, end, this.path, this.penalty, PATH_GREED)) { this.goalNode = -1; return false; }
         this.progressAt = this.tick;
         const p = self.state.pos;

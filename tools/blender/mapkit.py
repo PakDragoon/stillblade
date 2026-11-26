@@ -26,6 +26,7 @@ MAPS_DIR = os.path.join(HERE, "maps")
 # Player and movement numbers, mirrored from shared/constants.ts (checked against it in verify()).
 HULL_W = 0.6
 HULL_H = 1.8
+HULL_H_CROUCHED = 1.2
 EYE = 1.62
 STEP_HEIGHT = 0.35
 JUMP_REACH = 1.1          # tallest ledge a standing jump lands on (apex ~1.17 m, "clears a 1 m crate")
@@ -178,6 +179,7 @@ class MapDef:
         self.lights = []         # dicts: type POINT / AREA / SPOT, pos, colour, power, ...
         self.decals = []         # dicts: corners (4 x xyz), axis, sign, off, colour
         self.sample_spots = []   # (label, point, axis, sign) printed after the bake
+        self.low_ceilings = []   # dicts: name, mn, mx, clearance, crouch (allowed low ceilings, see low_ceiling)
         self.max_sightline = None    # metres; None = not checked for this map
         self.route_gates = {}        # site -> [(label, (x0, y0, z0, x1, y1, z1))]: distinct ghost routes
         self.sun_scale = 0.40
@@ -187,26 +189,56 @@ class MapDef:
         self.max_glb_bytes = 1024 * 1024
 
     # ---- geometry --------------------------------------------------------------------------
-    def box(self, name, category, mn, mx, tint=None, hide=()):
+    def box(self, name, category, mn, mx, tint=None, hide=(), group=None):
         """A collision box, drawn with its category's surface. `hide` lists faces that can never be
         seen ("top", "bottom", "+x", ...), or ("all",) for a solid drawn only by visual-only boxes
-        inside it (racks, vehicles)."""
+        inside it (racks, vehicles). Boxes sharing a `group` are pieces of one solid (the collision
+        steps of an angled shape): the walkway-gap check does not compare them with each other."""
         mn = tuple(float(v) for v in mn)
         mx = tuple(float(v) for v in mx)
         if not all(a < b for a, b in zip(mn, mx)):
             raise ValueError("box %s has min >= max: %s %s" % (name, mn, mx))
-        self.boxes.append(dict(name=name, category=category, mn=mn, mx=mx, tint=tint, hide=tuple(hide)))
+        b = dict(name=name, category=category, mn=mn, mx=mx, tint=tint, hide=tuple(hide))
+        if group is not None:
+            b["group"] = group
+        self.boxes.append(b)
         return name
 
-    def visual(self, name, surface, mn, mx, tint=None):
+    def visual(self, name, surface, mn, mx, tint=None, yaw=0.0, pitch=0.0, hide=()):
+        """A visual-only box. With `yaw` (degrees, counter-clockwise seen from above) or `pitch`
+        (degrees about the box's own X axis, applied first; positive tilts its +Y end up) the box
+        (mn, mx) is turned about its centre: an oriented box, for angled shapes whose collision is a
+        separate set of boxes. `hide` names faces of an oriented box (in its own frame: "top",
+        "bottom", "+x", "-x", "+y", "-y") that can never be seen. Its mn/mx become the
+        axis-aligned bounds of the turned box; the verifier tests it against players exactly."""
         mn = tuple(float(v) for v in mn)
         mx = tuple(float(v) for v in mx)
         if not all(a < b for a, b in zip(mn, mx)):
             raise ValueError("visual %s has min >= max: %s %s" % (name, mn, mx))
-        self.visuals.append(dict(name=name, surface=surface, mn=mn, mx=mx, tint=tint))
+        if not yaw and not pitch:
+            self.visuals.append(dict(name=name, surface=surface, mn=mn, mx=mx, tint=tint))
+            return name
+        centre = tuple((a + b) / 2 for a, b in zip(mn, mx))
+        half = tuple((b - a) / 2 for a, b in zip(mn, mx))
+        cy, sy = math.cos(math.radians(yaw)), math.sin(math.radians(yaw))
+        cp, sp = math.cos(math.radians(pitch)), math.sin(math.radians(pitch))
+        # columns: the box's own x, y, z axes in world space (pitch about x, then yaw about z)
+        ax = (cy, sy, 0.0)
+        ay = (-sy * cp, cy * cp, sp)
+        az = (sy * sp, -cy * sp, cp)
+        corners = []
+        for x0, y0, z0 in ((mn[0], mn[1], mn[2]), (mx[0], mn[1], mn[2]), (mx[0], mx[1], mn[2]), (mn[0], mx[1], mn[2]),
+                           (mn[0], mn[1], mx[2]), (mx[0], mn[1], mx[2]), (mx[0], mx[1], mx[2]), (mn[0], mx[1], mx[2])):
+            u, v, w = x0 - centre[0], y0 - centre[1], z0 - centre[2]
+            corners.append(tuple(centre[i] + u * ax[i] + v * ay[i] + w * az[i] for i in range(3)))
+        bmn = tuple(min(c[i] for c in corners) for i in range(3))
+        bmx = tuple(max(c[i] for c in corners) for i in range(3))
+        self.visuals.append(dict(name=name, surface=surface, mn=bmn, mx=bmx, tint=tint, obb=True, centre=centre,
+                                 half=half, axes=(ax, ay, az), corners=corners, hide=tuple(hide)))
         return name
 
-    def flight(self, name, x0, x1, y0, direction, z0, z1, rise, tread, axis="y", base=None):
+    def flight(self, name, x0, x1, y0, direction, z0, z1, rise, tread, axis="y", base=None, category="stairs",
+               hide=()):
         """A straight stair of box steps climbing from floor z0 to floor z1.
 
         The first step starts at `y0` (or x0 when axis="x"; then x0/x1 are the cross range) and the
@@ -226,9 +258,9 @@ class MapDef:
             lo, hi = min(a, b), max(a, b)
             nm = "%s_%02d" % (name, i + 1)
             if axis == "y":
-                self.box(nm, "stairs", (x0, lo, base), (x1, hi, top))
+                self.box(nm, category, (x0, lo, base), (x1, hi, top), hide=hide)
             else:
-                self.box(nm, "stairs", (lo, x0, base), (hi, x1, top))
+                self.box(nm, category, (lo, x0, base), (hi, x1, top), hide=hide)
             steps.append(nm)
         self.flights.append(dict(name=name, steps=steps, z0=z0, z1=z1, axis=axis))
         return y0 + direction * tread * (n - 1)
@@ -236,6 +268,14 @@ class MapDef:
     # ---- gameplay --------------------------------------------------------------------------
     def spawn(self, team, x, y, z, yaw):
         self.spawns[team].append(((float(x), float(y), float(z)), float(yaw)))
+
+    def low_ceiling(self, name, mn, mx, clearance, crouch=False):
+        """An allowed low ceiling: reachable spots inside the box (mn, mx; feet heights inside its z
+        range) need only `clearance` metres of headroom instead of HEADROOM. With crouch=True the
+        verifier's walk graph uses the crouched hull there, so the space is passable only crouched
+        (crouch openings); otherwise a standing player must still fit (clearance >= HULL_H)."""
+        self.low_ceilings.append(dict(name=name, mn=tuple(float(v) for v in mn), mx=tuple(float(v) for v in mx),
+                                      clearance=float(clearance), crouch=bool(crouch)))
 
     def site(self, name, p0, p1, z):
         self.sites.append((name, (float(p0[0]), float(p0[1])), (float(p1[0]), float(p1[1])), float(z)))
@@ -444,8 +484,15 @@ def _segment_hits_box(o, d, mn, mx):
 # Walk graph: every spot a standing player fits, linked by walking, stepping, jumping and falling.
 # ---------------------------------------------------------------------------------------------
 class WalkGraph:
+    """Spots a player fits, standing (HULL_H) or, inside the map's crouch zones (low_ceiling with
+    crouch=True), crouched (HULL_H_CROUCHED). `crouch_only` holds the spots where only a crouched
+    player fits; moves into, out of and between them are walking moves tested with the crouched hull,
+    and no jump starts or lands there. A map without crouch zones gets exactly the standing graph."""
+
     def __init__(self, m):
         self.m = m
+        self.crouch_zones = [z for z in getattr(m, "low_ceilings", ()) if z["crouch"]]
+        self.crouch_only = set()
         self.solids = m.solids()
         self.index = Grid2D(self.solids, 2.0)
         xs = [b[0][0] for b in self.solids] + [b[1][0] for b in self.solids]
@@ -478,6 +525,13 @@ class WalkGraph:
                 return False
         return True
 
+    def in_crouch_zone(self, x, y, z):
+        for zn in self.crouch_zones:
+            mn, mx = zn["mn"], zn["mx"]
+            if mn[0] <= x <= mx[0] and mn[1] <= y <= mx[1] and mn[2] - 1e-6 <= z <= mx[2] + 1e-6:
+                return True
+        return False
+
     def _build_nodes(self):
         for ix in range(self.nx):
             for iy in range(self.ny):
@@ -489,6 +543,10 @@ class WalkGraph:
                 ids = []
                 for z in tops:
                     if self.clear(col, z, z + HULL_H):
+                        ids.append(len(self.nodes))
+                        self.nodes.append((ix, iy, z))
+                    elif self.crouch_zones and self.in_crouch_zone(x, y, z) and self.clear(col, z, z + HULL_H_CROUCHED):
+                        self.crouch_only.add(len(self.nodes))
                         ids.append(len(self.nodes))
                         self.nodes.append((ix, iy, z))
                 if ids:
@@ -503,21 +561,28 @@ class WalkGraph:
         return c
 
     def neighbours(self, nid):
-        """(node, cost, kind) for every move from node nid. kind: walk / jump / fall."""
+        """(node, cost, kind) for every move from node nid. kind: walk / jump / fall.
+        A walking move that starts or ends on a crouch-only spot is tested with the crouched hull."""
         ix, iy, z = self.nodes[nid]
         out = []
+        co = self.crouch_only
+        crouched_here = nid in co
+
+        def diag_ok(dx, dy, hh):
+            # diagonal: both side cells must let the hull through at this height
+            for sx, sy in ((ix + dx, iy), (ix, iy + dy)):
+                if not self.clear(self.col_at(sx, sy), z + STEP_HEIGHT, z + hh):
+                    return False
+            return True
+
         for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)):
             ids = self.at.get((ix + dx, iy + dy))
             if not ids:
                 continue
-            if dx and dy:   # diagonal: both side cells must let the hull through at this height
-                ok = True
-                for sx, sy in ((ix + dx, iy), (ix, iy + dy)):
-                    if not self.clear(self.col_at(sx, sy), z + STEP_HEIGHT, z + HULL_H):
-                        ok = False
-                if not ok:
-                    continue
-            dist = CELL * (1.4142 if dx and dy else 1.0)
+            diagonal = bool(dx and dy)
+            if diagonal and not co and not diag_ok(dx, dy, HULL_H):
+                continue
+            dist = CELL * (1.4142 if diagonal else 1.0)
             col_b = self.col_at(ix + dx, iy + dy)
             walk = None
             for j in ids:
@@ -526,10 +591,15 @@ class WalkGraph:
                     walk = j
             if walk is not None:
                 zb = self.nodes[walk][2]
-                if zb >= z - 1e-6 or self.clear(col_b, z, z + HULL_H):
+                hh = HULL_H_CROUCHED if (crouched_here or walk in co) else HULL_H
+                if (not diagonal or not co or diag_ok(dx, dy, hh)) and                         (zb >= z - 1e-6 or self.clear(col_b, z, z + hh)):
                     out.append((walk, dist, "walk" if zb >= z - STEP_HEIGHT - 1e-6 else "fall"))
+            if crouched_here or (diagonal and co and not diag_ok(dx, dy, HULL_H)):
+                continue
             for j in ids:
                 zb = self.nodes[j][2]
+                if j in co:
+                    continue
                 if z + STEP_HEIGHT + 1e-6 < zb <= z + JUMP_REACH + 1e-6:
                     if self.clear(self.col_at(ix, iy), z, zb + HULL_H):
                         out.append((j, dist + 1.0, "jump"))
@@ -573,19 +643,24 @@ class WalkGraph:
 # walking the straight line between the two node points stays on spots of the walk graph using
 # moves of the graph (so a bot steering straight at the next node never cuts a corner or climbs
 # a stair from its side). Edge kinds: 0 walk (level), 1 step (stairs or a small rise), 2 jump,
-# 3 drop. Positions are feet positions in engine coordinates.
+# 3 drop, 8 crouch (a walking link whose line passes a crouch-only spot: the bot holds crouch along
+# it). Crouch is 8, not 4, because 4 (NAV_BOTH) is the "both ways" bit in the file; older map files
+# never contain 8, so they read the same. Positions are feet positions in engine coordinates.
 # ---------------------------------------------------------------------------------------------
 NAV_CELLS = 4
-NAV_KINDS = {"walk": 0, "step": 1, "jump": 2, "drop": 3}
+NAV_KINDS = {"walk": 0, "step": 1, "jump": 2, "drop": 3, "crouch": 8}
 
 
-def _trace_line(g, reach, a, b, kinds):
-    """Follows the straight line from fine node a to fine node b over graph moves; True if it arrives."""
+def _trace_line(g, reach, a, b, kinds, visited=None):
+    """Follows the straight line from fine node a to fine node b over graph moves; True if it arrives.
+    `visited` (a list), when given, receives every fine node the line passes, a and b included."""
     ax, ay = g.centre(*g.nodes[a][:2])
     bx, by = g.centre(*g.nodes[b][:2])
     length = math.hypot(bx - ax, by - ay)
     steps = max(1, int(length / (CELL * 0.4)) + 1)
     cur = a
+    if visited is not None:
+        visited.append(a)
     for k in range(1, steps + 1):
         t = k / steps
         x, y = ax + (bx - ax) * t, ay + (by - ay) * t
@@ -605,6 +680,10 @@ def _trace_line(g, reach, a, b, kinds):
         if best is None:
             return False
         cur = best[1]
+        if visited is not None:
+            visited.append(cur)
+    if visited is not None:
+        visited.append(b)
     return cur == b or abs(g.nodes[cur][2] - g.nodes[b][2]) < 1e-3
 
 
@@ -654,15 +733,21 @@ def nav_graph(m):
                 links[(a, b)] = kind
     edges = []
     dropped = 0
+    co = g.crouch_only
     for (a, b), kind in sorted(links.items()):
         ra, rb = nodes[a], nodes[b]
         allowed = {"walk"} if kind == "walk" else {"walk", "fall", "jump"}
-        if not _trace_line(g, reach, ra, rb, allowed):
+        visited = [] if co else None
+        if not _trace_line(g, reach, ra, rb, allowed, visited):
             dropped += 1
+            continue
+        crouch = bool(co) and any(n in co for n in visited)
+        if crouch and kind != "walk":
+            dropped += 1        # no jumping or dropping through a crouch-only space
             continue
         dz = g.nodes[rb][2] - g.nodes[ra][2]
         if kind == "walk":
-            kind = "walk" if abs(dz) < 0.05 else "step"
+            kind = "crouch" if crouch else ("walk" if abs(dz) < 0.05 else "step")
         edges.append((a, b, NAV_KINDS[kind]))
     pts = []
     for rep in nodes:
@@ -715,6 +800,30 @@ def nav_reach(nav, starts):
     return seen
 
 
+def obb_overlaps_aabb(v, amn, amx, eps=1e-6):
+    """True if the oriented visual box v (MapDef.visual with yaw/pitch) and the axis-aligned box
+    (amn, amx) share volume (touching does not count): separating axis test over the 15 axes."""
+    ac = [(amn[i] + amx[i]) / 2 for i in range(3)]
+    ah = [(amx[i] - amn[i]) / 2 for i in range(3)]
+    oc, oh, oa = v["centre"], v["half"], v["axes"]
+    d = [oc[i] - ac[i] for i in range(3)]
+    world = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    axes = list(world) + list(oa)
+    for u in world:
+        for w in oa:
+            c = (u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0])
+            if c[0] * c[0] + c[1] * c[1] + c[2] * c[2] > 1e-12:
+                axes.append(c)
+    for L in axes:
+        ra = sum(ah[i] * abs(L[i]) for i in range(3))
+        rb = sum(oh[k] * abs(sum(oa[k][i] * L[i] for i in range(3))) for k in range(3))
+        dist = abs(sum(d[i] * L[i] for i in range(3)))
+        n = math.sqrt(sum(c * c for c in L))
+        if dist >= ra + rb - eps * n:
+            return False
+    return True
+
+
 # ---------------------------------------------------------------------------------------------
 # Verification
 # ---------------------------------------------------------------------------------------------
@@ -725,7 +834,7 @@ def check_constants(errors):
         return
     text = open(path, encoding="utf-8").read()
     for name, value in (("HULL_HALF_WIDTH", HULL_W / 2), ("HULL_HEIGHT", HULL_H), ("EYE_HEIGHT", EYE),
-                        ("STEP_HEIGHT", STEP_HEIGHT)):
+                        ("STEP_HEIGHT", STEP_HEIGHT), ("HULL_HEIGHT_CROUCHED", HULL_H_CROUCHED)):
         key = "export const %s = " % name
         i = text.find(key)
         if i < 0:
@@ -740,7 +849,8 @@ def _merge_runs(boxes):
     """Footprints of boxes merged where they continue each other in a straight run with the same
     cross-section (the pieces of one wall around its openings, the steps of one flight), so the gap
     check sees one wall instead of a sill sitting next to its own wall."""
-    rects = [dict(name=b["name"], cats={b["category"]}, mn=list(b["mn"]), mx=list(b["mx"])) for b in boxes]
+    rects = [dict(name=b["name"], cats={b["category"]}, mn=list(b["mn"]), mx=list(b["mx"]),
+                  groups={b["group"]} if b.get("group") else set()) for b in boxes]
     for k in (1, 0):                      # merge runs along Y, then along X
         o = 1 - k
         rects.sort(key=lambda r: (round(r["mn"][o], 6), round(r["mx"][o], 6), r["mn"][k]))
@@ -752,6 +862,7 @@ def _merge_runs(boxes):
                 p["mn"][2] = min(p["mn"][2], r["mn"][2])
                 p["mx"][2] = max(p["mx"][2], r["mx"][2])
                 p["cats"] |= r["cats"]
+                p["groups"] |= r["groups"]
                 if "+" not in p["name"]:
                     p["name"] += "+"
             else:
@@ -837,6 +948,8 @@ def verify(m, log=print):
         for i, a in enumerate(raw):
             for b in raw[i + 1:]:
                 if overlap3(a["mn"], a["mx"], b["mn"], b["mx"]):
+                    if a.get("group") and a.get("group") == b.get("group"):
+                        continue
                     narrow.append("%s overlaps %s" % (a["name"], b["name"]))
         band = _merge_runs(raw)
         grid = Grid2D([(b["mn"], b["mx"]) for b in band], 2.0)
@@ -848,6 +961,8 @@ def verify(m, log=print):
                     continue
                 b = band[j]
                 if a["cats"] <= m.structure_categories and b["cats"] <= m.structure_categories:
+                    continue
+                if a["groups"] & b["groups"]:
                     continue
                 d = rect_dist(a["mn"], a["mx"], b["mn"], b["mx"])
                 if 1e-6 < d < MIN_WALKWAY - 1e-6 and not _gap_filled(a, b, band, grid, i, j):
@@ -928,18 +1043,57 @@ def verify(m, log=print):
             errors.append("flight %s cannot be climbed on foot (%s)" % (fl["name"], "bottom step" if not up else "top step"))
     log("%s flights climbable on foot: %d checked" % (tag, len(m.flights)))
 
-    # Headroom above every reachable spot.
+    # Headroom above every reachable spot: HEADROOM, or a low-ceiling zone's own clearance inside it.
+    zones = getattr(m, "low_ceilings", [])
+
+    def zone_of(x, y, z):
+        for k, zn in enumerate(zones):
+            mn, mx = zn["mn"], zn["mx"]
+            if mn[0] <= x <= mx[0] and mn[1] <= y <= mx[1] and mn[2] - 1e-6 <= z <= mx[2] + 1e-6:
+                return k
+        return None
+
+    def clearance(col, z, limit):
+        top = limit
+        for i in col:
+            mn, mx = g.solids[i]
+            if mx[2] > z + EPS and mn[2] < top:
+                top = max(z, mn[2])
+        return top - z
+
     low = []
+    zone_spots = [[] for _ in zones]
     for n in reach:
         ix, iy, z = g.nodes[n]
-        if not g.clear(g.col_at(ix, iy), z, z + HEADROOM):
-            x, y = g.centre(ix, iy)
-            low.append((round(x, 2), round(y, 2), z))
+        x, y = g.centre(ix, iy)
+        col = g.col_at(ix, iy)
+        k = zone_of(x, y, z) if zones else None
+        if k is None:
+            if not g.clear(col, z, z + HEADROOM):
+                low.append((round(x, 2), round(y, 2), z))
+            continue
+        c = clearance(col, z, z + HEADROOM)
+        zone_spots[k].append(c)
+        if c < zones[k]["clearance"] - 1e-6:
+            errors.append("low-ceiling zone %s: spot (%.2f, %.2f, %.2f) has %.2f m, under its %.2f m"
+                          % (zones[k]["name"], x, y, z, c, zones[k]["clearance"]))
     if low:
         errors.append("%d reachable spots have less than %.1f m headroom, e.g. %s" % (len(low), HEADROOM, low[:6]))
-    log("%s headroom: %d reachable spots under %.1f m" % (tag, len(low), HEADROOM))
+    log("%s headroom: %d reachable spots under %.1f m%s" % (tag, len(low), HEADROOM,
+                                                           " outside the low-ceiling zones" if zones else ""))
+    for k, zn in enumerate(zones):
+        cs = zone_spots[k]
+        if not any(c < HEADROOM - 1e-6 for c in cs):
+            errors.append("low-ceiling zone %s covers no reachable spot under %.1f m (remove it)" % (zn["name"], HEADROOM))
+        if not zn["crouch"] and zn["clearance"] < HULL_H - 1e-6:
+            errors.append("low-ceiling zone %s: %.2f m is under a standing player; mark it crouch" % (zn["name"], zn["clearance"]))
+        crouch_spots = sum(1 for c in cs if c < HULL_H - 1e-6)
+        log("%s low ceiling %-22s %s: %d reachable spots, %d under %.1f m, lowest %.2f m (allowed %.2f), %d crouch-only"
+            % (tag, zn["name"], "crouch" if zn["crouch"] else "standing", len(cs),
+               sum(1 for c in cs if c < HEADROOM - 1e-6), HEADROOM, min(cs) if cs else 0.0, zn["clearance"], crouch_spots))
 
-    # Visual-only geometry must stay out of the space players occupy.
+    # Visual-only geometry must stay out of the space players occupy (a crouched hull on crouch-only
+    # spots; oriented boxes are tested exactly).
     if m.visuals:
         vgrid = Grid2D([(v["mn"], v["mx"]) for v in m.visuals], 2.0)
         clipping = set()
@@ -947,10 +1101,12 @@ def verify(m, log=print):
         for n in reach:
             ix, iy, z = g.nodes[n]
             x, y = g.centre(ix, iy)
+            top = z + (HULL_H_CROUCHED if n in g.crouch_only else 1.95)
             for i in vgrid.query(x - h, y - h, x + h, y + h):
                 v = m.visuals[i]
-                if overlap3((x - h, y - h, z), (x + h, y + h, z + 1.95), v["mn"], v["mx"]):
-                    clipping.add(v["name"])
+                if overlap3((x - h, y - h, z), (x + h, y + h, top), v["mn"], v["mx"]):
+                    if not v.get("obb") or obb_overlaps_aabb(v, (x - h, y - h, z), (x + h, y + h, top)):
+                        clipping.add(v["name"])
         if clipping:
             errors.append("visual-only boxes intrude into player space: %s" % sorted(clipping)[:12])
         log("%s visual-only boxes: %d, %d intrude into player space" % (tag, len(m.visuals), len(clipping)))
@@ -1002,12 +1158,14 @@ def verify(m, log=print):
                 errors.append("nav graph: site %s cannot get back to the %s spawn" % (name, team))
     all_starts = [comp[n] for ns in spawn_nodes.values() for n in ns if n in comp]
     orphans = len(nav["nodes"]) - len(nav_reach(nav, all_starts))
-    kinds = [0, 0, 0, 0]
+    kinds = {k: 0 for k in NAV_KINDS.values()}
     for _a, _b, k in nav["edges"]:
         kinds[k] += 1
-    log("%s nav graph: %d nodes, %d edges (walk %d, step %d, jump %d, drop %d), %d links refused by the line test, "
+    log("%s nav graph: %d nodes, %d edges (walk %d, step %d, jump %d, drop %d%s), %d links refused by the line test, "
         "%d nodes not reachable from a spawn" % (tag, len(nav["nodes"]), len(nav["edges"]), kinds[0], kinds[1],
-                                                 kinds[2], kinds[3], dropped_links, orphans))
+                                                 kinds[2], kinds[3],
+                                                 (", crouch %d" % kinds[8]) if g.crouch_only else "",
+                                                 dropped_links, orphans))
 
     # Distinct routes: each gate alone must connect the ghost spawn to the site, and closing every
     # gate must cut the site off (so the gates really are separate ways in).

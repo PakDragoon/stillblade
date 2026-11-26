@@ -34,7 +34,23 @@ export function findPath(map: MapData, from: Vec3, to: Vec3): Vec3[] | null {
         const k = Math.min(d - 1, Math.max(0, Math.floor((p[2] - z0) / CELL)));
         return i + k * w;
     };
-    const start = cellOf(from), goal = cellOf(to);
+    const start = cellOf(from);
+    // A goal inside a solid (a bomb site's centre under a crate) becomes the nearest open cell within 4 m.
+    let goal = cellOf(to);
+    if (!open[goal]) {
+        const gi = goal % w, gk = Math.floor(goal / w);
+        let best = -1, bestD = Infinity;
+        const r = Math.ceil(4 / CELL);
+        for (let di = -r; di <= r; di++) {
+            for (let dk = -r; dk <= r; dk++) {
+                const ni = gi + di, nk = gk + dk;
+                if (ni < 0 || nk < 0 || ni >= w || nk >= d || !open[ni + nk * w]) continue;
+                const dd = di * di + dk * dk;
+                if (dd < bestD) { bestD = dd; best = ni + nk * w; }
+            }
+        }
+        if (best >= 0) goal = best;
+    }
     const cost = new Float64Array(w * d).fill(Infinity);
     const came = new Int32Array(w * d).fill(-1);
     const h = (c: number): number => Math.hypot((c % w) - (goal % w), Math.floor(c / w) - Math.floor(goal / w));

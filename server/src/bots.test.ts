@@ -12,7 +12,7 @@ import { loadMaps } from './maps';
 import { Rooms } from './rooms';
 
 const MAPS = loadMaps(fileURLToPath(new URL('../../client/public/maps', import.meta.url)));
-const MAP_IDS = ['greybox', 'warehouse'];
+const MAP_IDS = ['greybox', 'warehouse', 'trailerpark'];
 const TICK_MS = 1000 / TICK_RATE;
 
 /** A person's connection that records what it is sent. */
