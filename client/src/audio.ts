@@ -497,8 +497,8 @@ const synthWindup: Synth = (v, t) => {
     cloth.gain.linearRampToValueAtTime(0, t + D + 0.02);
 };
 
-/** Knife slash: fast band-pass whoosh (up then down); on a hit a thud plus a wet resonant squelch. flag = hit. */
-const synthSlash: Synth = (v, t, _x, hit) => {
+/** Knife slash: a synthesized whoosh, with a recorded impact or a synthesized thud on contact. */
+const slash: Synth = (v, t, _x, hit) => {
     const whoosh = v.gain(v.input);
     const bp = v.filter('bandpass', 500, 1.4, whoosh);
     bp.frequency.setValueAtTime(500, t);
@@ -511,6 +511,11 @@ const synthSlash: Synth = (v, t, _x, hit) => {
 
     if (!hit) return;
     const th = t + 0.05;
+    const impact = v.pick('knife_hit');
+    if (impact) {
+        v.play('knife_hit', impact, th, varied(0.1, Math.random()), varied(0.05, Math.random()));
+        return;
+    }
     const thud = v.gain(v.input);
     const o = v.osc('sine', 100, th, 0.16, thud);
     o.frequency.exponentialRampToValueAtTime(45, th + 0.12);
@@ -923,17 +928,6 @@ function sampledReload(kind: 'rifle' | 'pistol', fallback: Synth, empty: keyof t
         }
     };
 }
-
-const SLASH_PARTS = ['knife_slash'];
-const SLASH_HIT_PARTS = ['knife_slash', 'knife_hit'];
-/** Knife slash: the swing sample, and on a hit the hit sample 50 ms in (as the synthesised thud). flag = hit. */
-const sampledSlash: Synth = (v, t, x, hit) => {
-    if (!v.has(hit ? SLASH_HIT_PARTS : SLASH_PARTS)) { synthSlash(v, t, x, hit); return; }
-    const a = v.pick('knife_slash');
-    if (a) v.play('knife_slash', a, t, varied(0.1, Math.random()), varied(0.05, Math.random()));
-    const h = hit ? v.pick('knife_hit') : null;
-    if (h) v.play('knife_hit', h, t + 0.05, varied(0.1, Math.random()), varied(0.05, Math.random()));
-};
 
 const sampledHitBody = sampled('hit_body', synthHit, 1, 0.02);
 const sampledHitHead = sampled('hit_head', synthHit, 1, 0.02);
@@ -1630,7 +1624,7 @@ export const createAudio: CreateAudio = (boxes: readonly Box[], opts?: AudioOpti
         },
 
         knifeSlash(pos: Vec3, hit: boolean, isLocal: boolean): void {
-            oneShot(isLocal ? null : pos, KNIFE_CFG, isLocal ? 0.6 : 1, sampledSlash, 0, hit);
+            oneShot(isLocal ? null : pos, KNIFE_CFG, isLocal ? 0.6 : 1, slash, 0, hit);
         },
 
         hitMarker(kind: 'body' | 'head' | 'kill'): void {

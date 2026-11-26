@@ -44,9 +44,11 @@ export class Rooms {
      * even when the room exists, so a bad link fails loudly.
      */
     join(roomId: string, mapId: string | null, conn: Connection, name: string, now: number,
-        options: RoomOptions = DEFAULT_ROOM_OPTIONS, practice?: Team, sight?: number): JoinResult {
+        options: RoomOptions = DEFAULT_ROOM_OPTIONS, practice?: Team, sight?: number, intent?: 'join' | 'create'): JoinResult {
         if (mapId !== null && mapId !== '' && !this.maps.has(mapId)) return { ok: false, reason: 'Unknown map' };
         let game = this.rooms.get(roomId);
+        if (intent === 'join' && !game) return { ok: false, reason: 'Unknown room' };
+        if (intent === 'create' && game) return { ok: false, reason: 'Room code taken' };
         let created = false;
         if (!game) {
             if (this.rooms.size >= this.limits.maxRooms) return { ok: false, reason: 'Server full' };

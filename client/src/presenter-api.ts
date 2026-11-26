@@ -262,6 +262,8 @@ export interface Presenter {
      * the bomb, the explosion) on the world and on players, soft blob shadows under players and floor clutter.
      */
     setTier(tier: Tier): void;
+    /** Presentation only: reduce decorative weapon sway and shake, or omit combat flashes. */
+    setComfort(reduceMotion: boolean, reduceFlashes: boolean): void;
     /**
      * A map's look was applied (each map load, including a map change): the fog effects should match, and every
      * decal and particle of the previous map goes. The boxes given to `setWorld` already hold the new map.

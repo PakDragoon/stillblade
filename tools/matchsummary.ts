@@ -54,6 +54,14 @@ export function describeMatch(g: MatchGroup): string {
 
 export interface Tally { [key: string]: number }
 
+interface RoundBreakdown {
+    rounds: number;
+    ghosts: number;
+    defenders: number;
+    plants: number;
+    defuses: number;
+}
+
 export interface Stats {
     rounds: number;
     matches: number;
@@ -70,6 +78,8 @@ export interface Stats {
     defuses: number;
     /** Rounds in rooms with fill bots, and their ghost wins (bot balance can hide people's balance). */
     botRounds: number;
+    /** Faction results broken down by map and player composition. */
+    compositions: Record<string, Partial<Record<'human' | 'mixed' | 'bots', RoundBreakdown>>>;
 }
 
 const bump = (t: Tally, k: string, n = 1): void => { t[k] = (t[k] ?? 0) + n; };
@@ -78,7 +88,7 @@ const bump = (t: Tally, k: string, n = 1): void => { t[k] = (t[k] ?? 0) + n; };
 export function matchStats(lines: readonly MatchLogLine[]): Stats {
     const s: Stats = {
         rounds: 0, matches: 0, abandoned: 0, wins: { ghosts: 0, defenders: 0 }, maps: {}, ways: {}, avgRoundSeconds: 0,
-        killsByWeapon: {}, killsByZone: {}, plants: 0, defuses: 0, botRounds: 0
+        killsByWeapon: {}, killsByZone: {}, plants: 0, defuses: 0, botRounds: 0, compositions: {}
     };
     let seconds = 0;
     for (const l of lines) {
@@ -93,7 +103,15 @@ export function matchStats(lines: readonly MatchLogLine[]): Stats {
         seconds += l.seconds;
         if (l.plant) s.plants++;
         if (l.defuse) s.defuses++;
-        if (l.players.some(p => p.bot)) s.botRounds++;
+        const hasBot = l.players.some(p => p.bot);
+        if (hasBot) s.botRounds++;
+        const composition = hasBot ? (l.players.every(p => p.bot) ? 'bots' : 'mixed') : 'human';
+        const mapCompositions = s.compositions[l.map] ??= {};
+        const breakdown = mapCompositions[composition] ??= { rounds: 0, ghosts: 0, defenders: 0, plants: 0, defuses: 0 };
+        breakdown.rounds++;
+        breakdown[l.winner]++;
+        if (l.plant) breakdown.plants++;
+        if (l.defuse) breakdown.defuses++;
         for (const k of l.kills) {
             bump(s.killsByWeapon, k.weapon);
             bump(s.killsByZone, k.zone ?? (k.kind === 'backstab' ? 'back (knife)' : 'front (knife)'));
@@ -118,7 +136,11 @@ export function formatStats(s: Stats): string {
         `Average round: ${s.avgRoundSeconds.toFixed(1)} s of live play; plants in ${pct(s.plants, s.rounds)} of rounds, defuses ${s.defuses}`,
         '', 'Per map:',
         ...Object.entries(s.maps).map(([m, v]) => `  ${m.padEnd(28)} ${String(v.rounds).padStart(5)} rounds, ghosts win ${pct(v.ghosts, v.rounds)}`),
-        '', 'How rounds are won:', ...tallyLines(s.ways, s.rounds),
+        '', 'By map and players:',
+        ...Object.entries(s.compositions).flatMap(([map, compositions]) =>
+            Object.entries(compositions).map(([kind, v]) =>
+                `  ${map} · ${kind}: ${v.rounds} rounds, ghosts ${v.ghosts}, defenders ${v.defenders}, plants ${v.plants}, defuses ${v.defuses}`)),
+        '', 'How rounds are won:' , ...tallyLines(s.ways, s.rounds),
         '', `Kills by weapon (${kills}):`, ...tallyLines(s.killsByWeapon, kills),
         '', 'Kills by body zone:', ...tallyLines(s.killsByZone, kills)
     ];

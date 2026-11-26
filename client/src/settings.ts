@@ -21,6 +21,8 @@ export interface Settings {
     crosshairColor: string;
     crosshairSize: number;
     showStats: boolean;
+    reduceWeaponMotion: boolean;
+    reduceCombatFlashes: boolean;
     quality: Quality;
     /** Crouch, quiet walk and aim: false = hold the key, true = press once to switch on, again to switch off. */
     crouchToggle: boolean;
@@ -33,6 +35,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
     sensitivity: 1, invertY: false, fov: 74, master: 0.8, effects: 1, footsteps: 1,
     crosshairStyle: 'dot', crosshairColor: '#e8eaed', crosshairSize: 4, showStats: false, quality: 'auto',
+    reduceWeaponMotion: false, reduceCombatFlashes: false,
     crouchToggle: false, walkToggle: false, aimToggle: false, aimSensitivity: 1
 };
 
@@ -68,6 +71,8 @@ export function loadSettings(): Settings {
         crosshairColor: typeof raw.crosshairColor === 'string' && /^#[0-9a-f]{6}$/i.test(raw.crosshairColor) ? raw.crosshairColor : d.crosshairColor,
         crosshairSize: Math.round(clamp(raw.crosshairSize, 2, 12, d.crosshairSize)),
         showStats: raw.showStats === true,
+        reduceWeaponMotion: raw.reduceWeaponMotion === true,
+        reduceCombatFlashes: raw.reduceCombatFlashes === true,
         quality: parseQuality(raw.quality),
         crouchToggle: raw.crouchToggle === true,
         walkToggle: raw.walkToggle === true,

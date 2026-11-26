@@ -50,6 +50,19 @@ describe('rooms and maps', () => {
         expect(rooms.rooms.size).toBe(1);
     });
 
+    it('keeps joining an existing code separate from creating a room', () => {
+        const rooms = new Rooms(maps, 'alpha');
+        const join = (intent: 'create' | 'join', map: string | null = null) =>
+            rooms.join('r1', map, new Inbox().conn, '', 0, undefined, undefined, undefined, intent);
+        expect(join('join')).toEqual({ ok: false, reason: 'Unknown room' });
+        expect(rooms.rooms.size).toBe(0);
+        expect(join('create', 'beta')).toMatchObject({ ok: true, created: true });
+        expect(join('create')).toEqual({ ok: false, reason: 'Room code taken' });
+        expect(join('join')).toMatchObject({ ok: true, created: false });
+        expect(rooms.rooms.get('r1')?.players.size).toBe(2);
+        expect(rooms.rooms.get('r1')?.map.name).toBe('beta');
+    });
+
     it('uses the default map when none is given', () => {
         const rooms = new Rooms(maps, 'alpha');
         const a = new Inbox();

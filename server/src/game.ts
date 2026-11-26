@@ -22,7 +22,7 @@ import {
 } from '../../shared/protocol';
 import {
     BOMB_MS, DEFUSE_TICKS, FREEZE_MS, GRACE_MS, IDLE_ROUNDS, MATCH_OVER_MS, OVER_MS, PLANT_TICKS, ROUND_MS,
-    canAct, movementLocked, type Phase, type RoundReason
+    canAct, movementLocked, weaponsArmed, type Phase, type RoundReason
 } from '../../shared/rules';
 import { applyDamage, type DamageSplit } from '../../shared/armor';
 import { cleanChat } from '../../shared/chat';
@@ -75,6 +75,8 @@ export class Player {
     armor = MAX_ARMOR;
     alive = false;
     respawnAt = 0;
+    spectateId = 0;
+    requestedSpectateId = 0;
     lastSeq = -1;
     credits = MAX_CMD_CREDITS;
     /** The defender's weapons (shared/gun.ts, shared/weapons.ts); reset at every spawn. */
@@ -137,6 +139,7 @@ export class Player {
     // Ring buffer of where this player was on recent ticks, for lag compensation.
     private readonly histTime = new Float64Array(HISTORY).fill(-Infinity);
     private readonly histPos = new Float64Array(HISTORY * 3);
+    private readonly histYaw = new Float64Array(HISTORY);
     private readonly histCrouched = new Uint8Array(HISTORY);
     private histHead = 0;
 
@@ -170,15 +173,21 @@ export class Player {
         return changed;
     }
 
+    resetHistory(time: number): void {
+        this.histTime.fill(-Infinity);
+        this.record(time);
+    }
+
     record(time: number): void {
         const i = this.histHead = (this.histHead + 1) % HISTORY;
         this.histTime[i] = time;
+        this.histYaw[i] = this.yaw;
         this.histPos.set(this.state.pos, i * 3);
         this.histCrouched[i] = this.state.crouched ? 1 : 0;
     }
 
     /** Writes the feet position at `time` into `out` and returns the hull height then. */
-    rewind(time: number, out: Vec3): number {
+    rewind(time: number, out: Vec3, facing?: { yaw: number }): number {
         let newer = this.histHead;
         for (let n = 1; n < HISTORY; n++) {
             const older = (this.histHead - n + HISTORY) % HISTORY;
@@ -190,11 +199,16 @@ export class Player {
                     const o = this.histPos[older * 3 + k];
                     out[k] = o + (this.histPos[newer * 3 + k] - o) * a;
                 }
+                if (facing) {
+                    const delta = this.histYaw[newer] - this.histYaw[older];
+                    facing.yaw = this.histYaw[older] + a * Math.atan2(Math.sin(delta), Math.cos(delta));
+                }
                 return this.histCrouched[a < 0.5 ? older : newer] ? HULL_HEIGHT_CROUCHED : HULL_HEIGHT;
             }
             newer = older;
         }
         for (let k = 0; k < 3; k++) out[k] = this.histPos[newer * 3 + k];
+        if (facing) facing.yaw = this.histYaw[newer];
         return this.histCrouched[newer] ? HULL_HEIGHT_CROUCHED : HULL_HEIGHT;
     }
 }
@@ -414,13 +428,10 @@ export class Game implements BotWorld {
         }
         if (this.kickVote.active) conn.send({ type: 'kickvote', vote: this.kickInfo(player) });
         // Mid-round arrivals wait for the next round rather than appearing behind someone.
-        if (this.phase === 'warmup') this.spawn(player);
+        if (this.phase === 'warmup') this.spawn(player, this.practice && !player.bot);
         if (team === 'ghosts') conn.send(this.ghostBombMsg());
         this.sendRoster();
-        if (!as.brain) {
-            if (this.practice) this.setUpPractice(player);
-            else this.fillWithBots(this.phase === 'warmup');
-        }
+        if (!as.brain && !this.practice) this.fillWithBots(this.phase === 'warmup');
         return id;
     }
 
@@ -518,10 +529,9 @@ export class Game implements BotWorld {
     }
 
     /** The practice range: targets on the other side, placed where the person can see them from their spawn. */
-    private setUpPractice(person: Player): void {
+    private setUpPractice(person: Player, posts: { pos: Vec3; yaw: number }[]): void {
         for (const p of [...this.players.values()]) if (p.bot) this.leave(p.id);
         const targets: Team = person.team === 'ghosts' ? 'defenders' : 'ghosts';
-        const posts = this.practicePosts(person.team);
         for (let i = 0; i < posts.length; i++) {
             this.addBot(targets, i < PRACTICE_STATIC ? 'target-static' : 'target-moving', posts[i]);
         }
@@ -531,21 +541,24 @@ export class Game implements BotWorld {
      * Up to five places 6 to 28 m from the person's spawn, in its view (eye to chest clear), spread apart,
      * each facing the spawn. Falls back to places in reach without a clear view on a map that has too few.
      */
-    private practicePosts(team: Team): { pos: Vec3; yaw: number }[] {
+    private practicePosts(from: Vec3, yaw: number): { pos: Vec3; yaw: number }[] {
         const nav = this.nav;
         if (!nav) return [];
-        const from = this.map.spawns[team][0].pos;
+        const forwardX = -Math.sin(yaw), forwardZ = -Math.cos(yaw), centerThreshold = Math.cos(Math.PI / 8);
         const eye: Vec3 = [from[0], from[1] + EYE_HEIGHT, from[2]];
         const chest: Vec3 = [0, 0, 0];
-        const candidates: { n: number; d: number; seen: boolean }[] = [];
+        const candidates: { n: number; d: number; seen: boolean; centered: boolean }[] = [];
         for (let n = 0; n < nav.count; n++) {
             const d = nav.flatDist(n, from[0], from[2]);
             if (d < 6 || d > 28 || Math.abs(nav.y[n] - from[1]) > 3) continue;
             chest[0] = nav.x[n]; chest[1] = nav.y[n] + 1.2; chest[2] = nav.z[n];
-            candidates.push({ n, d, seen: this.clearLine(eye, chest) });
+            const forward = ((chest[0] - from[0]) * forwardX + (chest[2] - from[2]) * forwardZ) / d;
+            candidates.push({ n, d, seen: this.clearLine(eye, chest), centered: forward > centerThreshold });
         }
         candidates.sort((a, b) => Number(b.seen) - Number(a.seen) || a.d - b.d || a.n - b.n);
-        const chosen: number[] = [];
+        // The first stationary target should be immediately recognizable in the starting view.
+        const first = candidates.find(c => c.seen && c.centered);
+        const chosen: number[] = first ? [first.n] : [];
         for (const minGap of [4, 2.5, 1.2]) {
             for (const c of candidates) {
                 if (chosen.length >= PRACTICE_STATIC + PRACTICE_MOVING) break;
@@ -598,6 +611,11 @@ export class Game implements BotWorld {
         if (msg.type !== 'cmd') this.observer?.message?.(this, p, msg);
         switch (msg.type) {
             case 'cmd': this.handleCmd(id, msg.cmd); break;
+            case 'spectate': {
+                const target = this.players.get(msg.target);
+                if (!p.alive && this.phase !== 'warmup' && target?.alive && target.team === p.team) p.requestedSpectateId = target.id;
+                break;
+            }
             case 'ready':
                 if (this.phase !== 'warmup' || p.ready === msg.ready) break;
                 p.ready = msg.ready;
@@ -646,10 +664,9 @@ export class Game implements BotWorld {
         p.group = (1 - p.group) as 0 | 1;
         p.team = this.teamOf(p.group);
         this.observer?.teamChange?.(this, p);
-        this.spawn(p);
+        this.spawn(p, this.practice);
         this.sendRoster();
-        if (this.practice) this.setUpPractice(p); // the targets change sides with the person
-        else this.fillWithBots(true);
+        if (!this.practice) this.fillWithBots(true);
     }
 
     private humanTeamCounts(): Record<Team, number> {
@@ -758,15 +775,20 @@ export class Game implements BotWorld {
         victim.hurtBy.clear();
     }
 
-    private spawn(p: Player): void {
+    private spawn(p: Player, resetPractice = false): void {
         const spawns = this.map.spawns[p.team];
         const spawn = p.spawnAt ?? spawns[this.spawnCursor[p.team]++ % spawns.length];
         p.state = createPlayerState(spawn.pos);
         p.yaw = (spawn.yaw * Math.PI) / 180;
+        const posts = resetPractice ? this.practicePosts(spawn.pos, p.yaw) : null;
+        const first = posts?.[0];
+        if (first) p.yaw = Math.atan2(spawn.pos[0] - first.pos[0], spawn.pos[2] - first.pos[2]);
         p.pitch = 0;
         p.health = MAX_HEALTH;
         p.armor = MAX_ARMOR;
         p.alive = true;
+        p.spectateId = 0;
+        p.requestedSpectateId = 0;
         resetKnife(p.knife);
         // The chosen sight becomes active here and only here; others see it through the roster.
         if (p.loadout.sight !== p.sightPending) this.rosterDirty = true;
@@ -778,8 +800,10 @@ export class Game implements BotWorld {
         p.actionTicks = 0;
         p.respawnAt = 0;
         p.vis = p.team === 'ghosts' ? 0 : 1;
+        p.resetHistory(this.now);
         this.observer?.spawn?.(this, p);
         p.conn.send({ type: 'spawn', pos: spawn.pos, yaw: p.yaw, sight: p.loadout.sight });
+        if (posts) this.setUpPractice(p, posts);
     }
 
     /** Simulates one client command. Called as commands arrive, so each client drives its own clock. */
@@ -795,7 +819,7 @@ export class Game implements BotWorld {
         p.lastSeq = cmd.seq;
         this.observer?.cmd?.(this, p, cmd);
         this.trackInput(p, cmd);
-        if (!p.alive) return;
+        if (!p.alive || cmd.observerOnly) return;
 
         cmd.forward = clamp(cmd.forward, -1, 1);
         cmd.right = clamp(cmd.right, -1, 1);
@@ -835,9 +859,8 @@ export class Game implements BotWorld {
             }
         }
 
-        // Weapon timers run on every processed command; the trigger acts only outside the freeze
-        // and with free hands. The client runs the same steps with the same inputs.
-        const armed = !acting && this.phase !== 'freeze';
+        // Weapon timers still advance while combat is locked. Use the same phase rule for prediction.
+        const armed = weaponsArmed(this.phase, acting);
         if (p.team === 'defenders') {
             const r = stepLoadout(p.loadout, cmd, armed);
             if (this.practice) fillReserves(p.loadout); // after the step, so it always shows full; the client does the same (welcome.practice)
@@ -878,11 +901,22 @@ export class Game implements BotWorld {
         p.actionTicks = 0;
     }
 
+    /** A live body, or the living teammate behind the spectator camera. An empty team has no eyes or ears. */
+    private viewpoint(p: Player): Player | undefined {
+        if (p.alive) return p;
+        if (this.phase === 'warmup') return undefined;
+        const follow = this.players.get(p.spectateId);
+        if (follow?.alive && follow.team === p.team) return follow;
+        for (const mate of this.players.values()) if (mate.team === p.team && mate.alive) return mate;
+        return undefined;
+    }
+
     /** Sends a sound only to players close enough to hear it. */
     private emitSound(source: Player, kind: SoundEvent['kind'], loud: number, range: number, weapon?: number, empty = false): void {
         let event: SoundEvent | undefined;
         for (const p of this.players.values()) {
-            if (p === source || dist(p.state.pos, source.state.pos) > range) continue;
+            const view = this.viewpoint(p);
+            if (p === source || !view || dist(view.state.pos, source.state.pos) > range) continue;
             if (!event) {
                 event = { type: 'sound', kind, id: source.id, pos: [...source.state.pos] as Vec3, loud };
                 if (weapon !== undefined) event.weapon = weapon;
@@ -917,7 +951,8 @@ export class Game implements BotWorld {
         const b = this.dropped;
         for (const p of this.players.values()) {
             if (p.team !== 'defenders') continue;
-            const sees = b !== null && this.lineClear(p.state.pos[0], p.eyeY, p.state.pos[2], b[0], b[1] + BOMB_SIGHT_HEIGHT, b[2]);
+            const view = this.viewpoint(p);
+            const sees = view && b !== null && this.lineClear(view.state.pos[0], view.eyeY, view.state.pos[2], b[0], b[1] + BOMB_SIGHT_HEIGHT, b[2]);
             const shown = sees ? b : null;
             if (shown === p.bombShown) continue;
             p.bombShown = shown;
@@ -929,7 +964,8 @@ export class Game implements BotWorld {
     private emitBombSound(kind: 'bombDrop' | 'bombPickup', pos: Vec3, source: Player): void {
         let ghostEv: SoundEvent | undefined, defenderEv: SoundEvent | undefined;
         for (const p of this.players.values()) {
-            if (p === source || dist(p.state.pos, pos) > BOMB_SOUND_RANGE) continue;
+            const view = this.viewpoint(p);
+            if (p === source || !view || dist(view.state.pos, pos) > BOMB_SOUND_RANGE) continue;
             if (p.team === 'ghosts') p.conn.send(ghostEv ??= { type: 'sound', kind, id: source.id, pos: [...pos] as Vec3, loud: BOMB_SOUND_LOUD });
             else p.conn.send(defenderEv ??= { type: 'sound', kind, id: 0, pos: [...pos] as Vec3, loud: BOMB_SOUND_LOUD });
         }
@@ -1011,9 +1047,9 @@ export class Game implements BotWorld {
     }
 
     /** Places `hmin`/`hmax` around where `other` stood at `time` (lag compensation). */
-    private rewoundHull(other: Player, time: number): void {
+    private rewoundHull(other: Player, time: number, facing?: { yaw: number }): void {
         const { feet, hmin, hmax } = this;
-        const height = other.rewind(time, feet);
+        const height = other.rewind(time, feet, facing);
         hmin[0] = feet[0] - HULL_HALF_WIDTH; hmax[0] = feet[0] + HULL_HALF_WIDTH;
         hmin[1] = feet[1];                   hmax[1] = feet[1] + height;
         hmin[2] = feet[2] - HULL_HALF_WIDTH; hmax[2] = feet[2] + HULL_HALF_WIDTH;
@@ -1083,10 +1119,12 @@ export class Game implements BotWorld {
         const from = event.from;
         let silent: ShotEvent | undefined, bare: ShotEvent | undefined, bareSilent: ShotEvent | undefined;
         for (const p of this.players.values()) {
-            const involved = p === shooter || p === victim;
-            const heard = involved || dist(p.state.pos, shooter.state.pos) <= range;
-            if (!heard && !this.lineClear(p.state.pos[0], p.eyeY, p.state.pos[2], from[0], from[1], from[2])) continue;
-            if (!victim || involved || this.knowsAbout(p, victim, true)) {
+            const view = p === victim ? p : this.viewpoint(p); // a lethal hit still reaches its victim
+            if (!view) continue;
+            const involved = view === shooter || view === victim;
+            const heard = involved || dist(view.state.pos, shooter.state.pos) <= range;
+            if (!heard && !this.lineClear(view.state.pos[0], view.eyeY, view.state.pos[2], from[0], from[1], from[2])) continue;
+            if (!victim || involved || this.knowsAbout(view, victim, true)) {
                 p.conn.send(heard ? event : (silent ??= { ...event, silent: true }));
                 continue;
             }
@@ -1095,6 +1133,7 @@ export class Game implements BotWorld {
         }
     }
 
+    private readonly meleeFacing = { yaw: 0 };
 
     /**
      * Resolves a knife swing, a ghost's or a defender's: the nearest enemy inside the reach and cone,
@@ -1106,10 +1145,11 @@ export class Game implements BotWorld {
         this.aimFrom(attacker, cmd);
         const viewTime = clamp(cmd.viewTime, this.now - MAX_REWIND_MS, this.now);
         let best = KNIFE_RANGE;
+        let victimYaw = 0;
         let victim: Player | undefined;
         for (const other of this.players.values()) {
             if (other === attacker || !other.alive || other.team === attacker.team) continue;
-            this.rewoundHull(other, viewTime);
+            this.rewoundHull(other, viewTime, this.meleeFacing);
             // Nearest point of the victim's hull to the knife hand.
             for (let k = 0; k < 3; k++) target[k] = clamp(eye[k], hmin[k], hmax[k]) - eye[k];
             const d = Math.hypot(target[0], target[1], target[2]);
@@ -1122,12 +1162,13 @@ export class Game implements BotWorld {
             }
             best = d;
             victim = other;
+            victimYaw = this.meleeFacing.yaw;
         }
 
         const event: SlashEvent = { type: 'slash', attacker: attacker.id, pos: [...attacker.state.pos] as Vec3 };
         if (victim) {
             // From behind: attacker and victim are facing roughly the same way.
-            const backstab = Math.cos(cmd.yaw - victim.yaw) > 0.5;
+            const backstab = Math.cos(cmd.yaw - victimYaw) > 0.5;
             const defender = attacker.team === 'defenders';
             const amount = backstab
                 ? (defender ? DEFENDER_KNIFE.backstabDamage : KNIFE_BACKSTAB_DAMAGE)
@@ -1142,8 +1183,9 @@ export class Game implements BotWorld {
         // other defenders nearby (a ghost's victim is a defender, whom everyone knows about anyway).
         let bare: SlashEvent | undefined;
         for (const p of this.players.values()) {
-            if (p !== attacker && p !== victim && dist(p.state.pos, attacker.state.pos) > KNIFE_SOUND_RANGE) continue;
-            if (!victim || p === attacker || p === victim || this.knowsAbout(p, victim)) p.conn.send(event);
+            const view = p === victim ? p : this.viewpoint(p);
+            if (!view || (view !== attacker && view !== victim && dist(view.state.pos, attacker.state.pos) > KNIFE_SOUND_RANGE)) continue;
+            if (!victim || view === attacker || view === victim || this.knowsAbout(view, victim)) p.conn.send(event);
             else p.conn.send(bare ??= { type: 'slash', attacker: event.attacker, pos: event.pos });
         }
     }
@@ -1386,10 +1428,20 @@ export class Game implements BotWorld {
                 ...this.weaponView(p)
             });
         }
+        // Apply explicit camera choices on the same snapshot as the teammate and enemy positions.
+        for (const p of this.players.values()) {
+            if (!p.requestedSpectateId) continue;
+            const target = this.players.get(p.requestedSpectateId);
+            if (!p.alive && target?.alive && target.team === p.team) p.spectateId = target.id;
+            p.requestedSpectateId = 0;
+        }
         if (this.dropped) this.updateBombSight(); // defenders gain and lose sight of a dropped bomb as anyone moves
         for (const p of this.players.values()) {
             const players: PlayerSnap[] = [];
-            for (const [other, snap] of snaps) if (other !== p && this.knowsAbout(p, other)) players.push(snap);
+            const view = this.viewpoint(p);
+            for (const [other, snap] of snaps) {
+                if (other !== p && (other.team === p.team || (view && this.knowsAbout(view, other)))) players.push(snap);
+            }
             p.conn.send({
                 type: 'snap', time: this.now, ack: p.lastSeq,
                 me: {
@@ -1397,6 +1449,7 @@ export class Game implements BotWorld {
                     actionTicks: p.actionTicks,
                     pos: p.state.pos, vel: p.state.vel, onGround: p.state.onGround, crouched: p.state.crouched,
                     health: p.health, armor: p.armor, alive: p.alive, respawnAt: p.respawnAt, vis: p.vis, loadout: p.loadout, knife: p.knife,
+                    spectateId: p.alive ? 0 : view?.id ?? 0,
                     carry: p.carry
                 },
                 players

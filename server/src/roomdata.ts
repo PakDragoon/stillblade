@@ -37,7 +37,7 @@ export function guardObserver(inner: GameObserver, onError: (err: unknown) => vo
 /** The part of `DataStore` a room uses (tests pass one that keeps everything in memory). */
 export interface RoomDataStore {
     openRecording(base: string): RecordingSink;
-    appendMatchLine(file: string, line: () => string): void;
+    appendMatchLine(file: string, line: () => string | Promise<string>): void;
     warn(kind: string, msg: string): void;
 }
 
@@ -52,7 +52,14 @@ export interface RoomDataOptions {
 export function roomObserver(store: RoomDataStore, opts: RoomDataOptions): GameObserver {
     const recorder = opts.record ? new Recorder(base => store.openRecording(base), opts.commit) : null;
     const log = new MatchLog(
-        (month, line) => store.appendMatchLine(`${month}.jsonl`, () => JSON.stringify(line)),
+        (month, line) => {
+            // A recording's number can change while the filesystem reserves its name. Attach the
+            // published name to the summary only after gzip and the final link have succeeded.
+            const published = line.type !== 'round' ? recorder?.publication : undefined;
+            store.appendMatchLine(`${month}.jsonl`, published
+                ? async () => JSON.stringify({ ...line, recording: await published })
+                : () => JSON.stringify(line));
+        },
         () => Date.now(),
         () => recorder?.current ?? null
     );

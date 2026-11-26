@@ -7,7 +7,7 @@ import {
 import { copyKnifeState, createKnifeState, resetKnife, sameKnifeState, stepKnife } from '../../shared/knife';
 import { copyPlayerState, createPlayerState, stepPlayer } from '../../shared/movement';
 import { decodeClient, decodeServer, encodeClient, encodeServer, type NetCmd, type ServerMsg, type Wire } from '../../shared/protocol';
-import { PLANT_TICKS, canAct, movementLocked, type Phase } from '../../shared/rules';
+import { FREEZE_MS, PLANT_TICKS, canAct, gateWeaponInput, movementLocked, type Phase } from '../../shared/rules';
 import type { MapData, Vec3 } from '../../shared/types';
 import { SLOT_KNIFE, SLOT_PISTOL, SLOT_RIFLE } from '../../shared/weapons';
 import { Game } from './game';
@@ -68,7 +68,7 @@ function playThrough(opts: {
         (game as unknown as { damage(v: unknown, amount: number, by: unknown, kind: 'knife'): boolean })
             .damage(game.players.get(id), 1000, game.players.get(ghostId), 'knife');
     };
-    let sightIndex = 0, lifeAt = 0, spawnHeardAt = -1e9;
+    let sightIndex = 0, lifeAt = 0;
 
     const curr = createPlayerState([0, 0, 0]);
     const loadout = createLoadout();
@@ -97,11 +97,11 @@ function playThrough(opts: {
             const raw = down.shift()!.wire;
             const msg = decodeServer(typeof raw === 'string' ? raw : raw);
             if (msg.type === 'spawn') {
+                pending.length = 0;
                 copyPlayerState(curr, createPlayerState(msg.pos));
                 yaw = Math.fround(msg.yaw);
                 alive = true;
                 resetLoadout(loadout, msg.sight);
-                spawnHeardAt = tick;
                 result.spawns++;
                 result.spawnSights.push(msg.sight);
             } else if (msg.type === 'snap') {
@@ -117,8 +117,9 @@ function playThrough(opts: {
                 copyLoadout(before, loadout);
                 copyLoadout(loadout, msg.me.loadout);
                 for (const c of pending) {
+                    if (!c.live) continue;
                     stepPlayer(curr, c, TICK_DT, map.boxes);
-                    if (c.live) stepLoadout(loadout, c, c.armed);
+                    stepLoadout(loadout, c, c.armed);
                 }
                 if (!sameLoadout(loadout, before)) result.gunMismatches++;
                 if (!sameKnifeState(loadout.knife, before.knife)) result.knifeMismatches++;
@@ -154,18 +155,12 @@ function playThrough(opts: {
         }
         yaw = Math.fround(yaw + (rand() - 0.5) * 0.02);
         const r = rand();
-        // Dead (as far as the client knows): hands off everything, like the scripts around phase edges. The server
-        // simulates commands sent just before the client hears of its respawn; idle ones step nothing.
-        // Just respawned: also still for one round trip. A warmup respawn has a known edge (HANDOFF.md, Known
-        // problems): the server has already landed the new body with those idle commands while the client starts
-        // from the airborne spawn state, so the first move after it is corrected once. Not a sight rule.
-        const settling = tick - spawnHeardAt < opts.upTicks + opts.downTicks + 2 && result.spawns > 1;
-        if (!alive || settling) { fireHold = 0; aimHold = 0; moveHold = 0; forward = 0; right = 0; crouch = false; }
+        // Keep generating controls even while dead. Late observer commands must not move the newly spawned body.
         const cmd: Pending = {
-            seq, forward, right, yaw, pitch: Math.fround(0.5 + rand() * 0.2), jump: alive && !settling && rand() < 0.01, walk: rand() < 0.2, crouch,
+            seq, forward, right, yaw, pitch: Math.fround(0.5 + rand() * 0.2), jump: rand() < 0.01, walk: rand() < 0.2, crouch,
             fire: fireHold > 0, use: false, reload: alive && rand() < 0.01,
             slot: !alive ? 0 : r < 0.006 ? 1 : r < 0.012 ? 2 : r < 0.018 ? 3 : r < 0.019 ? 7 : 0, swap: alive && rand() < 0.005, aim: aimHold > 0,
-            drop: seq % 97 === 0, viewTime: game.now, live: alive, armed: true
+            drop: seq % 97 === 0, viewTime: game.now, live: alive, observerOnly: !alive, armed: true
         };
         seq += opts.seqJump ? opts.seqJump() : 1;
         pending.push(cmd);
@@ -515,4 +510,44 @@ describe('client prediction of the bomb carrier through the wire', () => {
         expect(r.posMismatches).toBe(0);
         expect(r.carryMismatches).toBe(0);
     });
+});
+
+
+it('keeps a held rifle trigger silent through the delayed freeze and matches every live shot', () => {
+    const game = new Game(map);
+    game.join({ send: () => {} });
+    const down: { at: number; phase: Phase }[] = [];
+    const up: { at: number; wire: Wire }[] = [];
+    const authoritativeShots: number[] = [];
+    const predictedShots: number[] = [];
+    let phase: Phase = 'freeze';
+    let tick = 0;
+    const id = game.join({ send: m => {
+        if (m.type === 'round') down.push({ at: tick + 5, phase: m.phase });
+        if (m.type === 'shot' && m.shooter === id) authoritativeShots.push(tick - 4);
+    } });
+    const loadout = createLoadout();
+    for (tick = 1; tick < FREEZE_MS / TICK_MS + 100; tick++) {
+        game.tick(tick * TICK_MS);
+        while (down.length && down[0].at <= tick) {
+            const seen = down.shift()!.phase;
+            if (seen !== 'warmup') phase = seen;
+        }
+        if (tick < 20) continue; // already in freeze, then hold both aim and fire through the transition
+        const cmd: NetCmd = {
+            seq: tick, forward: 0, right: 0, yaw: Math.fround(Math.PI), pitch: 1, jump: false,
+            walk: false, crouch: false, fire: true, use: false, reload: false,
+            slot: 0, swap: false, aim: true, drop: false, viewTime: game.now
+        };
+        const armed = gateWeaponInput(cmd, phase, false);
+        if (stepLoadout(loadout, cmd, armed) >= 0) predictedShots.push(tick);
+        if (tick < FREEZE_MS / TICK_MS + 90) up.push({ at: tick + 4, wire: encodeClient({ type: 'cmd', cmd }) });
+        while (up.length && up[0].at <= tick) {
+            const msg = decodeClient(up.shift()!.wire);
+            if (msg.type === 'cmd') game.handleCmd(id, msg.cmd);
+        }
+    }
+    expect(predictedShots[0]).toBeGreaterThan(FREEZE_MS / TICK_MS + 1);
+    expect(authoritativeShots.length).toBeGreaterThan(0);
+    expect(authoritativeShots).toEqual(predictedShots.filter(t => t < FREEZE_MS / TICK_MS + 90));
 });

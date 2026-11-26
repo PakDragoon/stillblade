@@ -365,6 +365,29 @@ Clean up old images after a few updates, to save disk space:
 docker image prune -f
 ```
 
+#### Releasing a client/server protocol change
+
+Reserve a window with no active matches. The Cloudflare integration publishes the client from `main` automatically, while the game container updates separately. Only merge a protocol-changing release when the server operator is ready to update the container in the same window.
+
+After the merge, on the game VPS:
+
+```bash
+cd ~/stillblade
+git switch main
+git pull --ff-only
+cd deploy
+SB_COMMIT=$(git rev-parse HEAD) docker compose up -d --build game
+docker compose ps
+```
+
+After Cloudflare publishes the client, check the deployed pair from the project directory on a machine with the repo dependencies installed:
+
+```bash
+node tools/release-smoke.mjs https://stillblade-server.orcavalley.com https://stillblade.orcavalley.com https://stillblade.orcavalley.com/version.json
+```
+
+This checks the client build stamp, server protocol and revision, persistence status and an actual practice-room WebSocket welcome. If they differ, check the Cloudflare deploy revision and the game's container logs. Reloading the page is useful after both sides are updated. If rolling back, restore the matching client and server releases together. Leave the data volume intact.
+
 #### The data folder (package W)
 
 Everything the game server keeps is in one folder on the server, `~/stillblade/deploy/data`, mounted into the container at `/data`, so it survives every rebuild:
@@ -379,7 +402,7 @@ The folder must exist and belong to user id 1000 before the first start (the con
 mkdir -p data && sudo chown 1000:1000 data
 ```
 
-If it is wrong, the server still runs, and its log says `[data] data folder /data cannot be created or written`.
+The server checks write access at startup. If a write or cleanup fails, gameplay can stay up while `GET /health` reports `"persistence":"degraded"`. Inspect the `[data]` log, fix the mount or permissions and restart to recheck startup write access. Health also reports the server commit and wire protocol.
 
 To put the commit in the recordings' headers, start with (instead of the plain `docker compose up -d --build`):
 
@@ -428,6 +451,10 @@ Check that a recording replays exactly (it must be replayed with the code it was
 ```powershell
 npx tsx tools/replay.ts vps-data/recordings/2026-11-20-public-1.sbrec.gz
 ```
+
+An active recording has a `.partial` suffix until gzip closes successfully. Downloads skip active recordings, verify completed gzip files and repair corrupt local copies when the source still exists. To rehearse recovery, pull into a separate folder with `--out`, then replay a match from that folder using the commit named in its header.
+
+The server sweeps retention at startup, hourly and after recordings close. Copies on your PC are separate and never auto-expire. Store them privately and delete recordings and match files from each backup using the same retention policy as the server. Keep feedback only as long as needed to review it.
 
 Another server: add `--host user@address` (or set `SB_VPS_HOST`) and, if the folder is elsewhere, `--dir path/to/data` (relative to that login's home). `--local data` reads a data folder on this PC instead (a local server writes to `data/`).
 

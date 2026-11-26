@@ -25,7 +25,7 @@ import { SIGHTS } from '@shared/weapons';
  * public room with space (Quick play), `room` being empty then.
  */
 export interface JoinChoice {
-    name: string; room: string; map: string; options?: RoomOptions; quick?: boolean;
+    name: string; room: string; map: string; intent?: 'join' | 'create'; options?: RoomOptions; quick?: boolean;
     /** The practice range, on this side: a private room of one's own with targets (the server makes a fresh one). */
     practice?: Team;
 }
@@ -367,6 +367,7 @@ export class Ui {
             e.preventDefault();
             const c = code.value.trim();
             if (!c) { joinErr.textContent = 'Enter the room code your friend sent you.'; code.focus(); return; }
+            if (!/^[a-z0-9-]{1,24}$/i.test(c)) { joinErr.textContent = 'Use the letters, numbers and hyphens from the room code.'; code.focus(); return; }
             go(c, '');
         });
         const rfoot = footer(rooms);
@@ -431,7 +432,7 @@ export class Ui {
         const item = (cls: string, t: string, d: string): void => { h('dt', cls, t, dl); h('dd', '', d, dl); };
         item('g', 'Ghosts', 'Invisible while still, carrying only a knife. Plant the bomb on a site, then keep it alive until it blows.');
         item('d', 'Defenders', 'Always visible, armed with guns. You cannot see a standing ghost: follow footsteps, breathing and the knife windup.');
-        item('', 'Rounds', 'Four seconds to set up, two minutes to play. The first side to win six rounds wins the match (a room can choose three or nine instead); sides swap one round before the end.');
+        item('', 'Rounds', 'Four seconds to set up, two minutes to play. In a first-to-six match, teams swap sides after five completed rounds. First-to-three rooms swap after two rounds and first-to-nine rooms after eight.');
         const keys = bindings().value;
         item('', 'Keys', `Move ${hintText(keys, 'forward')} ${hintText(keys, 'left')} ${hintText(keys, 'back')} ${hintText(keys, 'right')}, attack ${hintText(keys, 'fire')}, aim ${hintText(keys, 'aim')}, reload ${hintText(keys, 'reload')}, plant or defuse ${hintText(keys, 'use')}. You can change every key in Settings.`);
         const hfoot = footer(how);
@@ -466,7 +467,8 @@ export class Ui {
             const active = pages.find(p => p.dataset.page === nav.page);
             const first = nav.page === 'home' ? (defaults.room ? invite : name)
                 : nav.page === 'rooms' ? code
-                : active?.querySelector<HTMLElement>('select, button.primary');
+                : nav.page === 'settings' ? this.settingsPanel.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+                : active?.querySelector<HTMLElement>('select, button.primary, button');
             setTimeout(() => first?.focus(), 0);
         };
         const open = (id: PageId): void => {
@@ -486,6 +488,7 @@ export class Ui {
                 const n = name.value.trim();
                 try { localStorage.setItem('sb-name', n); localStorage.setItem('sb-howto', '1'); } catch { /* not remembered */ }
                 const choice: JoinChoice = { name: n, room, map: mapId, options, quick: quickPlay };
+                if (room) choice.intent = options ? 'create' : 'join';
                 if (practiceSide) choice.practice = practiceSide;
                 this.menuBack = null;
                 resolve(choice);
@@ -536,17 +539,19 @@ export class Ui {
         this.prepFill.style.width = `${(Math.min(1, Math.max(0, fraction)) * 100).toFixed(1)}%`;
     }
 
-    showError(title: string, message: string, canRetry = true): void {
+    showError(title: string, message: string, canRetry = true, reload = false): void {
         this.hideScreens();
         this.error.replaceChildren();
         const c = h('div', 'card', '', this.error);
         h('h2', '', title, c);
         h('p', '', message, c);
         const row = h('div', 'row', '', c);
-        if (canRetry) button('Try again', 'primary', row, () => this.hooks.retry());
+        if (reload) button('Reload game', 'primary', row, () => location.reload());
+        else if (canRetry) button('Try again', 'primary', row, () => this.hooks.retry());
         button('Back to menu', '', row, () => this.hooks.backToMenu());
         this.error.classList.add('open');
         this.hint.style.display = 'none';
+        row.querySelector('button')?.focus();
     }
 
     /** The match is on: hides the pre-game screens and shows the lobby while the room is in warmup. */
@@ -947,8 +952,8 @@ export class Ui {
             b.tabIndex = id === this.settingsTab ? 0 : -1;
             b.addEventListener('keydown', e => {
                 const i = names.findIndex(n => n[0] === id);
-                const to = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : -1;
-                if (to < 0) return;
+                if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+                const to = e.key === 'ArrowRight' ? i + 1 : i - 1;
                 e.preventDefault();
                 this.settingsTab = names[(to + names.length) % names.length][0];
                 this.renderSettings();
@@ -979,7 +984,7 @@ export class Ui {
         r.addEventListener('input', () => { const v = Number(r.value); out.textContent = fmt(v); s.set(key, v); });
     }
 
-    private toggle(grid: HTMLElement, label: string, key: 'invertY' | 'showStats'): void {
+    private toggle(grid: HTMLElement, label: string, key: 'invertY' | 'showStats' | 'reduceWeaponMotion' | 'reduceCombatFlashes'): void {
         const s = this.settings;
         const c = h('div', 'ctl check', '', grid);
         const l = h('label', '', label, c);
@@ -1044,6 +1049,11 @@ export class Ui {
         const g = h('div', 'grid', '', body);
         this.qualityControl(g);
         this.slider(g, 'Field of view', 'fov', 60, 110, 1, v => `${v}°`);
+        h('h3', 'group', 'Comfort', body);
+        const comfort = h('div', 'grid', '', body);
+        this.toggle(comfort, 'Reduce weapon motion', 'reduceWeaponMotion');
+        this.toggle(comfort, 'Reduce combat flashes', 'reduceCombatFlashes');
+        h('p', 'dim small', 'Reduce decorative sway and shake, or hide muzzle flashes and the bomb’s explosion flash.', body);
         h('h3', 'group', 'Crosshair', body);
         const grid = h('div', 'grid', '', body);
         this.select(grid, 'Style', 'crosshairStyle', [['dot', 'Dot'], ['cross', 'Cross'], ['ring', 'Ring']]);

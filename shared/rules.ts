@@ -60,3 +60,18 @@ export function movementLocked(
 ): boolean {
     return phase === 'freeze' || (use && canAct(team, phase, state, map, bomb, carrier));
 }
+
+/** Attacks and new reloads are locked during freeze, round results and objective interactions. */
+export function weaponsArmed(phase: Phase, acting: boolean): boolean {
+    return !acting && phase !== 'freeze' && phase !== 'over';
+}
+
+/** Mask the delayed client's trigger and reload intent before prediction and transmission. */
+export function gateWeaponInput(input: { fire: boolean; reload: boolean }, phase: Phase, acting: boolean): boolean {
+    const armed = weaponsArmed(phase, acting);
+    if (!armed) {
+        input.fire = false;
+        input.reload = false;
+    }
+    return armed;
+}

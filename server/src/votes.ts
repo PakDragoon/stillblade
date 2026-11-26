@@ -99,6 +99,12 @@ export class Bans {
         if (k) this.names.set(k, now + ms);
     }
 
+    prune(now: number): void {
+        for (const entries of [this.ips, this.names]) {
+            for (const [key, until] of entries) if (until <= now) entries.delete(key);
+        }
+    }
+
     isBanned(ip: string | undefined, name: string, now: number): boolean {
         const byIp = ip ? this.ips.get(ip) : undefined;
         const byName = this.names.get(Bans.key(name));

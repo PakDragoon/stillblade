@@ -43,6 +43,10 @@ describe('package W: reading match records', () => {
         expect(s.killsByZone).toEqual({ 'back (knife)': 1, head: 1, torso: 1 });
         expect(s.plants).toBe(1);
         expect(s.botRounds).toBe(1);
+        expect(s.compositions.warehouse).toEqual({
+            human: { rounds: 1, ghosts: 1, defenders: 0, plants: 1, defuses: 0 },
+            mixed: { rounds: 1, ghosts: 0, defenders: 1, plants: 0, defuses: 0 }
+        });
     });
 
     it('prints a feedback line readably', () => {

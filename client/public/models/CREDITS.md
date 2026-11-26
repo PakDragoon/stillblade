@@ -45,24 +45,24 @@ atlas; first-person arms cut from the same meshes.
 
 ### The knife and its first-person hands (Fab Standard License, package V)
 
-**"Knife FPS Animations"** on Fab by **[SELLER NAME]** (the owner fills in the seller's name; it is not in the
-download) (downloaded by the owner as `knife_fps_animations.unitypackage`, a Unity package; free under the Fab Standard
-License, which allows using it inside a game but not redistributing the source files). Used since package V
+[**Knife FPS Animations**](https://www.fab.com/listings/ccff0d84-8219-4daf-9859-348b393b3d83) by
+**Artem Dubinin’s Projects** (Unity source downloaded as `knife_fps_animations.unitypackage` under the
+[Fab Standard License](https://www.fab.com/eula)). Used since package V
 (2026-11-20): **its karambit "ViperFANG"** (the knife of defenders and ghosts in both views: the full 4,300-triangle
 model in first person, reduced to 800 triangles in third person, placed in the hand as the pack's own hand holds it),
 **its first-person hands** (`Hands_rig`: gloves and sleeves on its own skeleton and bind pose; faces the pack's camera
 never sees are left out; recoloured: coyote gloves and orange sleeves for defenders, dark ones for ghosts), **its clips**
-idle, quick_draw and swing_0 to swing_3 as authored, resampled to the game's 0.3 s draw and 0.2 s swing windup, and
-**its four swing recordings** (`SW_Swing_0` to `3`, as the knife slash sound: `client/public/audio/knife_slash_*.mp3`).
-Its 2k colour, normal and occlusion-roughness-metal maps are resampled into our knife atlas. Not used: its draw,
-holster, inspect, sprint and heavy-stab clips, its other sounds, its C# scripts, scenes and 4k textures. The download
+idle, quick_draw and swing_0 to swing_3 as authored, resampled to the game's 0.3 s draw and 0.2 s swing windup.
+Its 2k colour, normal and occlusion-roughness-metal maps are resampled into our knife atlas. The client synthesizes
+the swing sound because the Fab listing identifies the pack's stock audio as demonstration placeholders. The pack's
+draw, holster, inspect, sprint and heavy-stab clips, C# scripts, scenes and 4k textures stay in the source package. The download
 stays in the git-ignored `tools/blender/source-art/realistic/fp-anims/` and must not be committed or redistributed.
 
 ### Attribution (CC-BY)
 
-The game's weapons are made from these models, downloaded by the owner from Fab (fab.com) on 2026-11-17, each listed
-there under a Creative Commons Attribution licence (the licence version was not checked by the build session; see each
-listing):
+The models currently used below are listed on Fab under CC-BY. [Fab’s CC-BY terms](https://www.fab.com/eula)
+link to [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/). The source
+links and modification details are listed below.
 
 - **"Makarov Pistol (PM)"** by **TaigaForest**: https://www.fab.com/listings/6af98baa-bc87-4a38-ae33-db73ca1c855c (the pistol)
 - **"Tactical Knife"** by **Gerardo Justel**: https://www.fab.com/listings/33452f11-fc65-479e-8d6e-75bf8be1c0ff (the knife until package V; **no longer used**: nothing of it ships since the karambit replaced it)
@@ -116,7 +116,7 @@ in `realistic/`):
 | `realistic/rifle/ak105fbx.zip` (FBX + 4K maps for two materials) | 60,139,447 bytes | SpatialNeglect ("AK-105", CC-BY) | No longer (the rifle until package T; nothing of it ships) |
 | `realistic/pistol/source.zip` (`SM_PM_Ammo_9x18.fbx` + 4K maps) | 82,911,353 bytes | TaigaForest | The pistol |
 | `realistic/knife/tactical_knife_gltf.zip` (glTF + 4K maps) | 26,344,712 bytes | Gerardo Justel | No longer (the knife until package V; nothing of it ships) |
-| `realistic/fp-anims/knife_fps_animations.unitypackage` (Unity package: FBX meshes and clips, 2k and 4k PNG maps, WAV sounds, C# scripts never run) | 177,644,194 bytes | see "The knife and its first-person hands" | The knife in both views, its first-person hands and clips, the knife slash sounds (package V) |
+| `realistic/fp-anims/knife_fps_animations.unitypackage` (Unity package: FBX meshes and clips, 2k and 4k PNG maps, WAV sounds, C# scripts never run) | 177,644,194 bytes | see "The knife and its first-person hands" | The knife in both views, its first-person hands and clips (package V) |
 | `realistic/reddot/red_dot_sight.glb` (4K maps embedded) | 76,141,388 bytes | Gerardo Justel | The red dot |
 | `realistic/scope2x/ar_scope_game_ready_gltf.zip` (glTF, 5 materials, 4K maps) | 56,855,445 bytes | Scape | The 2x sight |
 | `realistic/soldier/fbx_all_assets.zip` (FBX parts) | 34,856,279 bytes | Quantum Assets | The soldier, the ghost and the first-person arms |

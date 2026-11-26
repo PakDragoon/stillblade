@@ -600,6 +600,20 @@ describe('ghost knife', () => {
         expect(D.alive).toBe(false);
     });
 
+    it.each([
+        { shownYaw: 0, turnedYaw: Math.PI, backstab: true },
+        { shownYaw: Math.PI, turnedYaw: 0, backstab: false }
+    ])('classifies melee from the defender facing seen at contact time: $backstab', ({ shownYaw, turnedYaw, backstab }) => {
+        const { game, ghost, defender, run, D } = close();
+        run(3, c => c === defender ? { yaw: shownYaw } : {});
+        const viewTime = game.now;
+        run(KNIFE_WINDUP_TICKS + 1, c =>
+            c === ghost ? { fire: true, viewTime } : { yaw: turnedYaw });
+        expect(D.yaw).toBe(turnedYaw);
+        expect(ghost.slashes().at(-1)).toMatchObject({ victim: defender.id, backstab });
+        expect(D.alive).toBe(!backstab);
+    });
+
     it('cannot be spammed', () => {
         const { ghost, run } = close();
         run(60, c => (c === ghost ? { fire: true } : {}));
@@ -788,5 +802,71 @@ describe('rounds and the bomb', () => {
         game.leave(defender.id);
         run(2, c => (c === ghost ? {} : null));
         expect(ghost.last('round').phase).toBe('warmup');
+    });
+});
+
+describe('round result combat cutoff', () => {
+    it('locks both roles out of attacking after the time decision', () => {
+        const { game, ghost, defender, run, G, D } = setup(makeMap([], -8.5), true);
+        while (game.phase !== 'live') run(1);
+        defender.cmd({ fire: true, pitch: 0.6 });
+        expect(defender.shots()).toHaveLength(1);
+        run(Math.ceil(ROUND_MS / TICK_MS) + 1, present);
+        expect(game.phase).toBe('over');
+        const scores = [structuredClone(G.stats), structuredClone(D.stats)];
+        const mag = D.loadout.guns[SLOT_RIFLE].mag;
+        run(KNIFE_WINDUP_TICKS + 2, c => ({ fire: true, pitch: c === defender ? -0.12 : 0 }));
+        expect(defender.shots()).toHaveLength(1);
+        expect(ghost.slashes()).toHaveLength(0);
+        expect([G.stats, D.stats]).toEqual(scores);
+        expect(D.loadout.guns[SLOT_RIFLE].mag).toBe(mag);
+    });
+});
+
+describe('authoritative teammate spectating', () => {
+    it('makes camera, ghost visibility and footstep delivery follow the same selected teammate', () => {
+        const game = new Game(makeMap(), { rounds: false });
+        const ghost = new Client(game);
+        const spectator = new Client(game);
+        const ghostMate = new Client(game);
+        const close = new Client(game);
+        new Client(game); // keep joins balanced so the next client is a defender as well
+        const far = new Client(game);
+        const spec = game.players.get(spectator.id)!;
+        const G = game.players.get(ghost.id)!;
+        const D1 = game.players.get(close.id)!;
+        const D2 = game.players.get(far.id)!;
+        let t = 0;
+        const snapshot = (): void => { for (let i = 0; i < 2; i++) game.tick(++t * TICK_MS); };
+        game.phase = 'live';
+        spec.alive = false;
+        spec.state.pos[2] = 10;
+        D1.state.pos[2] = 9;
+        D2.state.pos[2] = -30;
+        snapshot();
+        expect(spectator.last('snap').me.spectateId).toBe(close.id);
+        expect(spectator.last('snap').players.map(p => p.id)).toContain(ghost.id);
+        G.stepAccum = 10;
+        ghost.cmd({ right: 1 });
+        expect(spectator.sounds('step')).toHaveLength(1);
+
+        game.handleMessage(spectator.id, { type: 'spectate', target: far.id });
+        snapshot();
+        expect(spectator.last('snap').me.spectateId).toBe(far.id);
+        expect(spectator.last('snap').players.map(p => p.id)).not.toContain(ghost.id);
+        G.stepAccum = 10;
+        ghost.cmd({ right: 1 });
+        expect(spectator.sounds('step')).toHaveLength(1);
+
+        game.handleMessage(spectator.id, { type: 'spectate', target: ghostMate.id });
+        snapshot();
+        expect(spectator.last('snap').me.spectateId).toBe(far.id);
+        game.leave(far.id);
+        snapshot();
+        expect(spectator.last('snap').me.spectateId).toBe(close.id);
+        D1.alive = false;
+        snapshot();
+        expect(spectator.last('snap').me.spectateId).toBe(0);
+        expect(spectator.last('snap').players.map(p => p.id)).not.toContain(ghost.id);
     });
 });

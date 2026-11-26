@@ -62,6 +62,10 @@ export class SlidingLimit {
 
     constructor(private readonly max: number, private readonly windowMs: number) {}
 
+    expired(now: number): boolean {
+        return this.times.length === 0 || now - this.times[this.times.length - 1] >= this.windowMs;
+    }
+
     /** Records an event at `now` (ms) and returns true if it is allowed. A refused one is not recorded. */
     allow(now: number): boolean {
         while (this.times.length > 0 && now - this.times[0] >= this.windowMs) this.times.shift();
@@ -88,10 +92,15 @@ export class ConnectionReportLimit {
 export class IpReportLimits {
     private readonly byIp = new Map<string, SlidingLimit>();
 
+    prune(now: number): number {
+        for (const [ip, limit] of this.byIp) if (limit.expired(now)) this.byIp.delete(ip);
+        return this.byIp.size;
+    }
+
     allow(ip: string, now: number): boolean {
         let l = this.byIp.get(ip);
         if (!l) {
-            if (this.byIp.size > 5000) this.byIp.clear(); // never grow without bound
+            if (this.byIp.size >= 5000 && this.prune(now) >= 5000) return false;
             l = new SlidingLimit(HTTP_PER_WINDOW, HTTP_WINDOW_MS);
             this.byIp.set(ip, l);
         }

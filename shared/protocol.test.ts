@@ -9,12 +9,12 @@ const cmd: NetCmd = {
     jump: true, walk: false, crouch: true, fire: false, use: true, reload: true, slot: 2, swap: true, aim: true, drop: true,
     viewTime: 98765.4321
 };
-/** Self state, loadout (6 with the sight + 7 per gun + 2 for the defender knife), ghost knife (2), bomb repick wait (1), player count (1). */
-const SNAP_HEAD = 76 + 6 + 7 * GUN_COUNT + 2 + 2 + 1 + 1;
+/** Self state, loadout (6 with the sight + 7 per gun + 2 for the defender knife), ghost knife (2), bomb repick wait (1), spectator id (2), player count (1). */
+const SNAP_HEAD = 76 + 6 + 7 * GUN_COUNT + 2 + 2 + 1 + 2 + 1;
 
 describe('wire format', () => {
-    it('is protocol version 17', () => {
-        expect(PROTOCOL_VERSION).toBe(17);
+    it('is protocol version 18', () => {
+        expect(PROTOCOL_VERSION).toBe(18);
     });
 
     it('carries the active sight in the self snapshot exactly, for every sight', () => {
@@ -23,7 +23,7 @@ describe('wire format', () => {
             loadout.sight = sight;
             const back = decodeServer(encodeServer({
                 type: 'snap', time: 0, ack: 1, players: [],
-                me: { team: 'defenders', actionTicks: 0, carry: { carrier: false, wait: 0 }, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, crouched: false, health: 100, armor: 100, alive: true, respawnAt: 0, loadout, knife: createKnifeState() }
+                me: { team: 'defenders', actionTicks: 0, carry: { carrier: false, wait: 0 }, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, crouched: false, health: 100, armor: 100, alive: true, respawnAt: 0, spectateId: 0, loadout, knife: createKnifeState() }
             }) as Uint8Array);
             expect(back.type === 'snap' && back.me.loadout.sight).toBe(sight);
         }
@@ -41,6 +41,14 @@ describe('wire format', () => {
         expect(decodeClient(JSON.stringify({ type: 'sight', sight: 2, pos: [1, 2, 3] }))).toEqual({ type: 'sight', sight: 2 });
     });
 
+    it('validates the spectator target selection', () => {
+        const msg = { type: 'spectate', target: 3 } as const;
+        expect(decodeClient(JSON.stringify(msg))).toEqual(msg);
+        for (const target of [0, -1, 1.5, '1', null, true]) {
+            expect(() => decodeClient(JSON.stringify({ type: 'spectate', target }))).toThrow();
+        }
+    });
+
     it('round-trips a command exactly, in 26 bytes', () => {
         const wire = encodeClient({ type: 'cmd', cmd });
         expect(wire).toBeInstanceOf(Uint8Array);
@@ -50,7 +58,7 @@ describe('wire format', () => {
     });
 
     it('round-trips every command flag on its own', () => {
-        for (const flag of ['jump', 'walk', 'crouch', 'fire', 'use', 'reload', 'swap', 'aim', 'drop'] as const) {
+        for (const flag of ['jump', 'walk', 'crouch', 'fire', 'use', 'reload', 'swap', 'aim', 'drop', 'observerOnly'] as const) {
             const only: NetCmd = {
                 ...cmd, jump: false, walk: false, crouch: false, fire: false, use: false, reload: false, swap: false, aim: false, drop: false,
                 slot: 0, [flag]: true
@@ -86,7 +94,7 @@ describe('wire format', () => {
         for (const armor of [0, 1, 17, 99, 100]) {
             const snap: ServerMsg = {
                 type: 'snap', time: 1, ack: 1,
-                me: { team: 'defenders', actionTicks: 300, carry: { carrier: false, wait: 0 }, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, crouched: false, health: 100 - armor, armor, alive: true, respawnAt: 77.5, loadout: createLoadout(), knife: createKnifeState() },
+                me: { team: 'defenders', actionTicks: 300, carry: { carrier: false, wait: 0 }, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, crouched: false, health: 100 - armor, armor, alive: true, respawnAt: 77.5, spectateId: 0, loadout: createLoadout(), knife: createKnifeState() },
                 players: []
             };
             const back = decodeServer(encodeServer(snap) as Uint8Array);
@@ -104,7 +112,7 @@ describe('wire format', () => {
             me: {
                 team: 'ghosts', actionTicks: 179, vis: 0.35, pos: [1.23456789012345, 0, -19.87654321098765],
                 vel: [5.2, -3.3333333333, 0.000001], onGround: true, crouched: false, health: 66, armor: 37, alive: true,
-                respawnAt: 0,
+                respawnAt: 0, spectateId: 321,
                 loadout: {
                     slot: 1, prev: 0, draw: 24, aim: 12, trigger: 1, sight: 2,
                     guns: [
@@ -167,7 +175,7 @@ describe('wire format', () => {
             loadout.knife.windup = 255 - v; // the defender knife's two counters, independently of the ghost knife's
             const back = decodeServer(encodeServer({
                 type: 'snap', time: 1, ack: 2, players: [],
-                me: { team: 'defenders', actionTicks: 0, carry: { carrier: false, wait: 0 }, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, crouched: false, health: 100, armor: 100, alive: true, respawnAt: 0, loadout, knife: { cooldown: 255 - v, windup: v } }
+                me: { team: 'defenders', actionTicks: 0, carry: { carrier: false, wait: 0 }, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, crouched: false, health: 100, armor: 100, alive: true, respawnAt: 0, spectateId: 0, loadout, knife: { cooldown: 255 - v, windup: v } }
             }) as Uint8Array);
             expect(back.type === 'snap' && back.me.loadout).toEqual(loadout);
             expect(back.type === 'snap' && back.me.knife).toEqual({ cooldown: 255 - v, windup: v });
@@ -177,7 +185,7 @@ describe('wire format', () => {
     it('tells others a defender holds the knife (slot 3)', () => {
         const back = decodeServer(encodeServer({
             type: 'snap', time: 1, ack: 2,
-            me: { team: 'defenders', actionTicks: 0, carry: { carrier: false, wait: 0 }, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, crouched: false, health: 100, armor: 100, alive: true, respawnAt: 0, loadout: createLoadout(), knife: createKnifeState() },
+            me: { team: 'defenders', actionTicks: 0, carry: { carrier: false, wait: 0 }, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, crouched: false, health: 100, armor: 100, alive: true, respawnAt: 0, spectateId: 0, loadout: createLoadout(), knife: createKnifeState() },
             players: [{ id: 3, team: 'defenders', pos: [0, 0, 0], yaw: 0, pitch: 0, crouched: false, alive: true, vis: 1, reloading: false, weapon: SLOT_KNIFE, switching: true, aiming: false }]
         }) as Uint8Array);
         expect(back.type === 'snap' && back.players[0]).toMatchObject({ weapon: SLOT_KNIFE, switching: true });
@@ -200,7 +208,7 @@ describe('wire format', () => {
     it('keeps an acknowledgement of -1 (nothing simulated yet)', () => {
         const back = decodeServer(encodeServer({
             type: 'snap', time: 0, ack: -1, players: [],
-            me: { team: 'defenders', actionTicks: 0, carry: { carrier: false, wait: 0 }, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: false, crouched: false, health: 100, armor: 100, alive: false, respawnAt: 0, loadout: createLoadout(), knife: createKnifeState() }
+            me: { team: 'defenders', actionTicks: 0, carry: { carrier: false, wait: 0 }, vis: 1, pos: [0, 0, 0], vel: [0, 0, 0], onGround: false, crouched: false, health: 100, armor: 100, alive: false, respawnAt: 0, spectateId: 0, loadout: createLoadout(), knife: createKnifeState() }
         }) as Uint8Array);
         expect(back.type === 'snap' && back.ack).toBe(-1);
     });

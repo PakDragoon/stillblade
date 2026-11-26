@@ -501,7 +501,7 @@ export class BotBrain {
      */
     private go(self: BotSelf, nav: NavGraph, goal: Vec3, walk: boolean, lookAhead = true): number {
         const pos = self.state.pos;
-        const remaining = Math.hypot(goal[0] - pos[0], goal[2] - pos[2]);
+        const remaining = Math.hypot(goal[0] - pos[0], goal[1] - pos[1], goal[2] - pos[2]);
         if (!this.hasGoal || flat(goal, this.goal) > 1.5 || Math.abs(goal[1] - this.goal[1]) > 1.5) {
             this.goal[0] = goal[0]; this.goal[1] = goal[1]; this.goal[2] = goal[2];
             this.hasGoal = true;
@@ -844,12 +844,15 @@ export class BotBrain {
         }
         this.replanEvery = nearD < 25 ? 40 : 0;
 
+        // Late in the round there is no more time to wait: the bomb has to go down.
+        const urgent = v.phase === 'live' && v.endsAt - v.snapTime < URGENT_MS;
+        const objective = v.phase === 'live' && (self.carry.carrier || (v.dropped !== null && this.closestGhostBot(self, v.dropped, nav)));
         const facing = near ? this.facing(near, pos) : 0;
         const sameFloor = near !== null && Math.abs(near.pos[1] - pos[1]) < 1.5;
         // 1. All in: within reach, or close and not looked at, or already hit (fully visible): strike first
         //    (a hit from behind kills outright). Close and looked at: see 3, back off instead.
-        if (near && sameFloor && (nearD < KNIFE_RANGE + 0.6 || (nearD < ALL_IN_RANGE && facing < 0.3 && near.speed < 1.5) ||
-            (self.health < 100 && nearD < BREATH_RANGE))) {
+        if (near && sameFloor && (nearD < KNIFE_RANGE + 0.6 && this.canReach(self, world, near) || (!objective && nearD < ALL_IN_RANGE && facing < 0.3 && near.speed < 1.5) ||
+            (!objective && self.health < 100 && nearD < BREATH_RANGE))) {
             this.mode = 'strike';
             // Straight at it when nothing is in the way, else around whatever is.
             tmpB[0] = near.pos[0]; tmpB[1] = near.pos[1]; tmpB[2] = near.pos[2];
@@ -864,7 +867,7 @@ export class BotBrain {
         }
         // 2. A defender looking away (or busy defusing) within stalking range: get behind it and close in.
         const busy = v.planted !== null && near !== null && flat(near.pos, v.planted) < 2;
-        if (near && nearD < this.lv.stalk && (facing < -0.1 || busy)) {
+        if (!objective && near && nearD < this.lv.stalk && (facing < -0.1 || busy)) {
             this.mode = 'stalk';
             // Aim for a point behind its back, so the last steps come from behind.
             const s = Math.sin(near.yaw), co = Math.cos(near.yaw);
@@ -874,8 +877,6 @@ export class BotBrain {
             this.lookToward(self, near.pos, 1.1);
             return;
         }
-        // Late in the round there is no more time to wait: the bomb has to go down.
-        const urgent = v.phase === 'live' && v.endsAt - v.snapTime < URGENT_MS;
         // 3. Inside its breathing range in front of it: back off out of it, quietly.
         if (!urgent && near && sameFloor && nearD < BREATH_RANGE + 0.5 && facing > 0.3) {
             this.mode = 'back off';
@@ -892,11 +893,10 @@ export class BotBrain {
         }
         if (this.watchedTicks === 0 && this.frozenFor > 0) this.frozenFor = Math.max(0, this.frozenFor - 2);
 
-        // 4. The bomb.
-        this.mode = 'objective';
+        // Carriers and assigned retrievers favor the objective over optional pursuits.
+        // They still pause when watched and keep outside a facing defender’s breathing range.
         if (v.phase === 'live') {
-            const carrier = self.carry.carrier;
-            if (carrier) {
+            if (self.carry.carrier) {
                 // Plant where no defender can see (planting makes a ghost visible for 3 s): inside the site,
                 // out of every defender's line of sight, or anywhere in it once time runs short.
                 const inside = insideSite(pos, world.map) && self.state.onGround;
@@ -914,13 +914,18 @@ export class BotBrain {
                         if (hidden >= 0) this.holdNode = hidden;
                     }
                 }
+                this.mode = 'objective';
                 this.goSite(self, nav, nearD);
                 return;
             }
-            if (v.dropped && this.closestGhostBot(self, v.dropped)) {
+            if (v.dropped && objective) {
+                this.mode = 'recover';
                 this.sneak(this.go(self, nav, v.dropped, false), nearD);
                 return;
             }
+        }
+        this.mode = 'objective';
+        if (v.phase === 'live') {
             this.goSite(self, nav, nearD);
             return;
         }
@@ -1010,14 +1015,48 @@ export class BotBrain {
         return (-Math.sin(c.yaw) * dx - Math.cos(c.yaw) * dz) / len;
     }
 
-    /** True when no other ghost bot (as last seen in snapshots) is closer to `p` than this one. */
-    private closestGhostBot(self: BotSelf, p: Vec3): boolean {
-        const mine = flat(self.state.pos, p);
+    // Routes depend only on the public graph and the dropped bomb's node. A search is reused
+    // until the drop moves or a candidate steps onto a previously unseen node.
+    private recoveryNav: NavGraph | null = null;
+    private recoveryGoal = -1;
+    private readonly recoveryDistances = new Map<number, number>();
+    private readonly recoveryPath: number[] = [];
+
+    private recoveryDistance(nav: NavGraph, from: Vec3, drop: Vec3): number {
+        const start = nav.nearest(from);
+        if (start < 0 || this.recoveryGoal < 0) return Infinity;
+        if (start === this.recoveryGoal) return Math.hypot(from[0] - drop[0], from[1] - drop[1], from[2] - drop[2]);
+        let length = this.recoveryDistances.get(start);
+        if (length === undefined) {
+            length = Infinity;
+            if (nav.findPath(start, this.recoveryGoal, this.recoveryPath)) {
+                let prev = start;
+                length = 0;
+                for (const n of this.recoveryPath) {
+                    length += Math.hypot(nav.x[n] - nav.x[prev], nav.y[n] - nav.y[prev], nav.z[n] - nav.z[prev]);
+                    prev = n;
+                }
+            }
+            this.recoveryDistances.set(start, length);
+        }
+        return length;
+    }
+
+    /** Assign recovery by walkable route using only the team's most recent contacts. */
+    private closestGhostBot(self: BotSelf, drop: Vec3, nav: NavGraph): boolean {
+        const goal = nav.nearest(drop, 4, 1.2, 2);
+        if (this.recoveryNav !== nav || this.recoveryGoal !== goal) {
+            this.recoveryNav = nav;
+            this.recoveryGoal = goal;
+            this.recoveryDistances.clear();
+        }
+        const mine = this.recoveryDistance(nav, self.state.pos, drop);
+        if (!Number.isFinite(mine)) return false;
         for (const c of this.view.contacts.values()) {
-            if (c.team !== self.team || !c.alive || this.view.snaps - c.seen > 1) continue;
+            if (c.id === self.id || c.team !== self.team || !c.alive || this.view.snaps - c.seen > 1) continue;
             if (!this.view.roster.get(c.id)?.bot) continue;
-            const d = flat(c.pos, p);
-            if (d < mine - 1e-6 || (Math.abs(d - mine) < 1e-6 && c.id < this.view.id)) return false;
+            const d = this.recoveryDistance(nav, c.pos, drop);
+            if (d < mine || (d === mine && c.id < self.id)) return false;
         }
         return true;
     }

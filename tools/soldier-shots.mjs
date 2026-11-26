@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os';
 
 const require = createRequire(import.meta.url);
 const WebSocket = require('ws');
+const protocolVersion = require('../shared/protocol-version.json');
 
 const arg = (name, dflt) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : dflt; };
 const OUT = resolve(arg('out', 'docs/review/soldiers'));
@@ -166,7 +167,7 @@ function bot(room, name, flags, sight = 0) {
 }
 function rawPlayer(room, name, extra = '') {
     // The first player in a room creates it (and its options: `&suppressed=1`).
-    const ws = new WebSocket(`${SERVER}/?room=${room}&name=${name}&map=greybox${extra}`);
+    const ws = new WebSocket(`${SERVER}/?version=${protocolVersion}&room=${room}&name=${name}&map=greybox${extra}`);
     return { ws, opened: new Promise(r => ws.once('open', r)) };
 }
 

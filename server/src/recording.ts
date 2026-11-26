@@ -112,7 +112,7 @@ export type RecEvent =
  * never recorded; nor are room options (refused once a match has begun, and free-form) or map votes (cast after
  * the match, when its recording has ended).
  */
-const RECORDED_MESSAGES = new Set<ClientMsg['type']>(['ready', 'start', 'team', 'votekick', 'votecast', 'removeplayer', 'sight']);
+const RECORDED_MESSAGES = new Set<ClientMsg['type']>(['ready', 'start', 'team', 'votekick', 'votecast', 'removeplayer', 'sight', 'spectate']);
 
 export function mapHash(map: MapData): string {
     return createHash('sha256').update(JSON.stringify([map.boxes.map(b => [b.min, b.max]), map.spawns, map.bombSites])).digest('hex').slice(0, 16);
@@ -144,7 +144,7 @@ export function writeCmdX(v: DataView, o: number, c: NetCmd): void {
     v.setFloat64(o + 41, c.viewTime, true);
     // Slots the game would treat as "none" (not an integer) are stored as 0, which it treats the same.
     v.setInt8(o + 49, Number.isInteger(c.slot) && c.slot >= -128 && c.slot <= 127 ? c.slot : c.slot > 127 ? 127 : 0);
-    v.setUint8(o + 50, c.drop ? 1 : 0);
+    v.setUint8(o + 50, (c.drop ? 1 : 0) | (c.observerOnly ? 2 : 0));
 }
 
 export function readCmdX(v: DataView, o: number): NetCmd {
@@ -154,7 +154,8 @@ export function readCmdX(v: DataView, o: number): NetCmd {
         yaw: v.getFloat64(o + 24, true), pitch: v.getFloat64(o + 32, true),
         jump: (f & 1) !== 0, walk: (f & 2) !== 0, crouch: (f & 4) !== 0, fire: (f & 8) !== 0, use: (f & 16) !== 0,
         reload: (f & 32) !== 0, swap: (f & 64) !== 0, aim: (f & 128) !== 0,
-        viewTime: v.getFloat64(o + 41, true), slot: v.getInt8(o + 49), drop: v.getUint8(o + 50) !== 0
+        viewTime: v.getFloat64(o + 41, true), slot: v.getInt8(o + 49), drop: (v.getUint8(o + 50) & 1) !== 0,
+        ...((v.getUint8(o + 50) & 2) ? { observerOnly: true } : {})
     };
 }
 
@@ -210,7 +211,9 @@ export class Recorder implements GameObserver {
     private readonly lastCmd = new Map<number, NetCmd>();
     private readonly enc = new TextEncoder();
     /** The file of the match being recorded (or of the last one, until the next starts). */
-    current: string | null = null;
+    private lastName: string | null = null;
+    get current(): string | null { return this.sink?.name ?? this.lastName; }
+    get publication(): Promise<string | null> | undefined { return this.sink?.published; }
     /** Bytes handed to the sink for the current recording (uncompressed). */
     rawBytes = 0;
 
@@ -278,7 +281,7 @@ export class Recorder implements GameObserver {
         // Kept for every player at all times (the next match's header needs the command before its start).
         let last = this.lastCmd.get(p.id);
         if (!last) this.lastCmd.set(p.id, last = { ...c });
-        else Object.assign(last, c);
+        else { Object.assign(last, c); last.observerOnly = c.observerOnly; }
         if (!this.sink) return;
         const v = this.view;
         if (fitsWire(c)) {
@@ -338,7 +341,7 @@ export class Recorder implements GameObserver {
     matchStart(game: Game): void {
         if (this.sink) this.finish(game, 'replaced'); // cannot happen (a match ends first), but never leak a file
         const sink = this.open(`${dayOf(this.clock())}-${game.code || 'room'}`);
-        if (!sink) { this.current = null; return; }
+        if (!sink) { this.lastName = null; return; }
         this.sink = sink;
         this.used = 0;
         this.rawBytes = 0;
@@ -372,7 +375,7 @@ export class Recorder implements GameObserver {
         this.writeBytes(head);
         // The match began inside this tick: replays start by running it.
         this.tickStart(game, game.now);
-        this.current = sink.name;
+        this.lastName = sink.name;
     }
 
     matchEnd(game: Game): void { this.finish(game, 'match over'); }
@@ -386,7 +389,7 @@ export class Recorder implements GameObserver {
         this.flush();
         const sink = this.sink;
         this.sink = null;
-        this.current = sink.name;
+        this.lastName = sink.name;
         void sink.end();
     }
 

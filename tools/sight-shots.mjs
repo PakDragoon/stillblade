@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os';
 
 const require = createRequire(import.meta.url);
 const WebSocket = require('ws');
+const protocolVersion = require('../shared/protocol-version.json');
 
 const arg = (name, dflt) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : dflt; };
 const OUT = resolve(arg('out', 'docs/review/sights'));
@@ -111,7 +112,7 @@ const setLoadout = (cdp, sight) => cdp.eval(`localStorage.setItem('sb-loadout', 
 
 /** A scripted player over a plain WebSocket (no browser): joins `room`, answers nothing, sends no commands. */
 function rawPlayer(room, name, sight) {
-    const ws = new WebSocket(`${SERVER}/?room=${room}&name=${name}&map=${MAP}&sight=${sight}`);
+    const ws = new WebSocket(`${SERVER}/?version=${protocolVersion}&room=${room}&name=${name}&map=${MAP}&sight=${sight}`);
     const roster = [];
     ws.on('message', (data, binary) => { if (!binary) { const m = JSON.parse(data.toString()); if (m.type === 'roster') roster.splice(0, roster.length, ...m.players); } });
     return { ws, roster, opened: new Promise(r => ws.once('open', r)) };
