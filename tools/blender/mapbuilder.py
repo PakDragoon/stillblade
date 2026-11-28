@@ -125,8 +125,11 @@ class Build:
             self.items.append(dict(name=b["name"], key=m.category_surface[b["category"]], mn=b["mn"], mx=b["mx"],
                                    tint=b["tint"], hide=b["hide"]))
         for v in m.visuals:
-            self.items.append(dict(name=v["name"], key=v["surface"], mn=v["mn"], mx=v["mx"],
-                                   tint=v["tint"], hide=()))
+            it = dict(name=v["name"], key=v["surface"], mn=v["mn"], mx=v["mx"], tint=v["tint"], hide=(),
+                      lm=v.get("lm", 1.0))
+            if v.get("obb"):        # oriented (turned) box: own faces, never hides another face
+                it.update(obb=True, corners=v["corners"], obb_hide=v["hide"], under=v.get("under", False))
+            self.items.append(it)
         # Invisible collision volumes (hide "all") are neither drawn nor occluders.
         self.items = [it for it in self.items if "all" not in it["hide"]]
         floor_boxes = [b for b in m.boxes if b["category"] in m.floor_categories]
@@ -193,14 +196,54 @@ def face_hidden(idx, mn, mx, axis, sign, solids, grid, map_mn, map_mx):
     return False
 
 
+def obb_faces(it, idx):
+    """Faces of an oriented visual box: its own six faces minus the hidden ones and any facing
+    down (they rest on something). Each face keeps the box face's winding; `axis`/`sign` are the
+    dominant direction of its normal, and a steep face carries `uvdir`, the horizontal direction
+    its texture runs along. Returns (faces, hidden count)."""
+    v = it["corners"]
+    faces, hidden = [], 0
+    for f, fname in zip(BOX_FACES, FACE_NAMES):
+        pts = [v[i] for i in f]
+        e1 = [pts[1][i] - pts[0][i] for i in range(3)]
+        e3 = [pts[3][i] - pts[0][i] for i in range(3)]
+        n = (e1[1] * e3[2] - e1[2] * e3[1], e1[2] * e3[0] - e1[0] * e3[2], e1[0] * e3[1] - e1[1] * e3[0])
+        ln = math.sqrt(sum(c * c for c in n))
+        n = tuple(c / ln for c in n)
+        if fname in it["obb_hide"] or (n[2] < -0.7 and not it.get("under")):
+            hidden += 1
+            continue
+        axis = max(range(3), key=lambda i: abs(n[i]))
+        sign = 1 if n[axis] > 0 else -1
+        face = {"pts": pts, "axis": axis, "sign": sign, "key": it["key"], "item": idx, "top": it["mx"][2],
+                "w": face_density(it, pts, axis, sign), "obb": True}
+        if axis != 2:
+            hl = math.hypot(n[0], n[1])
+            face["uvdir"] = (-n[1] / hl, n[0] / hl)
+        faces.append(face)
+    return faces, hidden
+
+
 def collect_faces(b):
     """All visible box faces: list of dicts {pts, axis, sign, key, item, top}."""
-    solids = [(it["mn"], it["mx"]) for it in b.items]
-    grid = mapkit.Grid2D(solids, 2.0)
-    map_mn = [min(s[0][i] for s in solids) for i in range(3)]
-    map_mx = [max(s[1][i] for s in solids) for i in range(3)]
+    far = ((1e9, 1e9, 1e9), (1e9, 1e9, 1e9))        # oriented boxes take no part in hiding faces
+    solids = [far if it.get("obb") else (it["mn"], it["mx"]) for it in b.items]
+    if any(it.get("obb") for it in b.items):
+        real = [i for i, it in enumerate(b.items) if not it.get("obb")]
+        grid = mapkit.Grid2D([solids[i] for i in real], 2.0)
+        grid.buckets = {k: [real[j] for j in v] for k, v in grid.buckets.items()}
+    else:
+        grid = mapkit.Grid2D(solids, 2.0)
+    box_solids = [s for s in solids if s is not far]
+    map_mn = [min(s[0][i] for s in box_solids) for i in range(3)]
+    map_mx = [max(s[1][i] for s in box_solids) for i in range(3)]
     faces, hidden = [], 0
     for idx, it in enumerate(b.items):
+        if it.get("obb"):
+            fs, hd = obb_faces(it, idx)
+            faces.extend(fs)
+            hidden += hd
+            continue
         mn, mx = it["mn"], it["mx"]
         v = box_verts(mn, mx)
         for f, (axis, sign), fname in zip(BOX_FACES, FACE_AXIS, FACE_NAMES):
@@ -219,8 +262,8 @@ def face_density(it, pts, axis, sign):
     lo = min(p[2] for p in pts)
     level = max([lv for lv in it["levels"] if lv <= lo + 0.05] or [min(it["levels"])])
     if (axis == 2 and sign < 0) or lo - level > FAR_FACE_HEIGHT:
-        return FAR_FACE_DENSITY
-    return 1.0
+        return FAR_FACE_DENSITY * it.get("lm", 1.0)
+    return it.get("lm", 1.0)
 
 
 def dist(a, b):
@@ -315,6 +358,8 @@ def pack_lightmap(faces, size):
 
 def world_uv(p, axis):
     x, y, z = p
+    if isinstance(axis, tuple):         # a turned face: along its horizontal direction, and up
+        return (x * axis[0] + y * axis[1], z)
     return {2: (x, y), 1: (x, z), 0: (y, z)}[axis]
 
 
@@ -562,7 +607,7 @@ def build_scene(b, atlas_size, albedos):
     quads = []
     for f in faces:
         for pts, lm, cols in subdivide(b, f):
-            quads.append((pts, lm, cols, f["axis"], f["key"]))
+            quads.append((pts, lm, cols, f.get("uvdir") or f["axis"], f["key"]))
     used = [k for k in b.m.surfaces if any(f["key"] == k for f in faces)]
     mats = [make_bake_material("bake_" + k, albedos[k]) for k in used]
     obj, nverts = make_mesh_object(b.m.id + "_world", quads, used, mats)
@@ -579,7 +624,8 @@ def build_scene(b, atlas_size, albedos):
 # Paint decals (visual only, not baked: they borrow the lightmap of the surface below)
 # ---------------------------------------------------------------------------
 def faces_on_plane(faces, axis, sign, c):
-    return [f for f in faces if f["axis"] == axis and f["sign"] == sign and abs(f["pts"][0][axis] - c) < 1e-4]
+    return [f for f in faces if f["axis"] == axis and f["sign"] == sign and abs(f["pts"][0][axis] - c) < 1e-4
+            and not f.get("obb")]
 
 
 def decal_polys(faces, d):
@@ -734,7 +780,7 @@ def setup_lighting(b, samples):
     sun.rotation_euler = to_sun.to_track_quat("Z", "Y").to_euler()   # lamp shines along its -Z
     scene.collection.objects.link(sun)
     log("sun lamp: strength %.3f colour %s (from HDRI, x%.2f, warmth %s)"
-        % (peak, [round(c / peak, 3) for c in sun_rgb], m.sun_scale, SUN_WARMTH))
+        % (peak, [round(c / peak, 3) for c in sun_rgb], m.sun_scale, getattr(m, "sun_warmth", None) or SUN_WARMTH))
 
     for i, L in enumerate(m.lights):
         lamp = bpy.data.lights.new("lamp_%d" % i, L["type"])
@@ -777,7 +823,8 @@ def hdri_solid_angles(h, w):
 def load_hdri_split(m):
     """Split the HDRI into a sun-less sky (float image for the world) and a sun lamp colour.
     Radiance above HDRI_SUN_CLAMP is removed; its integrated irradiance E (W/m^2, the unit of a
-    Cycles sun's strength) becomes the lamp: S = E * sun_scale * SUN_WARMTH."""
+    Cycles sun's strength) becomes the lamp: S = E * sun_scale * SUN_WARMTH. A map may set its own
+    `sun_warmth` and `sky_fill_tint` (the sun's direction is shared with client/src/lighting.ts and stays)."""
     import numpy as np
     if not os.path.exists(HDRI_PATH):
         raise RuntimeError("bake needs the source HDRI %s (see CREDITS.md); run with --no-bake "
@@ -797,8 +844,10 @@ def load_hdri_split(m):
     scale = np.maximum(1.0, lum / HDRI_SUN_CLAMP)[..., None]
     sky = px / scale
     removed = ((px - sky) * hdri_solid_angles(h, w)[..., None]).reshape(-1, 3).sum(axis=0)
-    sun_rgb = [float(removed[i]) * m.sun_scale * SUN_WARMTH[i] for i in range(3)]
-    sky = sky * m.sky_scale * np.array(SKY_FILL_TINT, dtype=np.float32)
+    warmth = getattr(m, "sun_warmth", None) or SUN_WARMTH
+    fill = getattr(m, "sky_fill_tint", None) or SKY_FILL_TINT
+    sun_rgb = [float(removed[i]) * m.sun_scale * warmth[i] for i in range(3)]
+    sky = sky * m.sky_scale * np.array(fill, dtype=np.float32)
     img = bpy.data.images.new("hdri_sky", w, h, alpha=True, float_buffer=True)
     rgba = np.concatenate([sky, np.ones((h, w, 1), dtype=np.float32)], axis=2)
     img.pixels.foreach_set(rgba.ravel())
@@ -808,7 +857,7 @@ def load_hdri_split(m):
 
 def find_face(faces, point, axis, sign):
     for f in faces:
-        if f["axis"] == axis and f["sign"] == sign and face_st(f, point) is not None:
+        if f["axis"] == axis and f["sign"] == sign and not f.get("obb") and face_st(f, point) is not None:
             return f
     return None
 

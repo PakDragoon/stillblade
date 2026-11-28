@@ -1,0 +1,71 @@
+[
+ {
+  "name": "19_ghost_running_sunlit_sand",
+  "pos": [
+   -14.5,
+   0.0,
+   -37.5
+  ],
+  "yaw": -90,
+  "pitch": -4,
+  "crouch": false,
+  "ghost": {
+   "from": [
+    -7.0,
+    0.0,
+    -38.8
+   ],
+   "to": [
+    -7.0,
+    -35.4
+   ]
+  },
+  "note": "a ghost running on sunlit sand in the north strip (shimmer at a run, 0.35), seen by a defender 7 m away"
+ },
+ {
+  "name": "20_ghost_running_shade",
+  "pos": [
+   -3.5,
+   0.0,
+   -17.0
+  ],
+  "yaw": 90,
+  "pitch": -4,
+  "crouch": false,
+  "ghost": {
+   "from": [
+    -9.0,
+    0.0,
+    -17.2
+   ],
+   "to": [
+    -13.0,
+    -13.5
+   ]
+  },
+  "note": "a ghost running in the shade inside the south barrack, against plywood, seen from 9 m"
+ },
+ {
+  "name": "21_ghost_running_concrete",
+  "pos": [
+   -10.0,
+   0.0,
+   15.8
+  ],
+  "yaw": -60,
+  "pitch": -4,
+  "crouch": false,
+  "ghost": {
+   "from": [
+    -3.0,
+    0.0,
+    12.0
+   ],
+   "to": [
+    -3.0,
+    17.0
+   ]
+  },
+  "note": "a ghost running across the parade ground's concrete in full sun, seen from 8 m"
+ }
+]

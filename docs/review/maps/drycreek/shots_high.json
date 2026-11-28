@@ -1,0 +1,222 @@
+{
+ "tier": "high",
+ "views": [
+  {
+   "name": "01_ghost_spawn",
+   "note": "ghost spawn (bottom left), looking north-east: the spawn screen and the west lane",
+   "camera": [
+    -32,
+    1.62,
+    36.5,
+    -40,
+    0
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "02_defender_spawn",
+   "note": "defender spawn (top right), looking south-west",
+   "camera": [
+    32,
+    1.62,
+    -36.5,
+    140,
+    -2
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "03_site_a_from_west_door",
+   "note": "Site A in the north barrack from west door 22, looking east at the console",
+   "camera": [
+    -18.1,
+    1.62,
+    -26.25,
+    -95,
+    -12
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "04_site_a_from_passage",
+   "note": "Site A from the passage mouth (where A short and the roof hole arrive), looking north-west",
+   "camera": [
+    -8,
+    1.62,
+    -22.5,
+    20,
+    -10
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "05_site_b_from_south_stairs",
+   "note": "Site B, the basin, from the top of the south stairs",
+   "camera": [
+    24,
+    1.62,
+    21.6,
+    0,
+    -18
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "06_site_b_in_basin",
+   "note": "Site B inside the basin from its north-west corner: transformer, plant zone",
+   "camera": [
+    21.2,
+    0.42,
+    3.4,
+    -135,
+    -4
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "07_crouch6_crouched",
+   "note": "crouched in front of crouch gap 6 (north wall, the watchtower flank)",
+   "camera": [
+    -13.3,
+    1.02,
+    -31.7,
+    180,
+    -4
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "08_crouch8_crouched",
+   "note": "crouched in front of crouch gap 8 (south barrack, from A short)",
+   "camera": [
+    -9.3,
+    1.02,
+    -9.2,
+    0,
+    -4
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "09_roof_hole_from_roof",
+   "note": "on the low roof, looking down roof hole 10 into the passage",
+   "camera": [
+    -10.6,
+    3.67,
+    -20,
+    -90,
+    -45
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "10_under_roof_hole",
+   "note": "in the passage under the low roof, looking up at roof hole 10",
+   "camera": [
+    -8,
+    1.62,
+    -18.6,
+    0,
+    45
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "11_box9_to_low_roof",
+   "note": "box 9 and the low roof between the barracks, from A long",
+   "camera": [
+    -20.8,
+    1.62,
+    -16.4,
+    -15,
+    12
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "12_walkway_from_north",
+   "note": "the raised walkway from its north end: full fence on the right, crates",
+   "camera": [
+    37.8,
+    2.82,
+    -5,
+    180,
+    -4
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "13_stairwell_plank",
+   "note": "stairwell 23: from the top landing down the plank",
+   "camera": [
+    34.5,
+    2.82,
+    7.3,
+    180,
+    -28
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "14_east_stairs_into_basin",
+   "note": "stairwell 23: its opening onto the east stairs into the basin",
+   "camera": [
+    34.3,
+    1.62,
+    12.6,
+    90,
+    -18
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "15_west_wall_return",
+   "note": "the west edge south of the Garage: wall return, cover, spawn screen",
+   "camera": [
+    -35,
+    1.62,
+    26.5,
+    5,
+    0
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "16_a_long",
+   "note": "A long: the west lane into the A yard",
+   "camera": [
+    -25.5,
+    1.62,
+    -9,
+    -55,
+    0
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "17_mid_parade_ground",
+   "note": "mid from the fuel gap's blast wall, looking north-east",
+   "camera": [
+    -17.5,
+    1.62,
+    15.5,
+    -60,
+    0
+   ],
+   "drawCalls": 31
+  },
+  {
+   "name": "18_b_mid",
+   "note": "B mid: the blast wall west of the gap",
+   "camera": [
+    12,
+    1.62,
+    16,
+    -20,
+    0
+   ],
+   "drawCalls": 31
+  }
+ ],
+ "pageErrors": []
+}

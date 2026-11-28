@@ -1,0 +1,249 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1430.0" height="984.0" viewBox="0 0 1430.0 984.0" font-family="Segoe UI,Arial">
+<rect width="1430.0" height="984.0" fill="#14171d"/>
+<text x="30" y="34" font-size="24" font-weight="700" fill="#fff">Dry Creek (working name): draft 4, after review</text>
+<text x="30" y="57" font-size="13" fill="#aab">Top-down, north up, 80 x 80 m, grid = 4 m. Not based on any existing game map.</text>
+<rect x="30" y="74" width="840.0" height="840.0" fill="#1d2129"/>
+<line x1="30.0" y1="74" x2="30.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="74.0" x2="870.0" y2="74.0" stroke="#262b35"/>
+<line x1="72.0" y1="74" x2="72.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="116.0" x2="870.0" y2="116.0" stroke="#262b35"/>
+<line x1="114.0" y1="74" x2="114.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="158.0" x2="870.0" y2="158.0" stroke="#262b35"/>
+<line x1="156.0" y1="74" x2="156.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="200.0" x2="870.0" y2="200.0" stroke="#262b35"/>
+<line x1="198.0" y1="74" x2="198.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="242.0" x2="870.0" y2="242.0" stroke="#262b35"/>
+<line x1="240.0" y1="74" x2="240.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="284.0" x2="870.0" y2="284.0" stroke="#262b35"/>
+<line x1="282.0" y1="74" x2="282.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="326.0" x2="870.0" y2="326.0" stroke="#262b35"/>
+<line x1="324.0" y1="74" x2="324.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="368.0" x2="870.0" y2="368.0" stroke="#262b35"/>
+<line x1="366.0" y1="74" x2="366.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="410.0" x2="870.0" y2="410.0" stroke="#262b35"/>
+<line x1="408.0" y1="74" x2="408.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="452.0" x2="870.0" y2="452.0" stroke="#262b35"/>
+<line x1="450.0" y1="74" x2="450.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="494.0" x2="870.0" y2="494.0" stroke="#262b35"/>
+<line x1="492.0" y1="74" x2="492.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="536.0" x2="870.0" y2="536.0" stroke="#262b35"/>
+<line x1="534.0" y1="74" x2="534.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="578.0" x2="870.0" y2="578.0" stroke="#262b35"/>
+<line x1="576.0" y1="74" x2="576.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="620.0" x2="870.0" y2="620.0" stroke="#262b35"/>
+<line x1="618.0" y1="74" x2="618.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="662.0" x2="870.0" y2="662.0" stroke="#262b35"/>
+<line x1="660.0" y1="74" x2="660.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="704.0" x2="870.0" y2="704.0" stroke="#262b35"/>
+<line x1="702.0" y1="74" x2="702.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="746.0" x2="870.0" y2="746.0" stroke="#262b35"/>
+<line x1="744.0" y1="74" x2="744.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="788.0" x2="870.0" y2="788.0" stroke="#262b35"/>
+<line x1="786.0" y1="74" x2="786.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="830.0" x2="870.0" y2="830.0" stroke="#262b35"/>
+<line x1="828.0" y1="74" x2="828.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="872.0" x2="870.0" y2="872.0" stroke="#262b35"/>
+<line x1="870.0" y1="74" x2="870.0" y2="914.0" stroke="#262b35"/>
+<line x1="30" y1="914.0" x2="870.0" y2="914.0" stroke="#262b35"/>
+<rect x="723.0" y="95.0" width="126.0" height="105.0" fill="#ffd84d" fill-opacity="0.35" stroke="#ffd84d" stroke-width="1.5"/>
+<text x="786.0" y="151.5" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">D spawn</text>
+<rect x="51.0" y="788.0" width="126.0" height="105.0" fill="#ffd84d" fill-opacity="0.35" stroke="#ffd84d" stroke-width="1.5"/>
+<text x="114.0" y="844.5" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">G spawn</text>
+<rect x="266.25" y="189.5" width="152.25" height="68.25" fill="#e2574c" fill-opacity="0.18" stroke="#e2574c" stroke-width="1.5"/>
+<rect x="250.5" y="263.0" width="94.5" height="42.0" fill="#c9b25a" fill-opacity="0.6" stroke="#c9b25a" stroke-width="1.5"/>
+<text x="297.75" y="288.0" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">Low roof</text>
+<rect x="345.0" y="263.0" width="42.0" height="42.0" fill="#c9b25a" fill-opacity="0.35" stroke="#c9b25a" stroke-width="1.5"/>
+<rect x="358.65000000000003" y="276.65" width="14.700000000000022" height="14.699999999999985" fill="#b07de0" fill-opacity="0.95" stroke="#b07de0" stroke-width="1.5"/>
+<rect x="387.0" y="263.0" width="42.0" height="42.0" fill="#8e98a3" fill-opacity="0.6" stroke="#8e98a3" stroke-width="1.5"/>
+<rect x="231.6" y="273.5" width="15.75" height="15.75" fill="#f0a030" fill-opacity="0.85" stroke="#f0a030" stroke-width="1.5"/>
+<rect x="313.5" y="206.29999999999998" width="47.25" height="25.200000000000003" fill="#c0c6cc" fill-opacity="0.95" stroke="#c0c6cc" stroke-width="1.5"/>
+<text x="337.125" y="222.9" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">Console</text>
+<rect x="266.25" y="191.6" width="21.0" height="15.75" fill="#4fa3e0" fill-opacity="0.85" stroke="#4fa3e0" stroke-width="1.5"/>
+<rect x="392.25" y="236.75" width="21.0" height="15.75" fill="#4fa3e0" fill-opacity="0.85" stroke="#4fa3e0" stroke-width="1.5"/>
+<rect x="282.0" y="331.25" width="15.75" height="15.75" fill="#f0a030" fill-opacity="0.85" stroke="#f0a030" stroke-width="1.5"/>
+<rect x="376.5" y="347.0" width="36.75" height="15.75" fill="#4fa3e0" fill-opacity="0.85" stroke="#4fa3e0" stroke-width="1.5"/>
+<rect x="450.0" y="305.0" width="21.0" height="42.0" fill="#4fa3e0" fill-opacity="0.85" stroke="#4fa3e0" stroke-width="1.5"/>
+<rect x="30.0" y="305.0" width="126.0" height="105.0" fill="#8e98a3" fill-opacity="0.85" stroke="#8e98a3" stroke-width="1.5"/>
+<text x="93.0" y="361.5" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">Garage</text>
+<rect x="93.0" y="494.0" width="31.5" height="63.0" fill="#6d8f7a" fill-opacity="0.85" stroke="#6d8f7a" stroke-width="1.5"/>
+<text x="108.75" y="529.5" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">APV</text>
+<rect x="156.0" y="599.0" width="31.5" height="52.5" fill="#6d8f7a" fill-opacity="0.85" stroke="#6d8f7a" stroke-width="1.5"/>
+<text x="171.75" y="629.25" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">Van</text>
+<rect x="61.5" y="662.0" width="42.0" height="21.0" fill="#4fa3e0" fill-opacity="0.85" stroke="#4fa3e0" stroke-width="1.5"/>
+<rect x="166.5" y="452.0" width="15.75" height="15.75" fill="#f0a030" fill-opacity="0.85" stroke="#f0a030" stroke-width="1.5"/>
+<rect x="30.0" y="116.0" width="147.0" height="105.0" fill="#8e98a3" fill-opacity="0.85" stroke="#8e98a3" stroke-width="1.5"/>
+<text x="103.5" y="172.5" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">Watchtower</text>
+<rect x="345.0" y="494.0" width="147.0" height="105.0" fill="#8e98a3" fill-opacity="0.85" stroke="#8e98a3" stroke-width="1.5"/>
+<text x="418.5" y="550.5" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">Command post</text>
+<rect x="261.0" y="436.25" width="126.0" height="26.25" fill="#6d8f7a" fill-opacity="0.85" stroke="#6d8f7a" stroke-width="1.5"/>
+<text x="324.0" y="453.375" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">School bus</text>
+<rect x="513.0" y="473.0" width="31.5" height="105.0" fill="#8e98a3" fill-opacity="0.85" stroke="#8e98a3" stroke-width="1.5"/>
+<text x="528.75" y="529.5" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">Trailer</text>
+<rect x="560.25" y="473.0" width="31.5" height="105.0" fill="#8e98a3" fill-opacity="0.85" stroke="#8e98a3" stroke-width="1.5"/>
+<text x="576.0" y="529.5" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">Trailer</text>
+<rect x="282.0" y="620.0" width="15.75" height="15.75" fill="#f0a030" fill-opacity="0.85" stroke="#f0a030" stroke-width="1.5"/>
+<rect x="513.0" y="620.0" width="21.0" height="42.0" fill="#4fa3e0" fill-opacity="0.85" stroke="#4fa3e0" stroke-width="1.5"/>
+<rect x="282.0" y="536.0" width="21.0" height="42.0" fill="#4fa3e0" fill-opacity="0.85" stroke="#4fa3e0" stroke-width="1.5"/>
+<rect x="345.0" y="767.0" width="63.0" height="63.0" fill="#8e98a3" fill-opacity="0.85" stroke="#8e98a3" stroke-width="1.5"/>
+<text x="376.5" y="802.5" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">Fuel tank</text>
+<rect x="450.0" y="767.0" width="63.0" height="63.0" fill="#8e98a3" fill-opacity="0.85" stroke="#8e98a3" stroke-width="1.5"/>
+<text x="481.5" y="802.5" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">Fuel tank</text>
+<rect x="240.0" y="746.0" width="21.0" height="42.0" fill="#4fa3e0" fill-opacity="0.85" stroke="#4fa3e0" stroke-width="1.5"/>
+<rect x="544.5" y="809.0" width="15.75" height="15.75" fill="#f0a030" fill-opacity="0.85" stroke="#f0a030" stroke-width="1.5"/>
+<rect x="576.0" y="851.0" width="63.0" height="21.0" fill="#4fa3e0" fill-opacity="0.85" stroke="#4fa3e0" stroke-width="1.5"/>
+<rect x="240.0" y="830.0" width="63.0" height="84.0" fill="#8e98a3" fill-opacity="0.85" stroke="#8e98a3" stroke-width="1.5"/>
+<text x="271.5" y="876.0" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">Pump hut</text>
+<rect x="660.0" y="830.0" width="105.0" height="84.0" fill="#8e98a3" fill-opacity="0.85" stroke="#8e98a3" stroke-width="1.5"/>
+<text x="712.5" y="876.0" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">Generator shed</text>
+<rect x="660.0" y="515.0" width="126.0" height="168.0" fill="#3fd0d8" fill-opacity="0.5" stroke="#3fd0d8" stroke-width="1.5"/>
+<rect x="686.25" y="541.25" width="73.5" height="115.5" fill="#3d7fd6" fill-opacity="0.2" stroke="#3d7fd6" stroke-width="1.5"/>
+<rect x="702.0" y="578.0" width="47.25" height="36.75" fill="#c0c6cc" fill-opacity="0.95" stroke="#c0c6cc" stroke-width="1.5"/>
+<text x="725.625" y="600.375" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">Transformer</text>
+<rect x="675.75" y="635.75" width="21.0" height="21.0" fill="#4fa3e0" fill-opacity="0.85" stroke="#4fa3e0" stroke-width="1.5"/>
+<rect x="754.5" y="541.25" width="15.75" height="15.75" fill="#f0a030" fill-opacity="0.85" stroke="#f0a030" stroke-width="1.5"/>
+<rect x="681.0" y="494.0" width="42.0" height="21.0" fill="#8e98a3" fill-opacity="0.35" stroke="#8e98a3" stroke-width="1.5"/>
+<rect x="639.0" y="567.5" width="21.0" height="42.0" fill="#8e98a3" fill-opacity="0.35" stroke="#8e98a3" stroke-width="1.5"/>
+<rect x="681.0" y="683.0" width="42.0" height="21.0" fill="#8e98a3" fill-opacity="0.35" stroke="#8e98a3" stroke-width="1.5"/>
+<rect x="822.75" y="431.0" width="47.25" height="315.0" fill="#5cc98a" fill-opacity="0.6" stroke="#5cc98a" stroke-width="1.5"/>
+<rect x="801.75" y="567.5" width="21.0" height="63.0" fill="#5cc98a" fill-opacity="0.95" stroke="#5cc98a" stroke-width="1.5"/>
+<rect x="786.0" y="588.5" width="15.75" height="42.0" fill="#8e98a3" fill-opacity="0.35" stroke="#8e98a3" stroke-width="1.5"/>
+<rect x="822.75" y="389.0" width="47.25" height="42.0" fill="#5cc98a" fill-opacity="0.95" stroke="#5cc98a" stroke-width="1.5"/>
+<rect x="822.75" y="746.0" width="47.25" height="42.0" fill="#5cc98a" fill-opacity="0.95" stroke="#5cc98a" stroke-width="1.5"/>
+<rect x="513.0" y="116.0" width="147.0" height="105.0" fill="#8e98a3" fill-opacity="0.85" stroke="#8e98a3" stroke-width="1.5"/>
+<text x="586.5" y="172.5" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">HQ</text>
+<rect x="681.0" y="263.0" width="105.0" height="63.0" fill="#8e98a3" fill-opacity="0.85" stroke="#8e98a3" stroke-width="1.5"/>
+<text x="733.5" y="298.5" text-anchor="middle" font-size="10.5" fill="#111" font-weight="700">Containers</text>
+<rect x="534.0" y="305.0" width="42.0" height="21.0" fill="#4fa3e0" fill-opacity="0.85" stroke="#4fa3e0" stroke-width="1.5"/>
+<rect x="639.0" y="368.0" width="15.75" height="15.75" fill="#f0a030" fill-opacity="0.85" stroke="#f0a030" stroke-width="1.5"/>
+<line x1="30.0" y1="74.0" x2="870.0" y2="74.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="870.0" y1="74.0" x2="870.0" y2="914.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="870.0" y1="914.0" x2="30.0" y2="914.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="30.0" y1="914.0" x2="30.0" y2="74.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="219.0" y1="431.0" x2="219.0" y2="536.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="219.0" y1="578.0" x2="219.0" y2="704.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="219.0" y1="704.0" x2="303.0" y2="704.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="345.0" y1="704.0" x2="597.0" y2="704.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="219.0" y1="410.0" x2="345.0" y2="410.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="387.0" y1="410.0" x2="492.0" y2="410.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="219.0" y1="116.0" x2="219.0" y2="284.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="492.0" y1="74.0" x2="492.0" y2="221.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="492.0" y1="263.0" x2="492.0" y2="410.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="618.0" y1="452.0" x2="618.0" y2="557.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="618.0" y1="599.0" x2="618.0" y2="704.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="618.0" y1="452.0" x2="681.0" y2="452.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="723.0" y1="452.0" x2="817.5" y2="452.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="597.0" y1="704.0" x2="597.0" y2="746.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="597.0" y1="746.0" x2="681.0" y2="746.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="723.0" y1="746.0" x2="817.5" y2="746.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="492.0" y1="410.0" x2="597.0" y2="410.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="303.0" y1="179.0" x2="250.5" y2="179.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="250.5" y1="179.0" x2="250.5" y2="205.25" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="250.5" y1="231.5" x2="250.5" y2="263.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="250.5" y1="263.0" x2="345.0" y2="263.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="317.7" y1="179.0" x2="429.0" y2="179.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="429.0" y1="179.0" x2="429.0" y2="210.5" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="429.0" y1="236.75" x2="429.0" y2="263.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="429.0" y1="263.0" x2="387.0" y2="263.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="345.0" y1="305.0" x2="250.5" y2="305.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="250.5" y1="305.0" x2="250.5" y2="331.25" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="250.5" y1="362.75" x2="250.5" y2="378.5" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="250.5" y1="378.5" x2="345.0" y2="378.5" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="359.7" y1="378.5" x2="429.0" y2="378.5" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="429.0" y1="378.5" x2="429.0" y2="305.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="429.0" y1="305.0" x2="387.0" y2="305.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="822.75" y1="431.0" x2="822.75" y2="567.5" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<line x1="822.75" y1="630.5" x2="822.75" y2="746.0" stroke="#cfd6dd" stroke-width="4.5" stroke-linecap="square"/>
+<circle cx="754.5" cy="147.5" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="754.5" y="151.5" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">1</text>
+<circle cx="82.5" cy="840.5" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="82.5" y="844.5" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">2</text>
+<circle cx="292.5" cy="246.2" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="292.5" y="250.2" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">3</text>
+<circle cx="697.8000000000001" cy="557.0" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="697.8000000000001" y="561.0" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">4</text>
+<circle cx="443.7" cy="223.1" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="443.7" y="227.1" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">5</text>
+<circle cx="310.34999999999997" cy="165.35" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="310.34999999999997" y="169.35" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">6</text>
+<circle cx="235.8" cy="347.0" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="235.8" y="351.0" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">7</text>
+<circle cx="352.34999999999997" cy="393.2" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="352.34999999999997" y="397.2" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">8</text>
+<circle cx="238.95" cy="257.75" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="238.95" y="261.75" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">9</text>
+<circle cx="366.0" cy="319.7" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="366.0" y="323.7" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">10</text>
+<circle cx="135.0" cy="268.25" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="135.0" y="272.25" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">11</text>
+<circle cx="366.0" cy="422.6" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="366.0" y="426.6" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">12</text>
+<circle cx="219.0" cy="557.0" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="219.0" y="561.0" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">13</text>
+<circle cx="324.0" cy="704.0" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="324.0" y="708.0" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">14</text>
+<circle cx="633.75" cy="578.0" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="633.75" y="582.0" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">15</text>
+<circle cx="702.0" cy="746.0" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="702.0" y="750.0" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">16</text>
+<circle cx="702.0" cy="452.0" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="702.0" y="456.0" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">17</text>
+<circle cx="846.9" cy="515.0" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="846.9" y="519.0" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">18</text>
+<circle cx="418.5" cy="625.25" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="418.5" y="629.25" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">19</text>
+<circle cx="124.5" cy="578.0" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="124.5" y="582.0" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">20</text>
+<circle cx="429.0" cy="735.5" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="429.0" y="739.5" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">21</text>
+<circle cx="235.8" cy="217.85" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="235.8" y="221.85" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">22</text>
+<circle cx="812.25" cy="599.0" r="10" fill="#fff" stroke="#14171d" stroke-width="2"/>
+<text x="812.25" y="603.0" text-anchor="middle" font-size="11" font-weight="700" fill="#14171d">23</text>
+<rect x="894.0" y="80" width="14" height="14" rx="3" fill="#8e98a3"/><text x="916.0" y="92" font-size="13" fill="#dde">Tall, can't climb</text>
+<rect x="894.0" y="100" width="14" height="14" rx="3" fill="#c0c6cc"/><text x="916.0" y="112" font-size="13" fill="#dde">Hard cover 2.2 m (site centrepiece)</text>
+<rect x="894.0" y="120" width="14" height="14" rx="3" fill="#4fa3e0"/><text x="916.0" y="132" font-size="13" fill="#dde">Human height 1.8 m</text>
+<rect x="894.0" y="140" width="14" height="14" rx="3" fill="#f0a030"/><text x="916.0" y="152" font-size="13" fill="#dde">Jump box 1.0 m</text>
+<rect x="894.0" y="160" width="14" height="14" rx="3" fill="#b07de0"/><text x="916.0" y="172" font-size="13" fill="#dde">Crouch-only / roof hole</text>
+<rect x="894.0" y="180" width="14" height="14" rx="3" fill="#5cc98a"/><text x="916.0" y="192" font-size="13" fill="#dde">Raised 1.2 m / planks</text>
+<rect x="894.0" y="200" width="14" height="14" rx="3" fill="#3fd0d8"/><text x="916.0" y="212" font-size="13" fill="#dde">Below ground 1.2 m</text>
+<rect x="894.0" y="220" width="14" height="14" rx="3" fill="#c9b25a"/><text x="916.0" y="232" font-size="13" fill="#dde">Roof you can stand on</text>
+<rect x="894.0" y="240" width="14" height="14" rx="3" fill="#6d8f7a"/><text x="916.0" y="252" font-size="13" fill="#dde">Vehicle</text>
+<rect x="894.0" y="260" width="14" height="14" rx="3" fill="#e2574c"/><text x="916.0" y="272" font-size="13" fill="#dde">Site A</text>
+<rect x="894.0" y="280" width="14" height="14" rx="3" fill="#3d7fd6"/><text x="916.0" y="292" font-size="13" fill="#dde">Site B</text>
+<text x="894.0" y="310" font-size="12.5" fill="#dde"><tspan font-weight="700">1</tspan>  Defender spawn (top right)</text>
+<text x="894.0" y="328" font-size="12.5" fill="#dde"><tspan font-weight="700">2</tspan>  Ghost spawn (bottom left)</text>
+<text x="894.0" y="346" font-size="12.5" fill="#dde"><tspan font-weight="700">3</tspan>  Site A plant zone (red): inside the north barrack</text>
+<text x="894.0" y="364" font-size="12.5" fill="#dde"><tspan font-weight="700">4</tspan>  Site B plant zone (blue): 2.5 m in from every rim</text>
+<text x="894.0" y="382" font-size="12.5" fill="#dde"><tspan font-weight="700">5</tspan>  A east door (defenders)</text>
+<text x="894.0" y="400" font-size="12.5" fill="#dde"><tspan font-weight="700">6</tspan>  A north crouch gap (watchtower flank)</text>
+<text x="894.0" y="418" font-size="12.5" fill="#dde"><tspan font-weight="700">7</tspan>  A south barrack door (from A long)</text>
+<text x="894.0" y="436" font-size="12.5" fill="#dde"><tspan font-weight="700">8</tspan>  A south crouch gap (from A short)</text>
+<text x="894.0" y="454" font-size="12.5" fill="#dde"><tspan font-weight="700">9</tspan>  Box onto the low roof</text>
+<text x="894.0" y="472" font-size="12.5" fill="#dde"><tspan font-weight="700">10</tspan>  Hole into the passage</text>
+<text x="894.0" y="490" font-size="12.5" fill="#dde"><tspan font-weight="700">11</tspan>  A long</text>
+<text x="894.0" y="508" font-size="12.5" fill="#dde"><tspan font-weight="700">12</tspan>  A short: mid into the A yard</text>
+<text x="894.0" y="526" font-size="12.5" fill="#dde"><tspan font-weight="700">13</tspan>  Garage gap: west lane to mid</text>
+<text x="894.0" y="544" font-size="12.5" fill="#dde"><tspan font-weight="700">14</tspan>  Fuel gap: south lane to mid</text>
+<text x="894.0" y="562" font-size="12.5" fill="#dde"><tspan font-weight="700">15</tspan>  B mid: mid into B</text>
+<text x="894.0" y="580" font-size="12.5" fill="#dde"><tspan font-weight="700">16</tspan>  B south: from the fuel depot</text>
+<text x="894.0" y="598" font-size="12.5" fill="#dde"><tspan font-weight="700">17</tspan>  B north: defenders</text>
+<text x="894.0" y="616" font-size="12.5" fill="#dde"><tspan font-weight="700">18</tspan>  Walkway, fenced from the basin</text>
+<text x="894.0" y="634" font-size="12.5" fill="#dde"><tspan font-weight="700">19</tspan>  Mid: parade ground</text>
+<text x="894.0" y="652" font-size="12.5" fill="#dde"><tspan font-weight="700">20</tspan>  West lane: motor pool</text>
+<text x="894.0" y="670" font-size="12.5" fill="#dde"><tspan font-weight="700">21</tspan>  South lane: fuel depot</text>
+<text x="894.0" y="688" font-size="12.5" fill="#dde"><tspan font-weight="700">22</tspan>  NEW A west door, straight into the site</text>
+<text x="894.0" y="706" font-size="12.5" fill="#dde"><tspan font-weight="700">23</tspan>  NEW plank down, then B east stairs</text>
+<text x="894.0" y="736" font-size="12.5" fill="#fff" font-weight="700">Fixed after review (2026-11-28):</text>
+<text x="894.0" y="754" font-size="12.5" fill="#c8d0d8" font-weight="400">1  A: new west door into the site from A long, so long,</text>
+<text x="894.0" y="772" font-size="12.5" fill="#c8d0d8" font-weight="400">   short and roof come from different angles to the console.</text>
+<text x="894.0" y="790" font-size="12.5" fill="#c8d0d8" font-weight="400">2  B walkway: fenced from the basin; one plank down at the</text>
+<text x="894.0" y="808" font-size="12.5" fill="#c8d0d8" font-weight="400">   marked point, then stairs into B. No gap jumping, no perch.</text>
+<text x="894.0" y="826" font-size="12.5" fill="#c8d0d8" font-weight="400">3  B defuse: plant zone 2.5 m in from every rim, and the site</text>
+<text x="894.0" y="844" font-size="12.5" fill="#c8d0d8" font-weight="400">   box stops below rim height: no plant or defuse from above.</text>
+<text x="894.0" y="862" font-size="12.5" fill="#c8d0d8" font-weight="400">4  Sightlines: garage, watchtower, pump hut and a generator</text>
+<text x="894.0" y="880" font-size="12.5" fill="#c8d0d8" font-weight="400">   shed now reach the outer wall; the top strip is closed</text>
+<text x="894.0" y="898" font-size="12.5" fill="#c8d0d8" font-weight="400">   at x 44. No edge strip over 40 m.</text>
+<text x="894.0" y="916" font-size="12.5" fill="#c8d0d8" font-weight="400">Still to prove in 3D: one defender at the console can&#x27;t</text>
+<text x="894.0" y="934" font-size="12.5" fill="#c8d0d8" font-weight="400">watch long, short and roof at once; B footsteps on the</text>
+<text x="894.0" y="952" font-size="12.5" fill="#c8d0d8" font-weight="400">walkway sound different from the basin.</text>
+</svg>

@@ -1,0 +1,354 @@
+[
+ {
+  "name": "section_a_roof_route_ew",
+  "title": "Site A roof route, east-west through roof hole 10 (plan y 20)",
+  "subtitle": "Box 9 (1.0 m), the low roof (2.05 m; mount limit 1.16 m from the ground, 2.16 m from a 1.0 m box), the hole, the 1.9 m passage, the closed room",
+  "axis": "x",
+  "cut": 20.0,
+  "from": -24.0,
+  "to": 0.0,
+  "zmin": -0.6,
+  "zmax": 4.4,
+  "behind": 2.2,
+  "players": [
+   {
+    "at": -21.35,
+    "z": 0.0,
+    "label": "ground"
+   },
+   {
+    "at": -19.8,
+    "z": 1.0,
+    "label": "on box 9"
+   },
+   {
+    "at": -16.0,
+    "z": 2.05,
+    "label": "on the roof"
+   },
+   {
+    "at": -8.0,
+    "z": 0.0,
+    "label": "passage: 1.9 m clear",
+    "label_below": true
+   }
+  ],
+  "sight": [],
+  "marks": [
+   {
+    "at": -19.8,
+    "z": 0.5,
+    "text": "box 9"
+   },
+   {
+    "at": -14.5,
+    "z": 1.0,
+    "text": "closed block under the low roof"
+   },
+   {
+    "at": -8.0,
+    "z": 2.45,
+    "text": "hole 10 (1.4 m)"
+   },
+   {
+    "at": -4.0,
+    "z": 1.8,
+    "text": "closed room"
+   },
+   {
+    "at": -22.0,
+    "z": 3.75,
+    "text": "yard gate T-walls 3.4 m"
+   }
+  ],
+  "axis_label": "plan x (m), west to east",
+  "tick_offset": 40,
+  "tick_sign": 1
+ },
+ {
+  "name": "section_a_passage_ns",
+  "title": "Site A, north-south through the passage and roof hole 10 (plan x 32)",
+  "subtitle": "South barrack (left), the passage under the low roof with the hole, the north barrack with the plant zone (right). Lintels close the walls above the passage.",
+  "axis": "y",
+  "cut": -8.0,
+  "from": 9.0,
+  "to": 32.0,
+  "zmin": -0.6,
+  "zmax": 4.2,
+  "behind": 2.0,
+  "players": [
+   {
+    "at": 15.0,
+    "z": 0.0,
+    "label": "south barrack"
+   },
+   {
+    "at": 20.0,
+    "z": 0.0,
+    "label": "under the hole",
+    "label_below": true
+   },
+   {
+    "at": 18.7,
+    "z": 2.05,
+    "label": "roof"
+   },
+   {
+    "at": 23.8,
+    "z": 0.0,
+    "label": "plant zone",
+    "label_below": true
+   }
+  ],
+  "marks": [
+   {
+    "at": 20.0,
+    "z": 2.5,
+    "text": "hole 10"
+   },
+   {
+    "at": 26.2,
+    "z": 2.6,
+    "text": "console 2.2 m (behind the cut)"
+   },
+   {
+    "at": 11.0,
+    "z": 3.75,
+    "text": "south wall 3.2 m, roof 3.45 m"
+   },
+   {
+    "at": 30.0,
+    "z": 3.75,
+    "text": "north wall 3.2 m, roof 3.45 m"
+   }
+  ],
+  "axis_label": "plan y (m), south (left) to north (right)",
+  "tick_offset": 40,
+  "tick_sign": -1
+ },
+ {
+  "name": "section_b_descent_ew_y47_5",
+  "title": "Site B east, east-west through the fence opening and the top landing (plan y 47.5)",
+  "subtitle": "Walkway (1.2 m) through the fence opening onto the top landing; the stairwell's west wall (3.4 m) under the gantry roof stops every line into the basin",
+  "axis": "x",
+  "cut": -7.5,
+  "from": 17.5,
+  "to": 40.6,
+  "zmin": -1.7,
+  "zmax": 5.3,
+  "behind": 3.0,
+  "players": [
+   {
+    "at": 37.8,
+    "z": 1.2,
+    "label": "walkway"
+   },
+   {
+    "at": 34.5,
+    "z": 1.2,
+    "label": "top landing"
+   },
+   {
+    "at": 26.0,
+    "z": -1.2,
+    "label": "plant zone",
+    "label_below": true
+   }
+  ],
+  "sight": [
+   {
+    "from": [
+     37.8,
+     2.82
+    ],
+    "to": [
+     29.5,
+     -1.1
+    ],
+    "blocked": true,
+    "label": "standing: blocked"
+   },
+   {
+    "from": [
+     37.8,
+     3.22
+    ],
+    "to": [
+     29.5,
+     -0.4
+    ],
+    "blocked": true,
+    "label": "jump (under the roof): blocked"
+   }
+  ],
+  "marks": [
+   {
+    "at": 35.5,
+    "z": 4.6,
+    "text": "fence 3.4 m"
+   },
+   {
+    "at": 33.0,
+    "z": 4.15,
+    "text": "stairwell wall"
+   },
+   {
+    "at": 26.0,
+    "z": -0.2,
+    "text": "basin -1.2 m"
+   },
+   {
+    "at": 19.0,
+    "z": 0.4,
+    "text": "west stairs"
+   },
+   {
+    "at": 36.6,
+    "z": 3.85,
+    "text": "gantry roof"
+   }
+  ],
+  "axis_label": "plan x (m), west to east",
+  "tick_offset": 40,
+  "tick_sign": 1
+ },
+ {
+  "name": "section_b_stairwell_ns_x74_5",
+  "title": "Site B east, stairwell 23 north-south (plan x 74.5)",
+  "subtitle": "Top landing at walkway height (south end, beside the fence opening), the plank: five 0.2 m steps, 1.75 m wide, down to the stairwell floor; the stairwell is roofed at 3.4 m",
+  "axis": "y",
+  "cut": 34.5,
+  "from": -16.0,
+  "to": -4.0,
+  "zmin": -0.6,
+  "zmax": 5.3,
+  "behind": 1.2,
+  "players": [
+   {
+    "at": -7.5,
+    "z": 1.2,
+    "label": "top landing"
+   },
+   {
+    "at": -9.4,
+    "z": 0.6,
+    "label": "plank"
+   },
+   {
+    "at": -12.5,
+    "z": 0.0,
+    "label": "stairwell floor",
+    "label_below": true
+   }
+  ],
+  "marks": [
+   {
+    "at": -6.5,
+    "z": 4.1,
+    "text": "south wall"
+   },
+   {
+    "at": -13.5,
+    "z": 4.1,
+    "text": "north wall"
+   }
+  ],
+  "axis_label": "plan y (m), south (left) to north (right)",
+  "tick_offset": 40,
+  "tick_sign": -1
+ },
+ {
+  "name": "section_b_descent_ew_y52_5",
+  "title": "Site B east, east-west through the stairwell floor and the east stairs (plan y 52.5)",
+  "subtitle": "Fence 3.4 m (2.2 m above the walkway) under the gantry roof; the stairwell opens onto the east stairs (0.2 m steps) into the basin",
+  "axis": "x",
+  "cut": -12.5,
+  "from": 17.5,
+  "to": 40.6,
+  "zmin": -1.7,
+  "zmax": 5.3,
+  "behind": 1.5,
+  "players": [
+   {
+    "at": 37.8,
+    "z": 1.2,
+    "label": "walkway"
+   },
+   {
+    "at": 34.4,
+    "z": 0.0,
+    "label": "stairwell",
+    "label_below": true
+   },
+   {
+    "at": 32.4,
+    "z": -0.6,
+    "label": "east stairs",
+    "label_below": true
+   },
+   {
+    "at": 30.0,
+    "z": -1.2,
+    "label": "basin",
+    "label_below": true
+   },
+   {
+    "at": 26.0,
+    "z": -1.2,
+    "label": "plant zone",
+    "label_below": true
+   }
+  ],
+  "sight": [
+   {
+    "from": [
+     37.8,
+     2.82
+    ],
+    "to": [
+     29.5,
+     -1.1
+    ],
+    "blocked": true,
+    "label": "standing: blocked"
+   },
+   {
+    "from": [
+     37.8,
+     3.22
+    ],
+    "to": [
+     29.5,
+     -0.4
+    ],
+    "blocked": true,
+    "label": "jump (under the roof): blocked"
+   }
+  ],
+  "marks": [
+   {
+    "at": 35.5,
+    "z": 4.6,
+    "text": "fence 3.4 m"
+   },
+   {
+    "at": 24.0,
+    "z": -0.2,
+    "text": "basin -1.2 m"
+   },
+   {
+    "at": 22.5,
+    "z": 0.5,
+    "text": "cover"
+   },
+   {
+    "at": 36.6,
+    "z": 3.85,
+    "text": "gantry roof"
+   }
+  ],
+  "axis_label": "plan x (m), west to east",
+  "tick_offset": 40,
+  "tick_sign": 1
+ }
+]

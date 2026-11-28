@@ -1,0 +1,54 @@
+
+ RUN  v3.2.7 D:/Projects/stillblade/.claude/worktrees/drycreek-map-05b7df
+
+stdout | server/src/drycreek.test.ts > Dry Creek: Site A > one defender at the console: which of the three entries (west door, A short, roof hole) one spot sees
+
+[console] 778 standing spots within 2.5 m of the console; what each sees:
+   316  west door 22 + A short (passage mouth) + roof hole 10 (under the hole)
+   234  west door 22
+   119  west door 22 + A short (passage mouth)
+   106  A short (passage mouth) + roof hole 10 (under the hole)
+     3  none
+  spots that see all three: 316; see the west door and the passage mouth together: 435
+  angle between the west door and the passage mouth from the all-three spots: 58 to 180 degrees (median 138); both on screen at once (within the 107 degree default view) from 124 of them
+
+stdout | server/src/drycreek.test.ts > Dry Creek: Site B east (walkway, stairwell 23, plank, east stairs) > no line of sight from the walkway, its stairs or the top landing to any point of the B plant zone
+
+[walkway] 1593 eye points (standing, crouched, top of a jump) x 1035 plant-zone points: 0 clear lines; highest jumping eye 3.99 m (fence top 3.40 m)
+
+stdout | server/src/drycreek.test.ts > Dry Creek: Site B plant and defuse > defusing fails from the ground at the rim, the walkway and the stair landings, against every legal bomb spot
+
+[defuse] 39843 ground and walkway spots; closest any of them stands to a legal bomb spot: 2.30 m (range 1.6 m)
+[defuse] spots below the rim (in the basin) within reach of a legal bomb spot: 405 on the basin's jump box, 0 on stair steps
+
+stdout | server/src/drycreek.test.ts > Dry Creek: timings > run and quiet-walk times from every spawn point to each plant zone
+
+[timing] spawn -> plant zone (s): run min / max, quiet walk min / max, over the five spawn points
+  ghosts    -> A: run 13.6 / 13.9   quiet walk 27.1 / 27.7
+  ghosts    -> B: run 12.6 / 13.6   quiet walk 25.1 / 27.1
+  defenders -> A: run 7.3 / 8.4   quiet walk 14.4 / 16.7
+  defenders -> B: run 8.8 / 9.1   quiet walk 17.4 / 18.1
+
+stdout | server/src/drycreek.test.ts > Dry Creek: timings > first contact on each main route: when a running defender could first see a running ghost
+
+[contact] ghost runs from its spawn by the route; defenders run from theirs. First moment a spot a defender
+          could have reached by then has an eye-to-body line to the ghost (ghost invisibility ignored):
+  A A long, south barrack door 7     reaches the site  14.0 s; first contact 9.1 s with the ghost at (15.9, 32.1), seen from (35.9, 30.1)
+  A A long, west door 22             reaches the site  13.2 s; first contact 8.8 s with the ghost at (12.5, 32.5), seen from (38.9, 29.1)
+  A A short, crouch gap 8            reaches the site  15.5 s; first contact 9.2 s with the ghost at (29.7, 39.7), seen from (41.9, 39.6)
+  A box 9, low roof, hole 10         reaches the site  16.8 s; first contact 8.8 s with the ghost at (13.5, 32.4), seen from (38.9, 29.1)
+  A watchtower flank, crouch gap 6   reaches the site  18.0 s; first contact 8.8 s with the ghost at (12.5, 32.5), seen from (38.9, 29.1)
+  B B mid                            reaches the site  13.1 s; first contact 8.2 s with the ghost at (43.3, 57.1), seen from (46.1, 36.1)
+  B B south                          reaches the site  13.8 s; first contact 11.2 s with the ghost at (60.5, 65.2), seen from (72.1, 58.1)
+  B walkway, stairwell 23, plank     reaches the site  21.0 s; first contact 9.8 s with the ghost at (54.4, 72.1), seen from (74.1, 52.1)
+
+ ✓ server/src/drycreek.test.ts (22 tests) 7285ms
+   ✓ Dry Creek: Site B east (walkway, stairwell 23, plank, east stairs) > no line of sight from the walkway, its stairs or the top landing to any point of the B plant zone  3509ms
+   ✓ Dry Creek: Site B plant and defuse > defusing fails from the ground at the rim, the walkway and the stair landings, against every legal bomb spot  988ms
+   ✓ Dry Creek: timings > first contact on each main route: when a running defender could first see a running ghost  2107ms
+
+ Test Files  1 passed (1)
+      Tests  22 passed (22)
+   Start at  15:52:41
+   Duration  7.92s (transform 127ms, setup 0ms, collect 189ms, tests 7.29s, environment 0ms, prepare 145ms)
+

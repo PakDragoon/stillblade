@@ -1,6 +1,10 @@
 {
   "maps": [
     {
+      "id": "drycreek",
+      "name": "Dry Creek"
+    },
+    {
       "id": "greybox",
       "name": "Test Map 1"
     },

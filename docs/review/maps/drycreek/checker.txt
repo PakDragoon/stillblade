@@ -1,0 +1,51 @@
+[drycreek] --- verification ---
+[drycreek] flight b_stair_west  5 steps, -1.20 -> 0.00 m, max rise 0.200
+[drycreek] flight b_stair_north  5 steps, -1.20 -> 0.00 m, max rise 0.200
+[drycreek] flight b_stair_south  5 steps, -1.20 -> 0.00 m, max rise 0.200
+[drycreek] flight b_stair_east  5 steps, -1.20 -> 0.00 m, max rise 0.200
+[drycreek] flight b_walkway_stair_n  5 steps, 0.00 -> 1.20 m, max rise 0.200
+[drycreek] flight b_walkway_stair_s  5 steps, 0.00 -> 1.20 m, max rise 0.200
+[drycreek] flight b23_plank   5 steps, 0.00 -> 1.20 m, max rise 0.200
+[drycreek] walkway gaps: levels [-1.2, -1.0, -0.8, -0.6, -0.4, -0.2, 0.0], 0 narrow gaps or overlaps
+[drycreek] walk graph: 109630 standing spots on a 0.25 m grid
+[drycreek] reachable: 72376 of 109630 spots
+[drycreek] stuck spots: 0
+[drycreek] flights climbable on foot: 7 checked
+[drycreek] headroom: 0 reachable spots under 2.0 m outside the low-ceiling zones
+[drycreek] low ceiling a6_crouch_gap          crouch: 12 reachable spots, 12 under 2.0 m, lowest 1.40 m (allowed 1.40), 12 crouch-only
+[drycreek] low ceiling a8_crouch_gap          crouch: 12 reachable spots, 12 under 2.0 m, lowest 1.40 m (allowed 1.40), 12 crouch-only
+[drycreek] low ceiling a_passage_under_low_roof standing: 280 reachable spots, 264 under 2.0 m, lowest 1.90 m (allowed 1.90), 0 crouch-only
+[drycreek] visual-only boxes: 2301, 0 intrude into player space
+[drycreek] path ghosts    -> site A: 69.2 m walking, 69.2 m with jumps
+[drycreek] path ghosts    -> site B: 66.6 m walking, 66.6 m with jumps
+[drycreek] path defenders -> site A: 40.8 m walking, 40.8 m with jumps
+[drycreek] path defenders -> site B: 43.6 m walking, 43.6 m with jumps
+[drycreek] nav graph: 5390 nodes, 36999 edges (walk 36054, step 502, jump 79, drop 340, crouch 24), 612 links refused by the line test, 0 nodes not reachable from a spawn
+[drycreek] route to A via A long: south barrack door 7               71.4 m
+[drycreek] route to A via west door 22                               69.2 m
+[drycreek] route to A via A short: south crouch gap 8                74.9 m
+[drycreek] route to A via box 9, low roof, roof hole 10              76.7 m
+[drycreek] route to A via north crouch gap 6 (watchtower flank)      79.8 m
+[drycreek] route to A via east door 5 (round the yard)               82.4 m
+[drycreek] route to B via B mid (15)                                 66.6 m
+[drycreek] route to B via B south (16)                               70.0 m
+[drycreek] route to B via B north (17)                               89.4 m
+[drycreek] route to B via walkway, stairwell 23 and plank            107.1 m
+[drycreek] spawn sightlines: 0 of 25 ghost->defender eye pairs clear
+[drycreek] strict spawn sightlines (standing, crouched and jumping eyes; the other spawn and both plant zones): 0 clear
+[drycreek] longest sightline 39.6 m: (39.1, 18.1, 1.0 crouch) -> (3.1, 1.6, 1.6 stand)
+[drycreek] sightlines: 4047 eye points (stand + crouch), longest 39.6 m (limit 40.0)
+[drycreek] jump peeks (report only, not a failure): 2023 jump-apex eye points; the 10 longest clear lines over 40 m, at least 4 m apart at both ends:
+[drycreek]   90.1 m: jump eye (39.1, 6.1, 3.99) -> stand eye (-38.9, -38.9, 1.62)
+[drycreek]   87.9 m: jump eye (39.1, 1.6, 3.99) -> crouch eye (-38.9, -38.9, 1.02)
+[drycreek]   87.9 m: jump eye (39.1, 6.1, 3.99) -> stand eye (-38.9, -34.4, 1.62)
+[drycreek]   87.2 m: jump eye (39.1, -35.9, 2.79) -> jump eye (-38.9, 3.1, 2.79)
+[drycreek]   86.2 m: jump eye (39.1, 6.1, 3.99) -> crouch eye (-34.4, -38.9, 1.02)
+[drycreek]   86.0 m: jump eye (39.1, -2.9, 3.99) -> crouch eye (-38.9, -38.9, 1.02)
+[drycreek]   85.9 m: jump eye (39.1, 1.6, 3.99) -> stand eye (-38.9, -34.4, 1.62)
+[drycreek]   85.9 m: jump eye (39.1, 6.1, 3.99) -> jump eye (-38.9, -29.9, 2.79)
+[drycreek]   85.9 m: jump eye (3.1, -38.9, 2.79) -> jump eye (39.1, 39.1, 2.79)
+[drycreek]   84.7 m: jump eye (39.1, -34.4, 2.79) -> jump eye (-38.9, -1.4, 2.79)
+[drycreek] worst-case reach (mounts up to 1.18 m, running gap jumps): 72376 spots (0 more than the walk graph), 5861 gap-jump links
+[drycreek] tops reachable at worst (not floors, stairs or platforms): a22_sandbags_door_n, a22_sandbags_door_s, a5_sandbags_door_n, a5_sandbags_door_s, a7_sandbags_door_n, a9_jump_box_to_roof, a_low_roof_block, a_s_jump_box, b_jump_box, d_jump_box, m_jump_box, s_jump_box, w_jump_box
+[drycreek] verification passed

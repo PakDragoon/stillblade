@@ -69,6 +69,13 @@ describe('effects surfaces', () => {
         expect(surfaceOf(undefined)).toBe('concrete');
     });
 
+    it("maps Dry Creek's categories: plywood huts and floors wood, sheds and cabins metal, sand and Hesco concrete", () => {
+        expect(surfaceOf('barrack_wall')).toBe('wood');
+        expect(surfaceOf('wood_floor')).toBe('wood');
+        for (const c of ['shed', 'cabin', 'container', 'machine', 'platform', 'roof']) expect(surfaceOf(c)).toBe('metal');
+        for (const c of ['floor', 'slab', 'hesco', 'basin_stairs', 'inner_wall']) expect(surfaceOf(c)).toBe('concrete');
+    });
+
     it('finds the face a point lies on', () => {
         expect(faceAt(boxes, [2, 0, 2], out)).toBe(true);
         expect(out).toEqual({ axis: 1, sign: 1, surface: 'concrete' });

@@ -64,6 +64,8 @@ const DEFAULT_TUNING: LookTuning = {
 const LOOK_TUNING: Record<string, Partial<LookTuning>> = {
     // Open air: a light blue haze down the long lanes, warm sun, slightly lifted contrast.
     greybox: { fogColor: [0.55, 0.63, 0.74], fogStart: 14, fogEnd: 110, fogMax: 0.5, contrast: 1.1, saturation: 1.08, gain: [1.02, 1.0, 0.95] },
+    // Dry Creek: a dusty warm haze over sand and concrete, a little warm in the shadows, colours slightly faded.
+    drycreek: { fogColor: [0.74, 0.64, 0.5], fogStart: 16, fogEnd: 115, fogMax: 0.42, contrast: 1.08, saturation: 0.95, gain: [1.04, 1.0, 0.9], skyHaze: 0.5 },
     // Indoors: a dusty warm-grey depth haze that separates the racks and the far hall, cooler shade.
     warehouse: { fogColor: [0.34, 0.33, 0.31], fogStart: 9, fogEnd: 70, fogMax: 0.42, contrast: 1.1, saturation: 1.05, gain: [1.0, 0.98, 0.95] }
 };

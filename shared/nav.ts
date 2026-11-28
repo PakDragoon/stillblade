@@ -4,11 +4,13 @@ import type { Vec3 } from './types';
  * The bots' navigation graph, exported by the map verifier (`nav_graph` in tools/blender/mapkit.py)
  * into the map JSON as `nav`. Nodes are feet positions (engine coordinates) on the walkable space,
  * about one per square metre and floor; an edge means a player walking the straight line from one
- * node to the other gets there with ordinary moves (walk, a stair, a jump or a drop).
+ * node to the other gets there with ordinary moves (walk, a stair, a jump, a drop, or a walk
+ * crouched under a low ceiling).
  *
  * File format (flat arrays to keep the JSON small): `nodes` is x, y, z per node; `edges` is
- * from, to, kind per link, where kind is NAV_WALK, NAV_STEP, NAV_JUMP or NAV_DROP, plus NAV_BOTH
- * when the same link also goes the other way.
+ * from, to, kind per link, where kind is NAV_WALK, NAV_STEP, NAV_JUMP, NAV_DROP or NAV_CROUCH, plus
+ * NAV_BOTH when the same link also goes the other way. NAV_CROUCH is 8, not 4, so the file's both-ways
+ * bit stays where it was: map files written before crouch links existed read exactly as before.
  */
 export interface NavData {
     /** Side of the blocks the nodes were grouped by (metres). */
@@ -22,10 +24,19 @@ export const NAV_STEP = 1;
 export const NAV_JUMP = 2;
 export const NAV_DROP = 3;
 export const NAV_BOTH = 4;
+/** A walking link whose line passes a space only a crouched player fits (a crouch opening): hold crouch along it. */
+export const NAV_CROUCH = 8;
+
+/** The link kind stored in a file value (NAV_BOTH removed); unknown bits fall back to their low kind. */
+export function navKind(fileKind: number): number {
+    return fileKind & NAV_CROUCH ? NAV_CROUCH : fileKind & 3;
+}
 
 /** Extra cost of a jump and a drop, in metres of walking: a bot takes them only when they save time. */
 const JUMP_COST = 1.5;
 const DROP_COST = 0.5;
+/** A crouched link costs its length this many times: crouching (2.0 m/s) is 2.6 times slower than running. */
+export const CROUCH_COST = 2.6;
 /** Spatial buckets for `nearest` (metres). */
 const BUCKET = 2;
 
@@ -69,8 +80,9 @@ export class NavGraph {
         for (let i = 0; i + 2 < data.edges.length; i += 3) {
             const a = data.edges[i], b = data.edges[i + 1], k = data.edges[i + 2];
             if (a < 0 || b < 0 || a >= n || b >= n) continue;
-            from.push(a); to.push(b); kind.push(k & 3);
-            if (k & NAV_BOTH) { from.push(b); to.push(a); kind.push(k & 3); }
+            const kd = navKind(k);
+            from.push(a); to.push(b); kind.push(kd);
+            if (k & NAV_BOTH) { from.push(b); to.push(a); kind.push(kd); }
         }
         const m = from.length;
         this.first = new Int32Array(n + 1);
@@ -84,7 +96,8 @@ export class NavGraph {
             this.to[e] = b;
             this.kind[e] = kind[i];
             const d = Math.hypot(this.x[b] - this.x[a], this.y[b] - this.y[a], this.z[b] - this.z[a]);
-            this.cost[e] = d + (kind[i] === NAV_JUMP ? JUMP_COST : kind[i] === NAV_DROP ? DROP_COST : 0);
+            this.cost[e] = kind[i] === NAV_CROUCH ? d * CROUCH_COST
+                : d + (kind[i] === NAV_JUMP ? JUMP_COST : kind[i] === NAV_DROP ? DROP_COST : 0);
         }
         // Buckets over x and z.
         let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;

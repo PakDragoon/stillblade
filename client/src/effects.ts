@@ -20,9 +20,11 @@ import type { LookTuning } from './maplook';
 export type Surface = 'concrete' | 'metal' | 'wood';
 
 const SURFACE_BY_CATEGORY: Record<string, Surface> = {
-    crate: 'wood', rack: 'wood', furniture: 'wood',
+    crate: 'wood', rack: 'wood', furniture: 'wood', wood_floor: 'wood', barrack_wall: 'wood',
     stairs: 'metal', platform: 'metal', rail: 'metal', deck: 'metal', roof: 'metal', vehicle: 'metal',
-    container: 'metal', car: 'metal', machine: 'metal'
+    container: 'metal', car: 'metal', machine: 'metal', shed: 'metal', cabin: 'metal'
+    // Everything else is concrete: floors, slabs, walls, and Dry Creek's sand ('floor') and Hesco or sandbags ('hesco'),
+    // which have no footstep or impact set of their own yet; concrete is the nearest.
 };
 
 /** The surface a map box is made of (concrete unless its category says otherwise). */
