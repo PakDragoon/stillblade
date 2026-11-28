@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Stillblade mark: a knife that vanishes into two slices, the blade of a ghost that stands still.
+       Source of every icon in client/public: after editing, run `node tools/make-icons.mjs`. -->
+  <defs>
+    <linearGradient id="navy" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#27374d"/>
+      <stop offset="1" stop-color="#121a24"/>
+    </linearGradient>
+  </defs>
+  <rect id="tile" width="64" height="64" rx="14" fill="url(#navy)"/>
+  <!-- Drawn upright (point at the top, straight spine on the right), then leaned 45 degrees. -->
+  <g transform="translate(0 -6) rotate(45 32 32)">
+    <path fill="#f4f6f2" d="M42 3 C31 10.5 22 19.5 22 30 V39 H42 Z"/>
+    <path fill="#9d8cff" d="M22 43.5 H42 V51.5 H22 Z"/>
+    <path fill="#9d8cff" fill-opacity="0.5" d="M22 55.5 H42 V61 H22 Z"/>
+  </g>
+</svg>
