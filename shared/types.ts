@@ -21,7 +21,7 @@ export interface Spawn {
 export interface MapData {
     /** File id: maps/<name>.json and maps/<name>.glb. */
     name: string;
-    /** Shown to players, e.g. "Test Map 1". */
+    /** Shown to players, e.g. "Training Yard". */
     displayName?: string;
     bounds: { min: Vec3; max: Vec3 };
     boxes: Box[];

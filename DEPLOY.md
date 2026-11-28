@@ -23,7 +23,7 @@ Planned names (change them if you change your mind):
 5. **Clone the repository on the VPS and fill in `deploy/.env`** (B7, B8) with the `SB_DOMAIN` and `SB_ALLOWED_ORIGINS` from the table.
 6. **Start the server**: `docker compose up -d --build` in the `deploy` folder (B9). Open `https://stillblade-server.orcavalley.com/health`; you should see `{"ok":true,...}`. `docker compose logs game` must say `maps greybox, warehouse (default warehouse)`.
 7. **Create the client on Cloudflare Pages** (Part A): connect the GitHub repository, build command `npm run build:client`, output folder `dist/client`, variables `VITE_SERVER_URL` and `NODE_VERSION`, then add the custom domain `stillblade.orcavalley.com`.
-8. **Play**: open `https://stillblade.orcavalley.com`, choose a map and room code, and send friends a link such as `https://stillblade.orcavalley.com/?map=warehouse&room=ABCD`. Maps: `greybox` (shown as "Test Map 1") and `warehouse`.
+8. **Play**: open `https://stillblade.orcavalley.com`, choose a map and room code, and send friends a link such as `https://stillblade.orcavalley.com/?map=warehouse&room=ABCD`. Maps: `greybox` (shown as "Training Yard"), `warehouse` and `drycreek`.
 
 If something fails, see Troubleshooting at the bottom.
 

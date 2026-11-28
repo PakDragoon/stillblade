@@ -1,6 +1,6 @@
 # Map art credits
 
-All third-party source art used for the maps (Test Map 1 = `greybox`, Warehouse = `warehouse`, Dry Creek = `drycreek`) is **CC0 (public domain)** from
+All third-party source art used for the maps (Training Yard = `greybox`, Warehouse = `warehouse`, Dry Creek = `drycreek`) is **CC0 (public domain)** from
 [Poly Haven](https://polyhaven.com) (licence: https://polyhaven.com/license). No attribution is
 required; it is recorded here for provenance.
 

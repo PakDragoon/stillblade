@@ -1,5 +1,5 @@
 """
-Test Map 1 (file id `greybox`): the original open-air test map. Three lanes, two bomb sites,
+Training Yard (file id `greybox`, called Test Map 1 until 2026-11-28): the original open-air test map. Three lanes, two bomb sites,
 a raised platform overlooking mid. Built with `npm run map -- greybox` (or `npm run map:greybox`).
 
 Layout (Blender coords, Z up): X = width (-15 .. 15), Y = length (-22 .. 22), ghost spawn at -Y,
@@ -8,7 +8,7 @@ defender spawn at +Y.
 
 from mapkit import MapDef
 
-MAP = MapDef("greybox", "Test Map 1")
+MAP = MapDef("greybox", "Training Yard")
 m = MAP
 
 HALF_W = 15.0        # interior half width  (X) -> 30 m

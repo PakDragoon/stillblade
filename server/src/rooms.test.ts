@@ -128,8 +128,8 @@ function plantSpot(map: MapData, s: MapData['bombSites'][number]): Vec3 {
 }
 
 describe('shipped maps', () => {
-    it('are all loaded, including Test Map 1 under its display name', () => {
-        expect(shipped.get('greybox')?.displayName).toBe('Test Map 1');
+    it('are all loaded, including Training Yard (greybox) under its display name', () => {
+        expect(shipped.get('greybox')?.displayName).toBe('Training Yard');
         // The second map, on three levels: site A in the basement, site B on the ground floor.
         const wh = shipped.get('warehouse');
         expect(wh?.displayName).toBe('Warehouse');
